@@ -252,7 +252,7 @@ def learn_from_digest_selection(
     """«В дайджест» на карточке радара — положительный пример для агента.
 
     Выбор в выпуск — это «Сильный сигнал» по шкале заказчика: агент учится на нём так же,
-    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Отметка
+    как на вердикте из формы (строки памяти вердикта и подсказки поиска в теме карточки). Отметка
     общая (#111), и пример один на карточку; снятие отметки любым участником гасит все примеры
     выбора этой карточки — и записанные до #111 у каждого пользователя свои. Вердиктов людей из формы
     выбор не трогает: «последнее слово» — за явным отзывом, а случайная отметка не должна
@@ -354,8 +354,8 @@ def extract_feedback_memories(row: dict[str, str]) -> list[dict[str, Any]]:
         })
     # Искать дальше НЕ учимся на браке, дублях и «слишком общем» (см. QUERY_HINT_VERDICTS).
     # Отзыв без вердикта (первая таблица заказчика, CSV-импорт 13.09) подсказку даёт:
-    # там в основном развёрнутые положительные разборы («сильная находка…»), а от
-    # переноса в чужие темы защищает тематический фильтр feedback_query_hints.
+    # там в основном развёрнутые положительные разборы («сильная находка…»). Читал подсказки
+    # только поиск Brave, снятый 08.11: строки памяти копятся для будущей ОС поиска.
     if verdict is None or verdict in QUERY_HINT_VERDICTS:
         for query in _derive_query_hints(comment, signal_title):
             memories.append({
@@ -372,33 +372,6 @@ def extract_feedback_memories(row: dict[str, str]) -> list[dict[str, Any]]:
             "facts": {"source": source, "source_url": source_url, "reason": "positive_feedback"},
         })
     return memories
-
-
-def retire_query_hints_from_negative_feedback(*, dry_run: bool = True) -> dict[str, Any]:
-    """Погасить подсказки поиска, выведенные из брака (до правки 18.09 — из любого отзыва).
-
-    Отзывы без вердикта не трогаем: это первая таблица заказчика, где вердиктов не было,
-    а разборы в основном положительные — маркерами их полярность не определить.
-
-    Вердикт отзыва, из которого родилась строка памяти, лежит в её facts_json
-    (store_signal_feedback кладёт туда факты отзыва целиком). Строки не удаляются:
-    статус 'superseded' убирает их из выдачи и оставляет след, откуда они взялись."""
-    rows = repository.list_signal_agent_memory(
-        memory_type="signal_query_hint", status="active", limit=100_000
-    )
-    retired: list[dict[str, Any]] = []
-    kept = 0
-    for row in rows:
-        facts = row.get("facts_json") or {}
-        verdict = _normalize_verdict(facts.get("verdict"))
-        if verdict is None or verdict in QUERY_HINT_VERDICTS:
-            kept += 1
-            continue
-        retired.append({"id": row.get("id"), "subject": row.get("subject"), "verdict": verdict})
-        if not dry_run:
-            repository.set_signal_agent_memory_status(int(row["id"]), "superseded")
-    return {"dry_run": dry_run, "active_before": len(rows), "kept": kept,
-            "retired": len(retired), "retired_rows": retired[:200]}
 
 
 def signal_feedback_memory_context(topic: str | None = None, *, limit: int = 80) -> dict[str, list[dict[str, Any]]]:
@@ -450,9 +423,8 @@ def _normalize_verdict(value: Any) -> str | None:
         "merge_duplicate",
         # «Не тот блок» — бизнес-сигнал в технологическом радаре (встреча 21.09, решение 5).
         "wrong_block",
-        # «Оценка завышена» (03.10): находка годная, но балл выше, чем она стоит. Учит судью
-        # строже ставить баллы по критериям (repository.radar_score_calibration →
-        # signal_discovery._calibration_lines во входе судьи).
+        # «Оценка завышена» (03.10): находка годная, но балл выше, чем она стоит. До 08.11 по
+        # таким вердиктам судья радара ставил баллы строже; судья снят, вердикт остаётся оценкой человека.
         "overrated",
         # Ниже — вердикты прежней шкалы. С экрана убраны (заказчик их не просил),
         # но приём оставлен: в signal_feedback_events уже лежат строки с ними,
@@ -495,174 +467,13 @@ def _verdict_score(verdict: str) -> float:
     return 0
 
 
-def feedback_query_hints(topic: str | None, *, limit: int = 8) -> list[str]:
-    """Поисковые подсказки из ОС для темы — только те, что привязаны к ЭТОЙ теме.
-
-    До 21.09 подсказка шла в тему, если делила с ней хоть одно слово: «…способ добычи
-    лития…» попадала в «Добычу», «…попутной воды…» — в «Химию», и радар искал литий в
-    шести темах (13 из 52 запросов). Тема подсказки — тема карточки, к которой был
-    отзыв (store_signal_feedback); старые подсказки без темы привязывает
-    signal_discovery.assign_query_hint_topics, а до привязки они в поиск не идут."""
-    memory = signal_feedback_memory_context(topic, limit=120)
-    hints = [
-        str(row.get("subject") or "").strip()
-        for row in _memory_rows("signal_query_hint", limit=200)
-        if topic and str((row.get("facts_json") or {}).get("topic") or "").strip() == topic
-    ]
-    preferred_domains = [str(row.get("subject") or "").strip() for row in memory["signal_source_preference"]]
-    queries = []
-    for hint in hints:
-        if hint:
-            queries.append(hint)
-    for domain in preferred_domains[:3]:
-        if domain:
-            queries.append(f"site:{domain} {topic or 'oil gas technology'}")
-    return _dedupe(queries)[:limit]
-
-
-# Слова, которые есть почти в любой подсказке и темы не различают.
-_GENERIC_TERM_STEMS = {
-    "techno", "deploy", "indust", "нефтег", "нефтян", "нефти", "газово", "промыш",
-    "технол", "компан", "россии", "россий", "system", "servic", "сервис", "operat",
-    "решени",
-}
-
-
-def topic_term_stems(*texts: str) -> set[str]:
-    """Основы слов (первые 6 букв слов от 5 букв) без общеотраслевых."""
-    stems: set[str] = set()
-    for text in texts:
-        for word in re.findall(r"[a-zа-яё0-9]{5,}", (text or "").lower().replace("ё", "е")):
-            stem = word[:6]
-            if stem not in _GENERIC_TERM_STEMS and not stem.isdigit():
-                stems.add(stem)
-    return stems
-
-
-# Сколько примеров ОС показывать судье. Причины у заказчика развёрнутые (до 1–2 тыс.
-# знаков), а промпт уходит в КАЖДЫЙ вызов судьи — поэтому причину режем.
-PROMPT_POSITIVE_EXAMPLES = 6
-PROMPT_NEGATIVE_EXAMPLES = 8
-PROMPT_REASON_CHARS = 320
-
-
-def feedback_prompt_block(topic: str | None = None, *, limit: int = 20) -> str:
-    memory = signal_feedback_memory_context(topic, limit=120)
-    lines = []
-    # Вердикты берём мимо тематического фильтра контекста: тот пропускает не больше 12
-    # строк «не по теме», а длинное имя темы подстрокой не совпадает почти никогда.
-    # Память отсортирована по весу вердикта, у брака вес −80 — и до судьи доходили
-    # только одобренные и дубли, ни одного отказа: он не видел как раз того, чего
-    # заказчик просит НЕ приносить. Берём обе стороны.
-    verdict_rows = _memory_rows("signal_verdict", limit=120)
-    if verdict_rows:
-        rows = verdict_rows
-        negatives = [row for row in rows if str(row.get("subject") or "") in NEGATIVE_VERDICTS]
-        # Настоящие отказы (вес −80) — первыми. «Дубль» тоже в NEGATIVE_VERDICTS, но с весом
-        # +85: на проде 28.09 11 дублей занимали все места раздела, 16 отказов не доходили.
-        # Сортировка устойчивая — при равном весе остаётся порядок «свежие первыми».
-        negatives.sort(key=lambda row: float(row.get("score") or 0))
-        positives = [row for row in rows if str(row.get("subject") or "") not in NEGATIVE_VERDICTS]
-        for title, subset, cap in (
-            ("feedback_approved_examples (так делать):", positives, PROMPT_POSITIVE_EXAMPLES),
-            ("feedback_rejected_examples (так НЕ делать — такие сигналы заказчик отклонил):", negatives, PROMPT_NEGATIVE_EXAMPLES),
-        ):
-            if not subset:
-                continue
-            lines.append(title)
-            for row in subset[:cap]:
-                facts = row.get("facts_json") or {}
-                reason = re.sub(r"\s+", " ", str(facts.get("reason") or "")).strip()
-                if len(reason) > PROMPT_REASON_CHARS:
-                    reason = reason[:PROMPT_REASON_CHARS].rstrip() + "…"
-                signal_title = str(facts.get("signal_title") or "").strip()
-                verdict_text = str(row.get("subject") or "")
-                if verdict_text == "wrong_block":
-                    verdict_text = "wrong_block (это бизнес-сигнал, а не технология — не для технологического радара)"
-                lines.append(f"- verdict={verdict_text} signal={signal_title} reason={reason}")
-    if memory["signal_duplicate"]:
-        lines.append("feedback_duplicate_examples:")
-        for row in memory["signal_duplicate"][:limit]:
-            facts = row.get("facts_json") or {}
-            lines.append(f"- duplicate signal={row.get('subject')} duplicate_of={facts.get('duplicate_of_signal_id')}")
-    if memory["signal_quality_rule"]:
-        lines.append("feedback_quality_rules:")
-        for row in memory["signal_quality_rule"][:limit]:
-            lines.append(f"- {row.get('subject')}")
-    if memory["signal_glossary"]:
-        lines.append("feedback_glossary:")
-        for row in memory["signal_glossary"][:limit]:
-            facts = row.get("facts_json") or {}
-            lines.append(f"- {row.get('subject')} -> {facts.get('preferred_ru')}")
-    return "\n".join(lines)
-
-
-RESEARCH_POSITIVE_EXAMPLES = 6
-RESEARCH_NEGATIVE_EXAMPLES = 8
 # Карточки темы за период поиска (30 дней), а не за 3 дня: 17.10 в теме было до 32 таких.
 RESEARCH_KNOWN_TITLES = 40
 
 
-def research_feedback_block(topic: str | None = None, *, known_titles: list[str] | None = None) -> str:
-    """Обратная связь заказчика — во вход модели, которая ищет события («режим ChatGPT»).
-
-    До этого память доходила только до судьи (feedback_prompt_block) и до поиска Brave
-    (подсказки запросов, site: любимых источников). Модель исследования ничего не знала о
-    вердиктах: приносила то, что заказчик бракует, и тратила поиски, а отсеивал уже судья.
-    Здесь — что одобрено (тип события, а не тема: искать «такое же», а не «то же»), что
-    отклонено и почему, правила качества, источники, которым заказчик доверяет, и уже
-    найденное по теме — чтобы ежедневный прогон искал новое, а не повторы."""
-    verdicts = _memory_rows("signal_verdict", limit=120)
-    topic_l = (topic or "").lower()
-
-    def _on_topic(row: dict[str, Any]) -> bool:
-        facts = row.get("facts_json") or {}
-        return bool(topic_l) and topic_l in " ".join(
-            str(facts.get(key) or "") for key in ("topic", "theme", "signal_title")
-        ).lower()
-
-    def _line(row: dict[str, Any]) -> str:
-        facts = row.get("facts_json") or {}
-        title = re.sub(r"\s+", " ", str(facts.get("signal_title") or "")).strip()[:160]
-        reason = re.sub(r"\s+", " ", str(facts.get("reason") or "")).strip()
-        reason = reason[:PROMPT_REASON_CHARS].rstrip() + ("…" if len(reason) > PROMPT_REASON_CHARS else "")
-        if str(row.get("subject") or "") == "wrong_block":
-            reason = ("это бизнес-сигнал, а не технология. " + reason).strip()
-        return f"- {title}" + (f" — {reason}" if reason else "")
-
-    positives = [row for row in verdicts if str(row.get("subject") or "") not in NEGATIVE_VERDICTS]
-    negatives = [row for row in verdicts if str(row.get("subject") or "") in NEGATIVE_VERDICTS
-                 and str(row.get("subject") or "") != "merge_duplicate"]
-    # Своя тема — первой; сортировка устойчивая, внутри — порядок памяти (свежие первыми).
-    positives.sort(key=lambda row: not _on_topic(row))
-    negatives.sort(key=lambda row: not _on_topic(row))
-    sections = []
-    if positives:
-        sections.append("Такие находки заказчик одобрил — ищи события того же типа и уровня:\n"
-                        + "\n".join(_line(row) for row in positives[:RESEARCH_POSITIVE_EXAMPLES]))
-    if negatives:
-        sections.append("Такие находки заказчик отклонил — подобное не приноси:\n"
-                        + "\n".join(_line(row) for row in negatives[:RESEARCH_NEGATIVE_EXAMPLES]))
-    rules = [str(row.get("subject") or "").strip() for row in _memory_rows("signal_quality_rule", limit=40)]
-    rules = [rule[:240] for rule in rules if rule and not rule.startswith("Для сигнала '")][:8]
-    if rules:
-        sections.append("Правила заказчика:\n" + "\n".join(f"- {rule}" for rule in rules))
-    domains = _dedupe([
-        str(row.get("subject") or "").strip()
-        for row in _memory_rows("signal_source_preference", limit=40)
-        if str(row.get("subject") or "").strip()
-    ])[:10]
-    if domains:
-        sections.append("Источники, которым заказчик доверяет, — проверь их в первую очередь: " + ", ".join(domains))
-    known = known_titles_block(known_titles)
-    if known:
-        sections.append(known)
-    return "\n\n".join(sections)
-
-
 def known_titles_block(known_titles: list[str] | None) -> str:
-    """Уже найденное по теме — чтобы поиск искал новое, а не повторы. При «Отборе» (#138, граница данных О-7, решение
-    владельца 03.11) это единственное из прошлого, что получает поиск: ОС экспертов в его промпт не идёт."""
+    """Уже найденное по теме, чтобы поиск искал новое, а не повторы. Это единственное из прошлого, что получает
+    поиск (#138, граница данных О-7, решение владельца 03.11): ОС экспертов в его промпт не идёт."""
     known = _dedupe([re.sub(r"\s+", " ", str(title)).strip()[:140] for title in known_titles or [] if str(title).strip()])
     if not known:
         return ""

@@ -1,6 +1,6 @@
-"""Проверка «Отбора» на реальных данных (#134, спека #128), шов 2: команды проверки, отчёта и переключения. Статьи
-сбора, решённые гейтом до «Отбора», проходят «Отбор» на воркере NL с подставной моделью; решения пишутся рядом,
-витрины не меняются; переключение после флага переносит решения в витрины (tests/otbor_support.py).
+"""Проверка «Отбора» на реальных данных (#134, спека #128, история), шов 2: команды проверки, отчёта и
+переключения. Статьи сбора, решённые гейтом до «Отбора», проходят «Отбор» на воркере NL с подставной моделью;
+решения пишутся рядом, витрины не меняются; переключение переносит решения в витрины (tests/otbor_support.py).
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -11,7 +11,6 @@ import pytest
 from oiltech_digest import api, cli, feed_window, otbor
 from oiltech_digest.db import marks, repository
 from oiltech_digest.otbor_pack_format import load_dictionaries
-from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.card_pipeline_support import (MARKET, SCORES_MODEL, card_answer, even, fill_cards,  # noqa: F401
                                          pipeline, process_feed, run_scores, scores)
@@ -27,28 +26,31 @@ pytestmark = pytest.mark.usefixtures("window_of_published")
 
 @pytest.fixture()
 def before_flag(monkeypatch):
-    """Прод до переключения: ИИ на внешнем воркере, полоса пересчётов есть, «Отбор» выключен, модель задана."""
+    """Прод до переключения (#134, история): ИИ на внешнем воркере, полоса пересчётов есть, модель «Отбора» задана;
+    статьи окна решены гейтом до «Отбора» (_gate). Флага у «Отбора» с 08.11 нет."""
     monkeypatch.setattr(api.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(api.config, "AI_EXECUTION_REGION", "external")
     monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
     monkeypatch.setattr(api.config, "OTBOR_MODEL", MODEL)
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
 
 
 def _flag_on(monkeypatch):
-    """День переключения: флаг «Отбора» включён, оба вызова «Карточки» настроены."""
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    """День переключения: «Карточка» включена, оба её вызова настроены (флаг «Отбора» снят 08.11)."""
     monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", True)
     monkeypatch.setattr(api.config, "SIGNAL_CARD_MODEL", MODEL)
     monkeypatch.setattr(api.config, "SIGNAL_SCORES_MODEL", SCORES_MODEL)
 
 
 def _gate(article_id, relevant):
-    """Решение гейта ленты, как его пишет ядро из итога обработки (до «Отбора»)."""
-    external_ai.apply_process_result({"articles": [{
-        "article_id": article_id, "relevance": {"relevant": relevant, "reason": "r", "model": "m"},
-    }]})
+    """Статья, собранная до «Отбора» (путь статьи пуст), и вердикт гейта ленты в её карточке, как его записала прежняя
+    обработка (история: гейт снят 08.11); мост «лента → сигнал» синхронизирован, как после записи вердикта."""
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE articles SET selector = NULL WHERE id = %s", (article_id,))
+        conn.execute("INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status) "
+                     "VALUES (%s, %s, 'r', 'm', %s)", (article_id, relevant, "new" if relevant else "rejected"))
+        conn.commit()
+    repository._sync_feed_signal(article_id)
 
 
 def _gated(title, text, relevant, **kwargs):
@@ -186,35 +188,8 @@ def test_report_shows_reject_sections_categories_technology_for_the_radar_and_ga
     assert "Нефтегаз без связи с нефтесервисом: 1" in text and "Робот-бурильщик" in text
 
 
-def test_switch_refuses_while_the_flag_is_off_while_checks_run_and_while_window_articles_have_no_check(
-        user, before_flag, monkeypatch, capsys):
-    _gated("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.", True)
-    _shadow(monkeypatch, {"Контракт Weatherford": answer(industry="oilfield_services")})
-
-    # Флаг выключен: новое решал бы гейт, а перенесённое уже «Отбор».
-    with pytest.raises(SystemExit, match="OTBOR_ENABLED"):
-        cli.main(["otbor-switch", "--since", SINCE, "--apply"])
-
-    # Пришла после проверки, но до флага: её решил гейт.
-    late = _gated("Пришла до флага", "Halliburton получила контракт в Кувейте.", True)
-    _flag_on(monkeypatch)
-    capsys.readouterr()
-    cli.main(["otbor-switch", "--since", SINCE])
-    assert "без решения проверки 1" in capsys.readouterr().out
-    # Статья окна, которую решил гейт, без решения проверки: сначала дозапуск проверки.
-    with pytest.raises(SystemExit, match="otbor-shadow"):
-        cli.main(["otbor-switch", "--since", SINCE, "--apply"])
-    # Дозапуск поставлен, задачи ещё идут: перенос ждёт их.
-    cli.main(["otbor-shadow", "--since", SINCE, "--apply"])
-    with pytest.raises(SystemExit, match="идут задачи проверки"):
-        cli.main(["otbor-switch", "--since", SINCE, "--apply"])
-    assert showcase(user)["Контракт Weatherford"]["otbor_decision"] is None
-    assert late in [row["id"] for row in api_get("/api/articles", user)]
-
-
 def test_switch_moves_decisions_into_showcases_and_sends_the_accepted_down_the_rest_of_the_pipeline(
         user, admin, pipeline, monkeypatch, capsys):
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
     monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
     ids = {title: _gated(title, text, relevant) for title, text, relevant in (
         ("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.", True),
@@ -228,7 +203,6 @@ def test_switch_moves_decisions_into_showcases_and_sends_the_accepted_down_the_r
                           "Робот-бурильщик": answer(industry="oilfield_services", category="technology")})
     assert set(showcase(user)) == {"Контракт Weatherford", "Котировки нефти"}
 
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     capsys.readouterr()
     cli.main(["otbor-switch", "--since", SINCE])
     out = capsys.readouterr().out
@@ -288,3 +262,25 @@ def test_switch_leaves_alone_an_article_with_a_human_decision_or_a_closed_month_
     assert "перенести 0" in out and "после проверки 2" in out
     assert showcase(user)["Контракт Weatherford"]["otbor_decision"] is None
     assert api_get("/api/signals", admin, section="all") == []
+
+
+def test_switch_refuses_while_checks_run_and_while_window_articles_have_no_check(
+        user, before_flag, monkeypatch, capsys):
+    _gated("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.", True)
+    _shadow(monkeypatch, {"Контракт Weatherford": answer(industry="oilfield_services")})
+
+    # Пришла после проверки, но до переключения: её решил гейт (флага у «Отбора» с 08.11 нет).
+    late = _gated("Пришла до переключения", "Halliburton получила контракт в Кувейте.", True)
+    _flag_on(monkeypatch)
+    capsys.readouterr()
+    cli.main(["otbor-switch", "--since", SINCE])
+    assert "без решения проверки 1" in capsys.readouterr().out
+    # Статья окна, которую решил гейт, без решения проверки: сначала дозапуск проверки.
+    with pytest.raises(SystemExit, match="otbor-shadow"):
+        cli.main(["otbor-switch", "--since", SINCE, "--apply"])
+    # Дозапуск поставлен, задачи ещё идут: перенос ждёт их.
+    cli.main(["otbor-shadow", "--since", SINCE, "--apply"])
+    with pytest.raises(SystemExit, match="идут задачи проверки"):
+        cli.main(["otbor-switch", "--since", SINCE, "--apply"])
+    assert showcase(user)["Контракт Weatherford"]["otbor_decision"] is None
+    assert late in [row["id"] for row in api_get("/api/articles", user)]

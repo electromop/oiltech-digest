@@ -234,7 +234,7 @@ def test_page_behind_a_wall_for_robots_stays_a_search_drop_after_every_step(user
     assert findings() == []
     assert sections(admin) == {WALL_TITLE: f"Поиск → Текст страницы не получен: {PAGE_NOT_FETCHED}"}
     assert net.steps(WALL_URL) == ["nl", "core", "browser"]
-    assert fulltext() == {"attempted": 1, "fetched": 0, "too_short": 0, "failed": 1, "skipped_budget": 0,
+    assert fulltext() == {"attempted": 1, "fetched": 0, "too_short": 0, "failed": 1,
                           "via": {"core": 0, "browser": 0}, "pdf": 0}
 
 

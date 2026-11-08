@@ -150,10 +150,9 @@ python -m oiltech_digest.cli repair-terminology --no-dry-run --limit 1000
 
 Ожидаемо:
 
-- появляются `article_cards`;
-- появляются записи `article_tags`;
-- появляются `article_scores` и `article_score_items`;
-- в `ai_processing_runs` есть этапы `summary`, `relevance`, `tagging`, `scoring`;
+- появляются `article_cards` (суть и русский заголовок);
+- в `ai_processing_runs` есть этапы `summary` и `translation` (гейт, тег и балл статьи сняты 08.11: новых
+  `article_tags` и `article_scores` нет, тему и баллы ставит «Карточка» у сигнала);
 - `ai-cost-report` и `ai-article-cost-report` читаются без ошибок.
 
 ## 6. OpenAI pilot
@@ -162,9 +161,7 @@ python -m oiltech_digest.cli repair-terminology --no-dry-run --limit 1000
 
 ```bash
 python -m oiltech_digest.cli summarize --limit 3
-python -m oiltech_digest.cli relevance --limit 3
-python -m oiltech_digest.cli tag --limit 3
-python -m oiltech_digest.cli score --limit 3
+python -m oiltech_digest.cli translate-titles --limit 3
 python -m oiltech_digest.cli ai-cost-report
 python -m oiltech_digest.cli ai-article-cost-report
 ```
@@ -172,10 +169,11 @@ python -m oiltech_digest.cli ai-article-cost-report
 Проверить вручную:
 
 - summary написан по-русски и не выглядит выдуманным;
-- relevance отсеивает явный офтоп;
-- tag соответствует теме статьи;
-- score и explanation не противоречат содержанию;
+- русский заголовок короткий, без тире и названия издания;
 - токены и стоимость записываются в `ai_processing_runs`.
+
+«Брать или нет» решает «Отбор» (`enqueue-otbor`), тему и баллы «Карточка» (`enqueue-signal-cards`,
+`enqueue-signal-scores`): их проверка идёт через внешний контур, см. разделы #130 и #132 в `CLAUDE.md`.
 
 ## 7. Проверка полного пайплайна одной командой
 
@@ -185,9 +183,8 @@ python -m oiltech_digest.cli process --limit 20
 
 Проверить по выводу:
 
-- `summary` обработан;
-- `relevance` показал число отклоненных статей;
-- `tagging` и `scoring` отработали только по релевантным статьям.
+- `summary` и `translate` обработаны только у статей, принятых «Отбором» (или гейтом до него, история);
+- `отклонено` показал число отклонённых статей, которые конвейер пропустил.
 
 ## 8. Проверка digest
 
@@ -261,6 +258,6 @@ curl http://127.0.0.1:8000/api/health
 - unit-тесты зеленые;
 - Docker Compose собирается;
 - `init-db`, `seed-*`, `discover-rss`, `parse`, `fetch-full-text` работают;
-- `process` дает summary/relevance/tag/score без системных ошибок;
+- `process` дает summary и translate (суть и русский заголовок) без системных ошибок;
 - UI открывается и читает реальные данные;
 - `digest-content` и `digest-email` успешно генерируются.

@@ -1,9 +1,9 @@
-"""Качество радара — замечания Виктора 29.09.
+"""Качество радара: замечания Виктора 29.09 и правила показа.
 
 «75% — это бизнес-сигналы», «оценки завышены», «в одной карточке могут быть разные темы»,
-«неправильно классифицирует по тегам», «нашёл очень старый сигнал». Судья в том же вызове
-ставит категорию, дату события, флаг смешанных событий, тему из списка и баллы по профилю
-tech_radar; итог балла считает код; радар не показывает бизнес, смешанное, старое и архив.
+«нашёл очень старый сигнал». До 08.11 категорию, дату события, смешанные события и связь с
+нефтесервисом ставил судья прежней цепочки; его поля в базе остались, и правила показа их читают
+(история). Отсеянное лежит карточкой «Отсеяно»: технический отсев поиска и брак судьи прежней цепочки.
 """
 
 from __future__ import annotations
@@ -13,131 +13,15 @@ from datetime import date, timedelta
 
 import pytest
 
-from oiltech_digest import config, scoring_profiles, signal_discovery
+from oiltech_digest import config, signal_discovery
 from oiltech_digest.db import repository
 from oiltech_digest.db import marks
-from oiltech_digest.processing.openai_client import AIClientError, AIResponse
 
 DRILLING = "Бурение, направленное бурение, буровые растворы и буровое оборудование"
-DIGITAL = "Автоматизация, цифровизация, промышленный AI и автономные операции"
 MARKET = "Рынок, бизнес-модели, сервисные модели, партнёрства и M&A"
-THEMES = [DRILLING, DIGITAL, MARKET]
-CRITERIA = [
-    {"id": 101, "name": "Ценность для нефтесервиса", "description": "задача", "weight": 30,
-     "keywords_json": [], "keywords_en_json": [], "profile": "tech_radar"},
-    {"id": 102, "name": "Технологическая новизна", "description": "новизна", "weight": 25,
-     "keywords_json": [], "keywords_en_json": [], "profile": "tech_radar"},
-    {"id": 103, "name": "Зрелость / доказательность", "description": "зрелость", "weight": 20,
-     "keywords_json": [], "keywords_en_json": [], "profile": "tech_radar"},
-    {"id": 104, "name": "Переносимость", "description": "перенос", "weight": 15,
-     "keywords_json": [], "keywords_en_json": [], "profile": "tech_radar"},
-    {"id": 105, "name": "Свежесть", "description": "дата события", "weight": 10,
-     "keywords_json": [], "keywords_en_json": [], "profile": "tech_radar"},
-]
 
 
-def _judge_answer(**overrides):
-    answer = {
-        "title": "Autonomous drilling rigs scaled", "title_ru": "Масштабирование автономного бурения",
-        "theme": DRILLING, "summary": "Оператор перевёл 120 установок на автономное бурение.",
-        "thesis": "Автономия бурения выходит в промышленный масштаб.", "transferability": "Высокая",
-        "maturity": "shortlist", "confidence": 0.8, "score": 92, "why_now": "Масштаб", "why_not_noise": "Цифры",
-        "companies": ["SLB"], "industries": ["нефтегаз"],
-        "signal_category": "technology", "event_date": "2026-09-10",
-        "mixed_events": False, "mixed_events_reason": "",
-        "criteria_scores": [
-            {"criterion_id": 101, "ai_score": 80, "rationale": "бурение"},
-            {"criterion_id": 102, "ai_score": 60, "rationale": "известный подход"},
-            {"criterion_id": 103, "ai_score": 50, "rationale": "vendor-reported"},
-            {"criterion_id": 104, "ai_score": 70, "rationale": "переносимо"},
-            {"criterion_id": 105, "ai_score": 90, "rationale": "сентябрь"},
-        ],
-    }
-    answer.update(overrides)
-    return answer
-
-
-class _Judge:
-    def __init__(self, answer):
-        self.answer = answer
-        self.calls = []
-
-    def complete_json(self, instructions, user_input, schema, **kwargs):
-        self.calls.append({"input": user_input, "schema": schema})
-        return AIResponse(data=dict(self.answer), model="fake-judge")
-
-
-def _snapshot(**extra):
-    return {"topics": [{"name": DRILLING, "tag_id": 2}], "tags": [], "radar_themes": THEMES,
-            "radar_criteria": CRITERIA, **extra}
-
-
-def _run(monkeypatch, answer, snapshot=None, evidence=None):
-    judge = _Judge(answer)
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: judge)
-    items = evidence or [{"source_url": "https://slb.com/autonomy", "title": "SLB autonomous drilling",
-                          "extracted_fact": "120 rigs"}]
-    monkeypatch.setattr(
-        signal_discovery,
-        "_search_web_evidence",
-        lambda topic, config_, **kwargs: {"status": "ok", "queries": ["q"], "results": len(items), "evidence": items},
-    )
-    monkeypatch.setattr(signal_discovery, "_batch_review_candidates",
-                        lambda candidates, topic, offline: {"status": "skipped"})
-    monkeypatch.setattr(signal_discovery, "_dedupe_run", lambda *args: {"skipped": "test"})
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True)
-    run = signal_discovery.run_discovery(run_config, snapshot or _snapshot())
-    return run, judge
-
-
-# --- Судья: схема и вход ----------------------------------------------------------------------
-
-
-def test_judge_schema_offers_themes_categories_and_criteria_of_the_run():
-    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
-
-    assert schema["properties"]["theme"]["enum"] == THEMES
-    assert schema["properties"]["signal_category"]["enum"] == ["technology", "business", "other"]
-    item = schema["properties"]["criteria_scores"]["items"]
-    assert item["properties"]["criterion_id"]["enum"] == [101, 102, 103, 104, 105]
-    # Строгая схема: каждое поле обязано быть в required.
-    assert set(schema["properties"]) == set(schema["required"])
-    # Базовая схема не испорчена сборкой.
-    assert "criteria_scores" not in signal_discovery.SIGNAL_JUDGE_SCHEMA["schema"]["properties"]
-
-
-def test_judge_schema_without_context_keeps_free_theme_and_no_scores():
-    schema = signal_discovery._judge_schema([], [])["schema"]
-
-    assert schema["properties"]["theme"] == {"type": "string"}
-    assert "criteria_scores" not in schema["properties"]
-    assert "event_date" in schema["required"]
-
-
-def test_judge_input_lists_themes_and_criteria_without_weights(monkeypatch):
-    _, judge = _run(monkeypatch, _judge_answer())
-
-    prompt = judge.calls[0]["input"]
-    assert f"- {DIGITAL}" in prompt
-    assert "- id 102: Технологическая новизна — новизна" in prompt
-    # Вес не показываем: итог считает код, правка весов не должна менять оценки модели.
-    assert "30" not in prompt.split("criteria:")[1].split("\n\n")[0]
-
-
-# --- Разбор ответа ---------------------------------------------------------------------------
-
-
-def test_normalize_parses_category_date_and_mixed_flag():
-    signal = signal_discovery._normalize_signal_payload(
-        _judge_answer(signal_category="Business", event_date="2026-03-01T00:00", mixed_events=True,
-                      mixed_events_reason="две разные сделки"),
-        DRILLING,
-    )
-
-    assert signal["signal_category"] == "business"
-    assert signal["event_date"] == "2026-03-01"
-    assert signal["mixed_events"] is True
-    assert signal["mixed_events_reason"] == "две разные сделки"
+# --- Дата события ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("value", ["", "не указано", "2026-13-01", (date.today() + timedelta(days=30)).isoformat()])
@@ -145,120 +29,26 @@ def test_unknown_or_future_event_date_is_none(value):
     assert signal_discovery._normalize_event_date(value) is None
 
 
-def test_unknown_category_is_none_and_reason_needs_mixed_flag():
-    signal = signal_discovery._normalize_signal_payload(
-        _judge_answer(signal_category="tech", mixed_events=False, mixed_events_reason="мусор"), DRILLING,
-    )
-
-    assert signal["signal_category"] is None
-    assert signal["mixed_events_reason"] == ""
+# --- Темы поиска и пустой день ---------------------------------------------------------------
 
 
-# --- Тема и балл в прогоне -------------------------------------------------------------------
-
-
-def test_theme_is_the_judges_choice_from_the_list(monkeypatch):
-    run, _ = _run(monkeypatch, _judge_answer(theme=DIGITAL))
-
-    candidate = run["topics"][0]["candidates"][0]
-    assert candidate["signal"]["theme"] == DIGITAL
-    assert candidate["raw_output"]["theme_choice"] == {"search_topic": DRILLING, "theme": DIGITAL, "reason": "judge"}
-
-
-def test_theme_outside_the_list_falls_back_to_keywords(monkeypatch):
-    run, _ = _run(monkeypatch, _judge_answer(theme="Беспилотники"))
-
-    choice = run["topics"][0]["candidates"][0]["raw_output"]["theme_choice"]
-    assert choice["judge_theme_rejected"] == "Беспилотники"
-    assert choice["reason"] in {"content", "search_topic_confirmed", "no_keywords"}
-
-
-def test_score_is_the_tech_radar_profile_total_not_the_judges_own(monkeypatch):
-    run, _ = _run(monkeypatch, _judge_answer(score=92))
-
-    candidate = run["topics"][0]["candidates"][0]
-    signal = candidate["signal"]
-    # 80·0,30 + 60·0,25 + 50·0,20 + 70·0,15 + 90·0,10 = 24 + 15 + 10 + 10,5 + 9 = 68,5
-    assert signal["score"] == 68.5
-    assert signal["score_profile"] == scoring_profiles.TECH_RADAR
-    assert [item["criterion_id"] for item in signal["score_items"]] == [101, 102, 103, 104, 105]
-    assert [entry["weight"] for entry in signal["criteria_snapshot"]] == [30, 25, 20, 15, 10]
-    assert candidate["raw_output"]["judge_score"] == 92
-    assert candidate["raw_output"]["profile_score"] == 68.5
-
-
-def test_without_criteria_in_snapshot_the_judges_score_stays(monkeypatch):
-    run, judge = _run(monkeypatch, _judge_answer(score=77), snapshot=_snapshot(radar_criteria=[]))
-
-    signal = run["topics"][0]["candidates"][0]["signal"]
-    assert signal["score"] == 77
-    assert "score_profile" not in signal
-    assert "criteria_scores" not in judge.calls[0]["schema"]["schema"]["properties"]
-
-
-# --- Снимок и темы поиска --------------------------------------------------------------------
-
-
-def test_radar_criteria_are_empty_when_weights_do_not_sum_to_100(monkeypatch):
-    monkeypatch.setattr(repository, "list_enabled_scoring_criteria",
-                        lambda profile: [{**CRITERIA[0], "weight": 30}, {**CRITERIA[1], "weight": 25}])
-
-    assert signal_discovery._radar_criteria() == []
-
-
-def test_radar_criteria_are_the_tech_radar_profile(monkeypatch):
-    asked = []
-    monkeypatch.setattr(repository, "list_enabled_scoring_criteria", lambda profile: asked.append(profile) or CRITERIA)
-
-    assert [item["id"] for item in signal_discovery._radar_criteria()] == [101, 102, 103, 104, 105]
-    assert asked == [scoring_profiles.TECH_RADAR]
-
-
-def test_market_topic_is_not_searched_unless_asked_explicitly(monkeypatch):
+def test_every_topic_is_searched_the_market_too_and_an_explicit_topic_picks_one(monkeypatch):
+    # Поиск широкий (#138): тема рынка ищется, что брать, решает «Отбор».
     monkeypatch.setattr(signal_discovery, "_radar_topics", lambda: [{"name": DRILLING}, {"name": MARKET}])
 
-    assert [row["name"] for row in signal_discovery._selected_topics(None)] == [DRILLING]
+    assert [row["name"] for row in signal_discovery._selected_topics(None)] == [DRILLING, MARKET]
     assert [row["name"] for row in signal_discovery._selected_topics("Рынок")] == [MARKET]
-
-
-# --- Надёжность прогона (хвосты ревью 29.09) --------------------------------------------------
-
-
-def test_answer_without_text_is_a_transient_error():
-    assert signal_discovery._is_transient_ai_error(
-        AIClientError("OpenAI response does not contain output text (status=incomplete)")
-    )
-
-
-def test_run_fails_when_the_judge_answered_no_cluster(monkeypatch):
-    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
-
-    class Down:
-        def complete_json(self, *args, **kwargs):
-            raise AIClientError("OpenAI API error 503: busy")
-
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Down())
-    monkeypatch.setattr(
-        signal_discovery, "_search_web_evidence",
-        lambda topic, config_, **kwargs: {"status": "ok", "queries": ["q"], "results": 1,
-                                          "evidence": [{"source_url": "https://a.example/1", "title": "t"}]},
-    )
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True)
-
-    with pytest.raises(signal_discovery.JudgeUnavailable, match="ни на один из 1"):
-        signal_discovery.run_discovery(run_config, _snapshot())
+    assert signal_discovery.search_topic_names() == [DRILLING, MARKET]
 
 
 def test_empty_day_without_errors_is_still_ok(monkeypatch):
-    monkeypatch.setattr(
-        signal_discovery, "_search_web_evidence",
-        lambda topic, config_, **kwargs: {"status": "ok", "queries": ["q"], "results": 0, "evidence": []},
-    )
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True)
+    monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda topic, topic_name, config_, **kwargs: {
+        "status": "ok", "provider": "openai_web_search", "research": {"status": "ok", "events": 0}, "evidence": []})
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True)
 
-    run = signal_discovery.run_discovery(run_config, _snapshot())
+    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING, "tag_id": 2}], "tags": []})
 
-    assert run["topics"][0]["candidates"] == []
+    assert run["topics"][0]["candidates"] == [] and run["topics"][0]["filtered_findings"] == []
 
 
 # --- Ядро: запись и видимость (живая база) ---------------------------------------------------
@@ -336,29 +126,7 @@ def test_archive_needs_a_selection_rule(isolated_db):
         repository.archive_signal_candidates(free_theme_only=False)
 
 
-# --- Модели радара отдельно от ленты --------------------------------------------------------
-
-
-def test_judge_uses_radar_model_reasoning_and_budget(monkeypatch):
-    from oiltech_digest.processing import openai_client
-
-    seen = {}
-
-    class Client(openai_client.OpenAIResponsesClient):
-        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
-                          reasoning_effort=None):
-            seen.update(model=model, effort=reasoning_effort, budget=max_output_tokens, timeout=self.timeout)
-            return AIResponse(data=_judge_answer(), model=model)
-
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Client(api_key="test"))
-    monkeypatch.setattr(config, "SIGNAL_JUDGE_MODEL", "gpt-5")
-    monkeypatch.setattr(config, "SIGNAL_JUDGE_REASONING", "medium")
-    monkeypatch.setattr(config, "SIGNAL_AI_TIMEOUT_SECONDS", 240.0)
-
-    signal_discovery.judge_signal_snapshot([{"source_url": "https://a.example/1", "title": "t"}], DRILLING, offline=False)
-
-    # Лимиты подбирались под minimal: на medium без запаса ответ приходил без текста.
-    assert seen == {"model": "gpt-5", "effort": "medium", "budget": 8600, "timeout": 240.0}
+# --- Бюджет ответа и цены моделей ------------------------------------------------------------
 
 
 @pytest.mark.parametrize("effort, expected", [("minimal", 900), ("low", 2900), ("medium", 6900), ("", 900)])
@@ -435,36 +203,6 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
 # --- Релевантность нефтесервису («релевантности мало», Виктор 29.09) --------------------------
 
 
-def test_judge_schema_asks_for_oilfield_relevance_and_application():
-    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
-
-    assert schema["properties"]["oilfield_relevance"]["enum"] == ["direct", "transferable", "none"]
-    assert {"oilfield_relevance", "oilfield_application"} <= set(schema["required"])
-    assert "коммунальная и сетевая энергетика" in signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
-
-
-@pytest.mark.parametrize("relevance, application, expected", [
-    # Глоссарий делает первую букву заглавной, как во всех текстах карточки.
-    ("direct", "мониторинг парафина в промысловых трубопроводах", "Мониторинг парафина в промысловых трубопроводах"),
-    ("transferable", "автономная доставка проппанта на кустовые площадки", "Автономная доставка проппанта на кустовые площадки"),
-    # Для «нет связи» применения нет, даже если модель что-то написала.
-    ("none", "можно было бы где-нибудь", ""),
-])
-def test_normalize_keeps_application_only_for_relevant(relevance, application, expected):
-    signal = signal_discovery._normalize_signal_payload(
-        _judge_answer(oilfield_relevance=relevance, oilfield_application=application), DRILLING,
-    )
-
-    assert signal["oilfield_relevance"] == relevance
-    assert signal["oilfield_application"] == expected
-
-
-def test_unknown_relevance_is_none_and_card_stays_visible_by_default():
-    signal = signal_discovery._normalize_signal_payload(_judge_answer(oilfield_relevance="maybe"), DRILLING)
-
-    assert signal["oilfield_relevance"] is None
-
-
 def test_radar_hides_cards_without_oilfield_relevance(isolated_db):
     direct = _store("chevron", signal_category="technology", oilfield_relevance="direct",
                     oilfield_application="мониторинг парафина")
@@ -485,14 +223,6 @@ def test_relevance_is_kept_when_an_old_worker_refinds_the_card(isolated_db):
         row = conn.execute("SELECT oilfield_relevance, oilfield_application FROM signals WHERE id = %s",
                            (signal_id,)).fetchone()
     assert row == ("direct", "ГРП на кустах")
-
-
-def test_research_prompt_requires_oilfield_relevance():
-    from oiltech_digest import signal_research
-
-    text = signal_research.RESEARCH_INSTRUCTIONS
-    assert "важны\nНЕФТЕСЕРВИСУ" in text
-    assert "грузоперевозки по общим трассам" in text
 
 
 # --- Ревью #89 (02.10): одобренную карточку решение судьи не прячет, выбранную «в дайджест» — ничто
@@ -602,51 +332,45 @@ def _apply_run(topics):
     return signal_discovery.apply_discovery(config_, {"topics": topics})
 
 
-def _rejected(key, title, **fields):
-    signal = signal_discovery._normalize_signal_payload(_judge_answer(title_ru=title, maturity="reject"), DRILLING)
-    signal.update({"signal_key": key, "evidence": [{"source_url": f"https://example.com/{key}", "title": title}],
-                   "why_not_noise": "обзор без события", **fields})
-    return {"signal": signal, "rejected": True}
-
-
 def _filtered():
     return {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
 
 
-def test_judge_and_batch_rejects_are_kept_as_filtered_cards(isolated_db):
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("judge-no", "Обзор рынка бурения"),
-        _rejected("review-no", "Реклама вендора", batch_review_reason="реклама без факта применения"),
-    ]}])
+def _judge_rejected(key, title, urls, *, stage="judge", reason="обзор без события"):
+    """Брак судьи или ревью пачки прежней цепочки (до 08.11): карточка «Отсеяно» в базе как история, её ссылки
+    держит она, а не повторный отсев поиска (этапы идут только вперёд, 17.10)."""
+    signal_id = repository.upsert_signal({"signal_key": key, "title": title, "title_ru": title, "theme": DRILLING,
+                                          "maturity": "reject", "score": 0, "filter_stage": stage,
+                                          "filter_reason": reason})
+    for url in urls:
+        repository.upsert_signal_evidence(signal_id, {"source_url": url, "title": url})
+    repository.refresh_signal_evidence_count(signal_id)
+    return signal_id
 
-    owners = repository.signal_key_owners(["judge-no", "review-no"])
+
+def test_judge_and_batch_rejects_of_the_old_chain_stay_filtered_with_their_reason(isolated_db):
+    judge = _judge_rejected("judge-no", "Обзор рынка бурения", ["https://example.com/judge-no"])
+    review = _judge_rejected("review-no", "Реклама вендора", ["https://example.com/review-no"], stage="review",
+                             reason="реклама без факта применения")
+
     reasons = _filtered()
-    assert reasons[owners["judge-no"]["id"]] == "отсеяно (судья): обзор без события"
-    assert reasons[owners["review-no"]["id"]] == "отсеяно (ревью пачки): реклама без факта применения"
+    assert reasons[judge] == "отсеяно (судья): обзор без события"
+    assert reasons[review] == "отсеяно (ревью пачки): реклама без факта применения"
     assert _visible_ids() == set()
 
 
-def test_reject_does_not_overwrite_a_card_already_on_the_radar(isolated_db):
-    visible = _store("same-key", signal_category="technology")
-
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("same-key", "Тот же материал")]}])
-
-    assert visible in _visible_ids()
-
-
-def test_search_drops_and_judge_failures_are_kept_with_reason(isolated_db):
+def test_search_drops_are_kept_with_reason(isolated_db):
     _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
-        {"stage": "search", "title": "ProPetro: контракт на 230 МВт", "reason": "не технологическое событие (нет технологии)",
+        {"stage": "search", "title": "ProPetro: контракт на 230 МВт",
+         "reason": "страница не открылась, текста издателя нет",
          "url": "https://example.com/propetro", "summary": "контракт", "event_date": "2026-09-20"},
         {"stage": "search", "title": "Событие с битой ссылкой", "reason": "нет ссылки или заголовка", "url": ""},
-        {"stage": "judge_error", "title": "Кластер без ответа", "reason": "ReadTimeout", "url": "https://example.com/t"},
     ]}])
 
     reasons = sorted(_filtered().values())
     assert reasons == [
-        "отсеяно (поиск): не технологическое событие (нет технологии)",
         "отсеяно (поиск): нет ссылки или заголовка",  # без ссылки — тоже видна в разборе
-        "отсеяно (судья не ответил): ReadTimeout",
+        "отсеяно (поиск): страница не открылась, текста издателя нет",
     ]
 
 
@@ -657,7 +381,7 @@ def test_filtered_card_does_not_hold_its_link_and_stays_out_of_dedup(isolated_db
     assert repository.visible_evidence_owners(["https://example.com/x"]) == {}
     assert repository.list_signals_for_dedup() == []
 
-    # Найдено снова и принято судьёй — ссылка переходит к принятой карточке.
+    # Найдено снова и принято: ссылка переходит к принятой карточке.
     accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
                                          "signal_category": "technology"})
     repository.upsert_signal_evidence(accepted, {"source_url": "https://example.com/x", "title": "x"})
@@ -688,14 +412,13 @@ def _link(signal_id, url):
 
 
 def test_search_drop_of_an_event_on_the_radar_leaves_its_link_alone(isolated_db):
-    # Вчера принято и на радаре; сегодня поиск отбросил то же событие (вышло за период) или судья
-    # не ответил. Ссылка карточки на радаре не теряет русский заголовок и суть, «Отсеяно» не появляется.
+    # Вчера принято и на радаре; сегодня поиск отбросил то же событие (страница не открылась). Ссылка
+    # карточки на радаре не теряет русский заголовок и суть, «Отсеяно» не появляется.
     url = "https://example.com/seen"
     seen = _store_seen("url:example.com/seen", url)
 
     _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
-        {"stage": "search", "title": "Seen again", "reason": "дата события вне периода", "url": url},
-        {"stage": "judge_error", "title": "Seen again", "reason": "ReadTimeout", "url": url},
+        {"stage": "search", "title": "Seen again", "reason": "страница не открылась, текста издателя нет", "url": url},
     ]}])
 
     assert _filtered() == {}
@@ -703,27 +426,8 @@ def test_search_drop_of_an_event_on_the_radar_leaves_its_link_alone(isolated_db)
     assert (link["title_ru"], link["summary_ru"]) == ("Видно на радаре", "суть на радаре")
 
 
-def test_judge_reject_of_a_known_event_keeps_others_links_and_stores_only_its_own(isolated_db):
-    url = "https://example.com/seen"
-    seen = _store_seen("seen", url)
-    known = {"source_url": url, "title": "Seen again"}
-    fresh = {"source_url": "https://example.com/fresh", "title": "Fresh"}
-
-    # Все ссылки уже у карточки на радаре — это повтор, а не новое отсеянное.
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("other-key", "То же событие", evidence=[known])]}])
-    assert _filtered() == {}
-
-    # Своя ссылка есть — карточка «Отсеяно» только с ней; чужая остаётся у хозяйки нетронутой.
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("mixed-key", "Часть известна", evidence=[known, fresh])]}])
-    filtered_id = repository.signal_key_owners(["mixed-key"])["mixed-key"]["id"]
-    assert {row["source_url"] for row in repository.list_signal_evidence(filtered_id)} == {fresh["source_url"]}
-    assert _link(seen, url)["title_ru"] == "Видно на радаре"
-    assert seen in _visible_ids()
-
-
 def test_approved_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-no", "Судья ошибся")]}])
-    card = repository.signal_key_owners(["judge-no"])["judge-no"]["id"]
+    card = _judge_rejected("judge-no", "Судья ошибся", ["https://example.com/judge-no"])
     assert card not in _visible_ids() and repository.list_signals_for_dedup() == []
 
     # Заказчик разобрал «Отсеянные» и одобрил: решение машины одобренную не прячет (ревью #89).
@@ -735,8 +439,7 @@ def test_approved_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
 
 
 def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db):
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-no", "Судья прав")]}])
-    card = repository.signal_key_owners(["judge-no"])["judge-no"]["id"]
+    card = _judge_rejected("judge-no", "Судья прав", ["https://example.com/judge-no"])
 
     _feedback(card, "verdict", "reject")
 
@@ -750,9 +453,9 @@ def _column(signal_id, column):
         return conn.execute(f"SELECT {column} FROM signals WHERE id = %s", (signal_id,)).fetchone()[0]
 
 
-def _search_drop(title, url, reason="дата события вне периода", stage="search"):
+def _search_drop(title, url, reason="страница не открылась, текста издателя нет"):
     return {"topic": DRILLING, "candidates": [], "filtered_findings": [
-        {"stage": stage, "title": title, "reason": reason, "url": url}]}
+        {"stage": "search", "title": title, "reason": reason, "url": url}]}
 
 
 @pytest.mark.parametrize("rescue", ["approved", "digest"])
@@ -787,131 +490,22 @@ def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_du
         accepted, f"найдено снова: ссылку забрала карточка {accepted}")
 
 
-@pytest.mark.parametrize("stage, drop_reason", [
-    ("search", "не технологическое событие (нет технологии)"),
-    ("judge_error", "ReadTimeout"),
+@pytest.mark.parametrize("stage, reason", [
+    ("judge", "отсеяно (судья): обзор без события"),
+    ("review", "отсеяно (ревью пачки): реклама без факта применения"),
 ])
-@pytest.mark.parametrize("rejected_by, reason", [
-    ({}, "отсеяно (судья): обзор без события"),
-    ({"batch_review_reason": "реклама без факта применения"}, "отсеяно (ревью пачки): реклама без факта применения"),
-])
-def test_link_dropped_before_the_verdict_then_rejected_leaves_one_filtered_card(isolated_db, stage, drop_reason,
-                                                                                rejected_by, reason):
-    # 17.10 (ревью PR #106): поиск отсеял u (или судья не ответил), в следующем прогоне судья или
-    # ревью пачки забраковали ту же u. Ссылка ушла к забраковавшей, а прежняя висела в «Отсеянных»
-    # пустой копией со старой причиной.
+def test_link_rejected_by_the_old_chain_then_dropped_by_the_search_stays_with_the_rejected_card(
+        isolated_db, stage, reason):
+    # 17.10: судья или ревью пачки забраковали u, потом поиск отсеял ту же u. Повтор забирал ссылку себе, и пустой
+    # в «Отсеянных» оставалась забракованная, с лучшей причиной. Этапы идут только вперёд, и с поиском GPT тоже.
     url = "https://example.com/u"
-    _apply_run([_search_drop("Событие", url, reason=drop_reason, stage=stage)])
-    (early,) = _filtered()
+    rejected = _judge_rejected("judge-u", "Событие", [url], stage=stage,
+                               reason=reason.split(": ", 1)[1])
 
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}], **rejected_by)]}])
-
-    rejected = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
-    assert _filtered() == {rejected: reason}
-    # Пустая копия не удалена — дубль забраковавшей, как у принятой.
-    assert _column(early, "merged_into_signal_id") == rejected
-
-
-@pytest.mark.parametrize("stage, drop_reason", [
-    ("search", "дата события вне периода"),
-    ("judge_error", "ReadTimeout"),
-])
-@pytest.mark.parametrize("rejected_by, reason", [
-    ({}, "отсеяно (судья): обзор без события"),
-    ({"batch_review_reason": "реклама без факта применения"}, "отсеяно (ревью пачки): реклама без факта применения"),
-])
-def test_link_rejected_then_dropped_again_stays_with_the_rejected_card(isolated_db, stage, drop_reason,
-                                                                       rejected_by, reason):
-    # Обратный порядок (17.10): судья или ревью пачки забраковали u, потом поиск отсеял ту же u
-    # (повторная находка вышла за период) или судья не ответил. Повтор забирал ссылку себе, и пустой
-    # в «Отсеянных» оставалась забракованная — с лучшей причиной. Этапы идут только вперёд.
-    url = "https://example.com/u"
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}], **rejected_by)]}])
-    rejected = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
-
-    _apply_run([_search_drop("Событие", url, reason=drop_reason, stage=stage)])
+    _apply_run([_search_drop("Событие", url, reason="страница не открылась, текста издателя нет")])
 
     assert _filtered() == {rejected: reason}
     assert [row["source_url"] for row in repository.list_signal_evidence(rejected)] == [url]
-
-
-def test_link_rejected_again_under_another_key_stays_with_the_first_rejected_card(isolated_db):
-    # Судья → снова судья другим ключом (17.10): ключ события из нескольких ссылок — по заголовку и сути,
-    # и повторная находка забракованного события его меняет. Новый брак забирал ссылку у прежнего, и тот
-    # оставался в «Отсеянных» пустым. Теперь ссылка остаётся у прежнего, новый — только со своими.
-    u, v = "https://example.com/u", "https://example.com/v"
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-u", "Событие", evidence=[
-        {"source_url": u, "title": "u"}])]}])
-    first = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
-
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("review-u", "Событие", evidence=[
-        {"source_url": u, "title": "u"}], batch_review_reason="реклама без факта применения")]}])
-    assert _filtered() == {first: "отсеяно (судья): обзор без события"}
-
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-uv", "Событие и ещё", evidence=[
-        {"source_url": u, "title": "u"}, {"source_url": v, "title": "v"}])]}])
-    second = repository.signal_key_owners(["judge-uv"])["judge-uv"]["id"]
-    assert {card: {row["source_url"] for row in repository.list_signal_evidence(card)} for card in _filtered()} == {
-        first: {u}, second: {v}}
-
-
-def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_db):
-    # Ревью 05.10: поиск отсеял u (A) → судья отклонил {u} (B) → судья отклонил {u, v}, v у
-    # карточки на радаре (C) → поиск снова отсеял u. Дублем отсеянная становится только для
-    # несклеенной (принятой или — отсеянная до вердикта — забракованной судьёй, 17.10), а
-    # склеенная не оживает, поэтому кольца A→B→C→A нет, а принятое потом событие выходит на радар.
-    # С 17.10 C не появляется вовсе: u держит забракованная B, v — карточка на радаре.
-    url = "https://example.com/u"
-    _store_seen("seen-v", "https://example.com/v")
-    _apply_run([_search_drop("Событие", url)])
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}])]}])
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("judge-uv", "Событие и ещё", evidence=[{"source_url": url, "title": "u"},
-                                                         {"source_url": "https://example.com/v", "title": "v"}])]}])
-    _apply_run([_search_drop("Событие", url)])
-
-    with repository.get_connection() as conn:
-        merged = [row[0] for row in conn.execute("SELECT id FROM signals WHERE merged_into_signal_id IS NOT NULL")]
-    assert all(repository.resolve_signal_merge_root(signal_id) is not None for signal_id in merged)
-
-    accepted = repository.upsert_signal({"signal_key": "accepted-u", "title": "Принято", "theme": DRILLING,
-                                         "signal_category": "technology"})
-    repository.upsert_signal_evidence(accepted, {"source_url": url, "title": "u"})
-    assert accepted in _visible_ids()
-
-    # Повторный отсев той же ссылки склеенную отсеянную не оживляет.
-    _apply_run([_search_drop("Событие", url)])
-    assert accepted in _visible_ids()
-    assert all(_column(signal_id, "merged_into_signal_id") is None or repository.resolve_signal_merge_root(signal_id)
-               for signal_id in _filtered())
-
-
-def test_rejected_event_keeps_the_dropped_link_until_accepted_and_the_group_stays_one_step(isolated_db):
-    # Поиск отсеял u (A) → судья отклонил {u, w} (B): A — дубль B. Повторный отсев u не оживляет A
-    # и не уводит ссылку от B. Принятое потом событие забирает обе ссылки: B — дубль принятой, A —
-    # тоже, сразу (группа в один шаг, как у mark_signal_merged).
-    u, w = "https://example.com/u", "https://example.com/w"
-    _apply_run([_search_drop("Событие", u)])
-    (early,) = _filtered()
-    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-uw", "Событие и ещё", evidence=[
-        {"source_url": u, "title": "u"}, {"source_url": w, "title": "w"}])]}])
-    rejected = repository.signal_key_owners(["judge-uw"])["judge-uw"]["id"]
-    _apply_run([_search_drop("Событие", u)])
-
-    assert _filtered() == {rejected: "отсеяно (судья): обзор без события"}
-    assert {row["source_url"] for row in repository.list_signal_evidence(rejected)} == {u, w}
-
-    accepted = repository.upsert_signal({"signal_key": "accepted-uw", "title": "Принято", "theme": DRILLING,
-                                         "signal_category": "technology"})
-    for url in (u, w):
-        repository.upsert_signal_evidence(accepted, {"source_url": url, "title": url})
-
-    assert _filtered() == {}
-    assert accepted in _visible_ids()
-    assert (_column(early, "merged_into_signal_id"), _column(rejected, "merged_into_signal_id")) == (accepted, accepted)
 
 
 def _owner_stages():
@@ -921,41 +515,36 @@ def _owner_stages():
                                  " JOIN signals s ON s.id = e.signal_id WHERE s.merged_into_signal_id IS NULL"))
 
 
-def test_any_order_of_drops_rejects_and_accepts_leaves_no_empty_copy_and_no_ring(isolated_db):
-    # Доказательство «этапы идут только вперёд» (17.10): тридцать шагов поиска, сбоя судьи, брака судьи
-    # и ревью и приёма в случайном порядке над скользящим окном из трёх ссылок — принятая держит свои
-    # ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в «Отсеянных» нет
-    # пустой копии, ссылка забракованной не ушла к отсеянной до вердикта, главная любого дубля не
-    # склеена (группа в один шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из
-    # обоих списков), ссылки принятого — у видимых карточек. С этим зерном повторный отсев ссылки
-    # забракованной — на шаге 2, новый брак тех же ссылок — на шаге 6, дубль отсеянной у забраковавшей
-    # — на шаге 22.
+def test_any_order_of_drops_and_accepts_over_old_rejects_leaves_no_empty_copy_and_no_ring(isolated_db):
+    # Доказательство «этапы идут только вперёд» (17.10) на нынешнем пути: брак судьи и ревью прежней цепочки лежит в
+    # базе историей, а тридцать шагов отсева поиска и приёма в случайном порядке идут над скользящим окном из трёх
+    # ссылок: принятая держит свои ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в
+    # «Отсеянных» нет пустой копии, ссылка забракованной не ушла к отсеянной поиском, главная любого дубля не склеена
+    # (группа в один шаг, кольца нет), ни одна ссылка не у дубля (событие не пропадает из обоих списков), ссылки
+    # принятого лежат у видимых карточек.
     rng = random.Random(1017)
     urls = [f"https://example.com/{n}" for n in range(12)]
-    into_filtered = 0
+    _judge_rejected("old-judge", "Событие", urls[1:3])
+    _judge_rejected("old-review", "Событие", urls[5:6], stage="review", reason="реклама")
     for step in range(30):
         window = urls[step // 3:step // 3 + 3]
-        op = rng.choice(["search", "judge_error", "judge", "review", "accept"])
+        op = rng.choice(["search", "accept"])
         cluster = rng.choice([window[:1], window[1:2], window[2:], window[:2], window[1:], window])
         key = "c-" + "-".join(url.rsplit("/", 1)[1] for url in cluster)
-        evidence = [{"source_url": url, "title": url} for url in cluster]
         before = _owner_stages()
-        if op in ("search", "judge_error"):
-            _apply_run([_search_drop("Событие", cluster[0], reason=op, stage=op)])
-        elif op == "accept":
+        if op == "search":
+            _apply_run([_search_drop("Событие", cluster[0])])
+        else:
             accepted = repository.upsert_signal({"signal_key": f"ok-{key}", "title": "Принято", "theme": DRILLING,
                                                  "signal_category": "technology"})
-            for item in evidence:
-                repository.upsert_signal_evidence(accepted, item)
+            for url in cluster:
+                repository.upsert_signal_evidence(accepted, {"source_url": url, "title": url})
             assert set(repository.visible_evidence_owners(cluster)) == set(cluster), (step, op, cluster)
-        else:
-            extra = {"batch_review_reason": "реклама"} if op == "review" else {}
-            _apply_run([{"topic": DRILLING, "candidates": [_rejected(key, "Событие", evidence=evidence, **extra)]}])
         backwards = [url for url, stage in _owner_stages().items()
-                     if before.get(url) in ("judge", "review") and stage in ("search", "judge_error")]
+                     if before.get(url) in ("judge", "review") and stage == "search"]
         assert not backwards, (step, op, cluster, backwards)
         with repository.get_connection() as conn:
-            groups = conn.execute("SELECT d.id, t.merged_into_signal_id, t.filter_stage FROM signals d"
+            groups = conn.execute("SELECT d.id, t.merged_into_signal_id FROM signals d"
                                   " JOIN signals t ON t.id = d.merged_into_signal_id").fetchall()
             links_at_duplicates = conn.execute(
                 "SELECT count(*) FROM signal_evidence e JOIN signals s ON s.id = e.signal_id"
@@ -964,10 +553,8 @@ def test_any_order_of_drops_rejects_and_accepts_leaves_no_empty_copy_and_no_ring
                 "SELECT s.id FROM signals s WHERE s.filter_stage IS NOT NULL AND s.merged_into_signal_id IS NULL"
                 " AND NOT EXISTS (SELECT 1 FROM signal_evidence e WHERE e.signal_id = s.id)")]
         assert not empty_copies, (step, op, cluster, empty_copies)
-        assert all(root_merged is None for _, root_merged, _ in groups), (step, op, cluster, groups)
+        assert all(root_merged is None for _, root_merged in groups), (step, op, cluster, groups)
         assert links_at_duplicates == 0, (step, op, cluster)
-        into_filtered += sum(stage is not None for *_, stage in groups)
-    assert into_filtered  # прогулка прошла и по новому пути: дубль у отсеянной
 
 
 def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):
@@ -975,17 +562,6 @@ def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):
         {"stage": "weird", "title": "Странная стадия", "reason": "причина", "url": "https://example.com/w"}]}])
 
     assert list(_filtered().values()) == ["отсеяно (поиск): причина"]
-
-
-def test_batch_review_reject_explains_itself_not_the_judge(isolated_db):
-    _apply_run([{"topic": DRILLING, "candidates": [
-        _rejected("review-no", "Реклама вендора", batch_review_reason="реклама без факта применения",
-                  verdict_reason="технологическое внедрение, событие есть"),
-    ]}])
-    card = repository.signal_key_owners(["review-no"])["review-no"]["id"]
-
-    # «Почему такое решение» — причина отсева ревью, а не приём судьи.
-    assert _column(card, "verdict_reason") == "реклама без факта применения"
 
 
 def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
@@ -996,38 +572,6 @@ def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
     _feedback(card, "verdict", "approved")
 
     assert [(row["id"], row["visible"]) for row in repository.radar_cards_for_recall()] == [(card, True)]
-
-
-def test_each_failed_cluster_gets_its_own_error(monkeypatch):
-    from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _recent_event
-
-    monkeypatch.setattr(config, "SIGNAL_JUDGE_CONCURRENCY", 4)
-    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
-        _recent_event(title="А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
-        _recent_event(title="Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
-        _recent_event(title="В", event_kind="deployment", technology="ESP", source_url="https://example.com/c"),
-    ]))
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-
-    def judge(cluster, topic, offline=True):
-        letter = cluster[0]["source_url"][-1]
-        if letter in "ac":
-            raise AIClientError(f"OpenAI API error 503: busy {letter}")
-        return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
-
-    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
-                                                        research_model="gpt-6.1-sol", research_reasoning="low")
-
-    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
-
-    reasons = {item["url"]: item["reason"] for item in run["topics"][0]["filtered_findings"]
-               if item["stage"] == "judge_error"}
-    assert {url: reason[-1] for url, reason in reasons.items()} == {
-        "https://example.com/a": "a", "https://example.com/c": "c"}
 
 
 def test_overrated_counts_as_approval(isolated_db):
@@ -1042,118 +586,30 @@ def test_overrated_counts_as_approval(isolated_db):
     assert card in _visible_ids()
 
 
-def test_run_collects_search_drops_and_judge_failures(monkeypatch):
-    from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _recent_event
-
-    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
-        _recent_event(title="Бизнес", event_kind="not_technology", technology="", source_url="https://example.com/biz"),
-        _recent_event(title="Технология А", event_kind="deployment", technology="MPD",
-                      source_url="https://example.com/a"),
-        _recent_event(title="Технология Б", event_kind="field_test", technology="ГРП",
-                      source_url="https://example.com/b"),
-    ]))
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-
-    def judge(cluster, topic, offline=True):
-        if cluster[0]["source_url"].endswith("/a"):
-            raise AIClientError("OpenAI API error 503: busy")
-        return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
-
-    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
-                                                        research_model="gpt-6.1-sol", research_reasoning="low")
-
-    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
-
-    findings = run["topics"][0]["filtered_findings"]
-    assert [(item["stage"], item["title"], item["url"]) for item in findings] == [
-        ("search", "Бизнес", "https://example.com/biz"),
-        ("judge_error", "Технология А", "https://example.com/a"),
-    ]
-    assert findings[1]["reason"].startswith("AIClientError: OpenAI API error 503")
-
-
 # --- Причина и ход решения (03.10) ------------------------------------------------------------
 
 
-def test_judge_is_asked_for_reasoning_steps_and_verdict_reason():
-    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
+def test_stored_finding_and_search_drop_carry_their_decision_log(isolated_db):
+    finding = {"signal": {"title": "SLB внедрила MPD на Ямале", "theme": DRILLING, "summary": "", "companies": [],
+                          "maturity": "watch", "score": 0, "signal_key": "ok", "evidence_count": 1,
+                          "evidence": [{"source_url": "https://slb.example/mpd",
+                                        "title": "SLB внедрила MPD на Ямале"}]}}
 
-    assert {"reasoning_steps", "verdict_reason"} <= set(schema["required"])
-    assert schema["properties"]["reasoning_steps"] == {"type": "array", "items": {"type": "string"}}
-    assert "reasoning_steps — ход решения" in signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
-
-
-def test_reasoning_steps_are_kept_trimmed_and_capped():
-    signal = signal_discovery._normalize_signal_payload(
-        _judge_answer(reasoning_steps=["Событие: SLB внедрила MPD", "", *[f"шаг {i}" for i in range(10)]],
-                      verdict_reason="Внедрение с цифрами"),
-        DRILLING,
-    )
-
-    assert signal["reasoning_steps"][0] == "Событие: SLB внедрила MPD"
-    assert len(signal["reasoning_steps"]) == 8
-    assert signal["verdict_reason"] == "Внедрение с цифрами"
-
-
-def test_decision_log_tells_why_a_card_was_accepted():
-    candidate = {
-        "signal": {"reasoning_steps": ["Событие: Nabors встроила MPD", "Технология: да"],
-                   "verdict_reason": "внедрение на действующих буровых", "why_interesting": "первое применение"},
-        "raw_output": {"theme_choice": {"theme": DRILLING, "reason": "judge"}},
-        "rejected": False,
-    }
-
-    assert signal_discovery._decision_log(candidate) == [
-        {"stage": "судья", "text": "Событие: Nabors встроила MPD"},
-        {"stage": "судья", "text": "Технология: да"},
-        {"stage": "судья", "text": "Итог: внедрение на действующих буровых"},
-        {"stage": "ревью пачки", "text": "Оставлен: первое применение"},
-        {"stage": "тематика", "text": f"{DRILLING} — выбор судьи"},
-    ]
-
-
-def test_decision_log_tells_why_a_card_was_filtered_and_by_whom():
-    candidate = {
-        "signal": {"reasoning_steps": ["Событие: вебинар"], "verdict_reason": "нет события",
-                   "batch_review_reason": "реклама вендора без факта применения"},
-        "raw_output": {"theme_choice": {"theme": DIGITAL, "reason": "theme_check",
-                                        "theme_check": {"reason": "общая платформа"}}},
-        "rejected": True,
-    }
-
-    log = signal_discovery._decision_log(candidate)
-
-    assert {"stage": "тематика", "text": f"Второе мнение: {DIGITAL} — общая платформа"} in log
-    assert log[-1] == {"stage": "отсев", "text": "Отсеяно (ревью пачки): реклама вендора без факта применения"}
-
-
-def test_stored_cards_carry_reason_and_decision_log(isolated_db):
-    accepted = _rejected("ok", "Принятая")
-    accepted["rejected"] = False
-    accepted["signal"].update(maturity="watch", reasoning_steps=["шаг"], verdict_reason="внедрение с цифрами")
-    filtered = _rejected("no", "Отсеянная")
-    filtered["signal"].update(reasoning_steps=["Событие: обзор"], verdict_reason="обзор рынка без события")
-
-    _apply_run([{"topic": DRILLING, "candidates": [accepted, filtered], "filtered_findings": [
-        {"stage": "search", "title": "Контракт ProPetro", "reason": "не технологическое событие",
+    _apply_run([{"topic": DRILLING, "candidates": [finding], "filtered_findings": [
+        {"stage": "search", "title": "Контракт ProPetro", "reason": "страница не открылась, текста издателя нет",
          "url": "https://example.com/p", "publisher": "ProPetro", "event_date": "2026-09-20", "technology": ""},
     ]}])
 
     with repository.get_connection() as conn:
-        rows = {key: (reason, log, filter_reason) for key, reason, log, filter_reason in conn.execute(
-            "SELECT signal_key, verdict_reason, decision_log, filter_reason FROM signals")}
-    assert rows["ok"][0] == "внедрение с цифрами" and rows["ok"][1][0] == {"stage": "судья", "text": "шаг"}
-    # У отсеянного судьёй причина отсева — его итог, а не общий why_not_noise.
-    assert rows["no"][2] == "обзор рынка без события"
+        rows = {key: (log, filter_reason) for key, log, filter_reason in conn.execute(
+            "SELECT signal_key, decision_log, filter_reason FROM signals")}
+    # Находка: что нашёл поиск; решение и его шаги допишет «Отбор».
+    assert rows["ok"] == ([{"stage": "поиск", "text": "Найдено: SLB внедрила MPD на Ямале (slb.example)"}], None)
     search = next(value for key, value in rows.items() if key.startswith("filtered:"))
-    assert search[1] == [
+    assert search == ([
         {"stage": "поиск", "text": "Найдено: Контракт ProPetro (ProPetro, 2026-09-20)"},
-        {"stage": "отсев", "text": "Отсеяно (поиск): не технологическое событие"},
-    ]
+        {"stage": "отсев", "text": "Отсеяно (поиск): страница не открылась, текста издателя нет"},
+    ], "страница не открылась, текста издателя нет")
 
 
 def test_decision_log_survives_a_refind_by_an_old_worker(isolated_db):

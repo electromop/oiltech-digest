@@ -18,12 +18,13 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, external_worker, worker_shutdown
-from oiltech_digest.db import connection, repository
+from oiltech_digest import api, contract, external_worker, worker_shutdown
+from oiltech_digest.db import connection, feed_signals, repository
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import OfflineAIClient
 
-AUTH = {"Authorization": "Bearer secret"}
+# Пакет статей ленты выдаётся только сборке контракта 11 (снятие старой цепочки 08.11).
+AUTH = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}
 NOW = datetime(2026, 9, 23, 9, 0, tzinfo=timezone.utc)
 
 
@@ -340,7 +341,7 @@ class _CountingAI(OfflineAIClient):
         self.calls = calls
 
     def complete_json(self, instructions, user_input, schema, **kwargs):
-        if schema["name"] == "article_relevance":
+        if schema["name"] == "article_summary":
             self.calls.append(next(line for line in user_input.splitlines() if "Статья" in line))
         return super().complete_json(instructions, user_input, schema, **kwargs)
 
@@ -351,8 +352,6 @@ def _seed(count: int) -> list[int]:
             "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
             "VALUES ('Stop Source', 'News', 'https://stop.example', TRUE, 'request') RETURNING id"
         ).fetchone()[0]
-        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Бурение', TRUE, 1)")
-        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
         conn.commit()
     for index in range(count):
         repository.insert_article({
@@ -362,6 +361,12 @@ def _seed(count: int) -> list[int]:
         })
     with connection.get_connection() as conn:
         ids = [int(row[0]) for row in conn.execute("SELECT id FROM articles ORDER BY published_at DESC").fetchall()]
+        # «Отбор» принял статьи (его решение у сигнала ленты, как пишет otbor_store): пакет берёт их за сутью.
+        for article_id in ids:
+            conn.execute(feed_signals.BASE_SIGNAL_INSERT,
+                         {"id": article_id, "unclassified": repository.SYSTEM_TAG_UNCLASSIFIED})
+            conn.execute("UPDATE signals SET otbor_decision = 'accept' WHERE signal_key = %s", (f"feed:{article_id}",))
+        conn.commit()
     assert len(ids) == count  # иначе проверка прошла бы вхолостую на одной статье
     return ids
 
@@ -452,8 +457,8 @@ def test_partial_release_writes_done_articles_and_next_claim_skips_them(isolated
     assert stored["payload_json"]["article_ids"] == ids[2:]
     with connection.get_connection() as conn:
         written = {int(row[0]) for row in conn.execute(
-            "SELECT article_id FROM article_cards WHERE relevant IS TRUE AND summary IS NOT NULL").fetchall()}
-        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'relevance'",
+            "SELECT article_id FROM article_cards WHERE summary IS NOT NULL").fetchall()}
+        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'summary'",
                             (int(created["id"]),)).fetchone()[0]
     assert written == set(ids[:2])
     assert runs == 2  # расход сделанной части учтён
@@ -485,24 +490,33 @@ def test_partial_release_of_limit_batch_takes_only_unprocessed_articles(isolated
     assert "title: Статья 0" not in calls
 
 
+def _reprint_dry_run(monkeypatch, ids: list[int]) -> tuple[dict, list[dict]]:
+    """Пробный прогон судьи перепечаток (dry_run): три пары статей; модель судьи задана."""
+    monkeypatch.setattr("oiltech_digest.config.OPENAI_REPRINT_MODEL", "gpt-6-luna")
+    pairs = [{"a_id": ids[0], "b_id": ids[1], "overlap": 0.5}, {"a_id": ids[1], "b_id": ids[2], "overlap": 0.5},
+             {"a_id": ids[0], "b_id": ids[2], "overlap": 0.5}]
+    created = repository.create_background_job("reprint_review", {"pairs": pairs, "dry_run": True},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai")
+    return created, pairs
+
+
 def test_dry_run_job_goes_back_whole_so_its_report_stays_complete(isolated_db, monkeypatch):
-    """Повторное ревью 23.09: итог пробной перепроверки — отчёт (recheck-dry-show). По частям
+    """Повторное ревью 23.09: итог пробного прогона это отчёт целиком (вердикты судьи перепечаток). По частям
     он не складывается: принятая сделанная часть пропала бы из итогового отчёта."""
     ids = _seed(3)
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
-    created = repository.create_background_job("recheck_relevance", {"article_ids": ids, "dry_run": True},
-                                               queue_name="external-ai", execution_region="external",
-                                               capability="openai")
+    created, pairs = _reprint_dry_run(monkeypatch, ids)
     core = _core(monkeypatch)
     job = _claim(core)
-    partial = external_ai.process_recheck_payload(job["payload"], heartbeat=_stop_before(3))
-    assert partial.get("partial") is True
+    partial = external_ai.process_reprint_review_payload(job["payload"], heartbeat=_stop_before(3))
+    assert partial.get("partial") is True and len(partial["verdicts"]) == 2
 
     assert _release(core, job, partial).status_code == 200
 
     stored = repository.get_background_job(int(created["id"]))
     assert stored["status"] == "queued" and stored["attempts"] == 0
-    assert stored["payload_json"]["article_ids"] == ids  # целиком: отчёт соберётся полным
+    assert stored["payload_json"]["pairs"] == pairs  # целиком: отчёт соберётся полным
 
 
 def test_release_with_all_work_done_finishes_job(isolated_db, monkeypatch):
@@ -552,8 +566,8 @@ def test_stalled_job_writes_done_part_and_spends_its_attempt(isolated_db, monkey
     assert "сделано до сбоя: 2" in stored["error_message"]
     with connection.get_connection() as conn:
         written = {int(row[0]) for row in conn.execute(
-            "SELECT article_id FROM article_cards WHERE relevant IS TRUE AND summary IS NOT NULL").fetchall()}
-        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'relevance'",
+            "SELECT article_id FROM article_cards WHERE summary IS NOT NULL").fetchall()}
+        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'summary'",
                             (int(created["id"]),)).fetchone()[0]
         delay = conn.execute("SELECT EXTRACT(EPOCH FROM run_after - now()) FROM background_jobs WHERE id = %s",
                              (int(created["id"]),)).fetchone()[0]
@@ -593,19 +607,17 @@ def test_stalled_dry_run_goes_back_whole(isolated_db, monkeypatch):
     """Пробный прогон по частям не складывается (как и при release) — обычный fail целиком."""
     ids = _seed(3)
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
-    created = repository.create_background_job("recheck_relevance", {"article_ids": ids, "dry_run": True},
-                                               queue_name="external-ai", execution_region="external",
-                                               capability="openai")
+    created, pairs = _reprint_dry_run(monkeypatch, ids)
     core = _core(monkeypatch)
     job = _claim(core)
-    done = external_ai.process_recheck_payload(job["payload"], heartbeat=_stop_before(3))
+    done = external_ai.process_reprint_review_payload(job["payload"], heartbeat=_stop_before(3))
     assert done.get("partial") is True
 
     assert _fail(core, job, done).status_code == 200
 
     stored = repository.get_background_job(int(created["id"]))
     assert stored["status"] == "queued" and stored["attempts"] == 1
-    assert stored["payload_json"]["article_ids"] == ids
+    assert stored["payload_json"]["pairs"] == pairs
 
 
 def test_stalled_fail_with_done_part_needs_the_live_lease(isolated_db, monkeypatch):

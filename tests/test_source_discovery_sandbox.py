@@ -383,7 +383,7 @@ def test_online_relevance_is_decided_by_model_not_keywords(monkeypatch):
     )
     monkeypatch.setattr(sandbox.pipeline, "make_client", lambda offline: sandbox.pipeline.OfflineAIClient())
     monkeypatch.setattr(
-        sandbox.pipeline,
+        sandbox.legacy_stages,  # гейт статей кандидата: снят с ленты 08.11, остался у агента источников
         "relevance_article",
         lambda article, client, *args, **kwargs: gate_calls.append(article["id"])
         or AIResponse({"relevant": True, "reason": "цифровизация строительства скважин"}, "gpt-test", 10, 2),

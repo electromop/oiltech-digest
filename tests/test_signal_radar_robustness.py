@@ -1,8 +1,8 @@
 """Радар после 655cdbe (21.09): что роняло прогон или портило данные.
 
 Каждый тест падает на коде до правки: пустая страница роняла тему, докачка шла без
-heartbeat и без бюджета, 0 в настройках превращался в 20, дубль из ревью пачки
-становился браком, год был зашит, итог задачи не показывал новые шаги."""
+heartbeat, 0 в настройках превращался в умолчание, итог задачи не показывал новые шаги,
+дата страницы не доезжала до ядра."""
 
 from pathlib import Path
 
@@ -10,10 +10,9 @@ import pytest
 import yaml
 from lxml import etree
 
-from oiltech_digest import background_jobs, signal_discovery
+from oiltech_digest import background_jobs, signal_discovery, signal_research
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import request_parser, source_diagnostics
-from oiltech_digest.ingestion.source_diagnostics import ProbeResult
+from oiltech_digest.ingestion import publisher_page, request_parser
 from oiltech_digest.processing.openai_client import AIResponse
 
 SNIPPET = "Field trial of drilling automation for an oil and gas operator."
@@ -26,42 +25,6 @@ def _web_item(url: str) -> dict:
         "extracted_fact": SNIPPET,
         "raw_payload": {"snippet": SNIPPET},
     }
-
-
-def _candidate(key: str, score: float = 70, urls: list[str] | None = None) -> dict:
-    # Общий заголовок: ревью пачки принимает дубль, только если пара похожа по правилу
-    # (общая ссылка или заголовок) — здесь кандидаты пересказывают одно событие.
-    return {
-        "signal": {
-            "signal_key": key,
-            "title": f"Контракт Альфа на бурение скважин {key}",
-            "score": score,
-            "companies": [],
-            "evidence": [{"source_url": url, "title": key} for url in urls or []],
-        },
-        "raw_output": {},
-        "rejected": False,
-        "training_input": {},
-    }
-
-
-def _decision(key: str, *, keep: bool, duplicate_of: str = "", reason: str = "ok", interest: float = 0) -> dict:
-    return {
-        "signal_key": key,
-        "keep": keep,
-        "duplicate_of_signal_key": duplicate_of,
-        "reason": reason,
-        "interest_score": interest,
-        "why_interesting": "первое внедрение" if keep else "",
-    }
-
-
-def _review_client(decisions: list[dict]):
-    class Client:
-        def complete_json(self, *args, **kwargs):
-            return AIResponse(data={"decisions": decisions}, model="fake-ai")
-
-    return Client()
 
 
 # --- 1. Пустая страница -------------------------------------------------------------
@@ -77,13 +40,12 @@ def test_extract_candidate_links_survives_empty_listing():
 
 
 def test_empty_page_in_fulltext_falls_back_to_snippet(monkeypatch):
-    """Ровно путь 21.09: 200 с пустым телом — lxml ParserError сквозь весь прогон."""
-    monkeypatch.setattr(
-        source_diagnostics, "probe_url", lambda url, timeout=20: (ProbeResult(url=url, status=200), b"")
-    )
+    """Ровно путь 21.09: 200 с пустым телом. Находка остаётся со сводкой и пометкой, а не роняет тему."""
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text", lambda url, fallback_title="", **kwargs: {
+        "ok": True, "error": None, "raw_text": "", "title": "", "published_at": None})
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/empty")], "Бурение", limit=5
+        [_web_item("https://example.com/empty")], "Бурение"
     )
 
     assert stats["too_short"] == 1
@@ -98,33 +60,30 @@ def test_any_page_error_keeps_candidate_with_snippet(monkeypatch):
     monkeypatch.setattr(signal_discovery, "_fetch_full_text", boom)
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/broken")], "Бурение", limit=5
+        [_web_item("https://example.com/broken")], "Бурение"
     )
 
-    assert stats == {"attempted": 1, "fetched": 0, "too_short": 0, "failed": 1, "skipped_budget": 0}
+    assert stats == {"attempted": 1, "fetched": 0, "too_short": 0, "failed": 1,
+                     "via": dict.fromkeys(publisher_page.TOP_UP_FETCHERS, 0), "pdf": 0}
     assert evidence[0]["extracted_fact"] == SNIPPET
     assert "ParserError" in evidence[0]["raw_payload"]["full_text_error"]
 
 
-def test_fetch_full_text_skips_documents_and_binary(monkeypatch):
-    probed = []
-    monkeypatch.setattr(
-        source_diagnostics,
-        "probe_url",
-        lambda url, timeout=20: probed.append((url, timeout)) or (ProbeResult(url=url, status=200), b"%PDF-1.7 ..."),
-    )
+def test_fetch_full_text_reads_the_publisher_page_with_the_top_up(monkeypatch):
+    # Страница нужна находке: после запроса идёт добор (PDF, ядро РФ, браузер), у страницы-списка слабый заголовок.
+    asked = []
+    monkeypatch.setattr(publisher_page, "read", lambda url, title, **kwargs: asked.append((url, title, kwargs)) or {
+        "ok": True, "raw_text": "текст", "title": title, "fetcher": "core"})
 
-    assert signal_discovery._fetch_full_text("https://example.com/annual-report.PDF")["error"] == "not_html"
-    assert probed == []  # документ по ссылке даже не качаем
+    result = signal_discovery._fetch_full_text("https://example.com/annual-report.pdf", "Годовой отчёт")
 
-    result = signal_discovery._fetch_full_text("https://example.com/news?id=1")
-
-    assert result["ok"] is False
-    assert result["error"] == "not_html"  # байты PDF не уходят судье «текстом»
-    assert probed == [("https://example.com/news?id=1", signal_discovery.app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS)]
+    assert result["fetcher"] == "core"
+    assert asked == [("https://example.com/annual-report.pdf", "Годовой отчёт", {
+        "timeout": signal_discovery.app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS,
+        "weak_title": signal_research.is_list_page})]
 
 
-# --- 2. Аренда задачи: heartbeat и бюджет времени ------------------------------------
+# --- 2. Аренда задачи: heartbeat перед каждой страницей ------------------------------
 
 
 def test_fulltext_beats_before_every_page(monkeypatch):
@@ -140,59 +99,47 @@ def test_fulltext_beats_before_every_page(monkeypatch):
     signal_discovery._enrich_web_evidence_with_full_text(
         [_web_item(f"https://example.com/{index}") for index in range(3)],
         "Бурение",
-        limit=5,
         heartbeat=lambda: beats.append(1),
     )
 
     assert fetched == [("https://example.com/0", 1), ("https://example.com/1", 2), ("https://example.com/2", 3)]
 
 
-def test_fulltext_stops_at_topic_time_budget(monkeypatch):
-    now = [0.0]
-
-    def slow_page(url, fallback_title="", **kwargs):
-        now[0] += 50
-        return {"ok": False, "error": "timeout", "raw_text": ""}
-
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text", slow_page)
+def test_fulltext_fetches_the_page_of_every_finding(monkeypatch):
+    # Срока на тему нет: находка без страницы во вход «Отбора» не идёт, и срезать её по времени значило бы потерять
+    # её молча. Аренду держит признак продвижения перед каждой страницей.
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "timeout", "raw_text": ""})
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item(f"https://example.com/{index}") for index in range(5)],
-        "Бурение",
-        limit=5,
-        budget_seconds=120,
-        clock=lambda: now[0],
-    )
+        [_web_item(f"https://example.com/{index}") for index in range(5)], "Бурение")
 
-    assert (stats["attempted"], stats["skipped_budget"]) == (3, 2)
-    assert len(evidence) == 5  # кандидаты сверх бюджета остаются со сниппетом, не теряются
+    assert (stats["attempted"], stats["failed"]) == (5, 5)
+    assert len(evidence) == 5
+
+
+class _Search:
+    def __init__(self, events, item):
+        self.events, self.item = events, item
+
+    def research_json(self, instructions, user_input, schema, **kwargs):
+        self.events.append("search")
+        return AIResponse(data={"events": [self.item], "_cited_urls": [], "_web_search_calls": 1}, model="m")
 
 
 def test_run_discovery_heartbeat_reaches_search_and_pages(monkeypatch):
-    from oiltech_digest.source_discovery import agent as source_agent
-
     events: list[str] = []
-    monkeypatch.setattr(signal_discovery, "feedback_query_hints", lambda topic, limit=8, **kwargs: [])
-    monkeypatch.setattr(source_agent, "generate_search_queries", lambda topic, offline=True, limit=8, strategy="broad": ["q"])
-
-    def search(queries, limit=80):
-        events.append("search")
-        return {"status": "ok", "provider": "test", "results": [{
-            "url": "https://example.com/a",
-            "title": "Oil and gas operator deploys drilling automation",
-            "snippet": "Contract signed for deployment at an oil and gas field.",
-            "query": queries[0],
-        }]}
-
-    monkeypatch.setattr(source_agent, "search_web", search)
+    item = {"title": "Oil and gas operator deploys drilling automation", "company": "", "event_date": "",
+            "summary": "", "why_important": "", "source_url": "https://example.com/a", "publisher": "",
+            "source_kind": "primary", "technology": ""}
+    monkeypatch.setattr(signal_research, "make_client", lambda offline=False: _Search(events, item))
     monkeypatch.setattr(
         signal_discovery,
         "_fetch_full_text",
         lambda url, fallback_title="", **kwargs: events.append("page") or {"ok": False, "error": "x", "raw_text": ""},
     )
-    config = signal_discovery.SignalDiscoveryConfig(
-        offline=True, dry_run=True, web_only=True, research_rounds=1, web_query_limit=1, limit=5, web_fulltext_limit=5
-    )
+    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, research_model="gpt-6.1-sol",
+                                                    research_reasoning="low")
 
     signal_discovery.run_discovery(
         config, {"topics": [{"name": "Бурение", "query_seeds_json": []}], "tags": []}, heartbeat=lambda: events.append("beat")
@@ -205,138 +152,16 @@ def test_run_discovery_heartbeat_reaches_search_and_pages(monkeypatch):
 # --- 3. Ноль в настройках ------------------------------------------------------------
 
 
-def test_config_keeps_explicit_zero_and_takes_core_default_for_missing(monkeypatch):
-    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT", 0)
-    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_DISCOVERY_RESEARCH_ROUNDS", 1)
+def test_config_keeps_explicit_zero_and_takes_core_settings_for_missing(monkeypatch):
+    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RESEARCH_EVENTS_PER_TOPIC", 12)
+    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RESEARCH_DAYS", 3)
 
-    zero = signal_discovery.config_from_payload({"web_fulltext_limit": 0, "research_rounds": 0, "min_score": 0})
+    zero = signal_discovery.config_from_payload({"research_limit": 0, "research_days": 0})
     missing = signal_discovery.config_from_payload({})
 
-    assert (zero.web_fulltext_limit, zero.research_rounds, zero.min_score) == (0, 0, 0.0)
-    # Задача с экрана полей не шлёт — выключатель в .env ядра действует и на неё.
-    assert (missing.web_fulltext_limit, missing.research_rounds) == (0, 1)
-    assert (missing.days, missing.limit, missing.max_signals, missing.web_query_limit) == (14, 80, 10, 8)
-
-
-def test_daily_payload_with_zero_limit_does_not_fetch_pages(monkeypatch):
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT", 0)
-    calls = []
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text", lambda *args, **kwargs: calls.append(args))
-
-    config = signal_discovery.config_from_payload(background_jobs.daily_signal_discovery_payload())
-    _, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/1")], "Бурение", limit=config.web_fulltext_limit
-    )
-
-    assert config.web_fulltext_limit == 0
-    assert calls == []
-    assert stats["attempted"] == 0
-
-
-# --- 4. Дубль из ревью пачки — не брак ------------------------------------------------
-
-
-def test_batch_review_duplicate_is_merged_not_rejected(monkeypatch):
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: _review_client([
-        _decision("main", keep=True, interest=80),
-        _decision("retell", keep=False, duplicate_of="main", reason="тот же контракт"),
-        _decision("noise", keep=False, reason="обзор рынка без нового факта"),
-    ]))
-    main, retell, noise = _candidate("main", 80), _candidate("retell", 60), _candidate("noise", 50)
-
-    result = signal_discovery._batch_review_candidates([main, retell, noise], "Бурение", offline=False)
-
-    assert (result["dropped"], result["duplicates"]) == (1, 1)
-    assert retell["rejected"] is False
-    assert retell["duplicate_of"] == {"signal_key": "main"}
-    assert retell["duplicate_reason"] == "тот же контракт"
-    assert noise["rejected"] is True
-    assert "duplicate_of" not in noise
-
-
-def test_batch_review_duplicate_chain_cycle_and_unknown_target(monkeypatch):
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: _review_client([
-        _decision("root", keep=True, interest=90),
-        _decision("b", keep=False, duplicate_of="root"),
-        _decision("a", keep=False, duplicate_of="b"),
-        _decision("x", keep=False, duplicate_of="y"),
-        _decision("y", keep=False, duplicate_of="x"),
-        _decision("ghost", keep=False, duplicate_of="no-such-key"),
-    ]))
-    items = {key: _candidate(key) for key in ("root", "b", "a", "x", "y", "ghost")}
-
-    signal_discovery._batch_review_candidates(list(items.values()), "Бурение", offline=False)
-
-    # A → B → root: дубль идёт в оставшегося, звезда, а не цепочка.
-    assert items["a"]["duplicate_of"] == {"signal_key": "root"}
-    # X ↔ Y — модель противоречит себе: один остаётся, второй сливается в него.
-    assert not items["x"]["rejected"] and not items["y"]["rejected"]
-    assert "duplicate_of" not in items["x"]
-    assert items["y"]["duplicate_of"] == {"signal_key": "x"}
-    # Ссылка на несуществующий ключ — обычный отказ, как и без поля.
-    assert items["ghost"]["rejected"] is True
-
-
-def test_batch_review_duplicate_merges_into_primary_card(monkeypatch):
-    """Одно событие — одна карточка с обеими ссылками; в обучение дубль идёт как duplicate."""
-    upserted: list[str] = []
-    links: list[tuple[int, str]] = []
-    examples: list[tuple[str, str]] = []
-    monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
-    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
-    monkeypatch.setattr(repository, "upsert_signal", lambda signal: upserted.append(signal["signal_key"]) or 10)
-    monkeypatch.setattr(
-        repository, "upsert_signal_evidence", lambda signal_id, item: links.append((signal_id, item["source_url"])) or 1
-    )
-    monkeypatch.setattr(repository, "refresh_signal_evidence_count", lambda signal_id: 2)
-    monkeypatch.setattr(repository, "resolve_signal_merge_root", lambda signal_id: signal_id)
-    monkeypatch.setattr(repository, "touch_signal", lambda signal_id: None)
-    monkeypatch.setattr(
-        repository,
-        "create_signal_training_example",
-        lambda **kwargs: examples.append((kwargs["signal_key"], kwargs["pipeline_verdict"])) or 1,
-    )
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: _review_client([
-        _decision("main", keep=True, interest=80),
-        _decision("retell", keep=False, duplicate_of="main", reason="тот же контракт"),
-    ]))
-    main = _candidate("main", 80, ["https://a.example/1"])
-    retell = _candidate("retell", 60, ["https://b.example/2"])
-    signal_discovery._batch_review_candidates([main, retell], "Бурение", offline=False)
-
-    signal_discovery.apply_discovery(
-        signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False),
-        {"topics": [{"topic": "Бурение", "candidates": [main, retell]}], "dedup": {}},
-        generation_run_id=5,
-    )
-
-    assert upserted == ["main"]
-    assert links == [(10, "https://a.example/1"), (10, "https://b.example/2")]
-    assert examples == [("main", "accepted"), ("retell", "duplicate")]
-
-
-def test_run_dedup_redirects_batch_duplicate_when_its_primary_is_merged(monkeypatch):
-    main, retell = _candidate("main"), _candidate("retell")
-    retell["duplicate_of"] = {"signal_key": "main"}
-    paired: list[str] = []
-
-    def fake_dedupe(nodes, **kwargs):
-        paired.extend(node["signal"]["signal_key"] for node in nodes if node["kind"] == "new")
-        return {"assigned": {1: (0, "то же событие")}, "stats": {"pairs": 1}}  # main → существующая №7
-
-    monkeypatch.setattr(signal_discovery.signal_dedup, "dedupe", fake_dedupe)
-
-    stats = signal_discovery._dedupe_run(
-        signal_discovery.SignalDiscoveryConfig(offline=False),
-        {"existing_signals": [{"id": 7, "evidence_urls": [], "signal_key": "old"}]},
-        [{"candidates": [main, retell]}],
-        lambda: None,
-    )
-
-    assert paired == ["main"]  # найденный ревью дубль в пары не идёт
-    assert main["duplicate_of"] == {"signal_id": 7}
-    assert retell["duplicate_of"] == {"signal_id": 7}  # звезда, а не цепочка
-    assert stats["batch_duplicates"] == 1
+    assert (zero.research_limit, zero.research_days) == (0, 0)
+    # Задача, поставленная до #138, настроек поиска не несёт и берёт настройки ядра в момент выдачи.
+    assert (missing.days, missing.research_limit, missing.research_days) == (14, 12, 14)
 
 
 # --- 5. Балл интереса хранится ------------------------------------------------------
@@ -355,55 +180,21 @@ def test_upsert_signal_keeps_interest_when_next_run_has_none(isolated_db):
     assert row["why_interesting"] == "первое внедрение"
 
 
-# --- 7. Год --------------------------------------------------------------------------
-
-
-def test_search_queries_use_current_year_not_2026(monkeypatch):
-    from oiltech_digest.source_discovery import agent as source_agent
-
-    queries: list[str] = []
-    monkeypatch.setattr(signal_discovery, "_current_year", lambda: 2027)
-    monkeypatch.setattr(signal_discovery, "feedback_query_hints", lambda topic, limit=8, **kwargs: [])
-    monkeypatch.setattr(source_agent, "generate_search_queries", lambda topic, offline=True, limit=8, strategy="broad": [])
-
-    def search(batch, limit=80):
-        queries.extend(batch)
-        # Слабая выдача (без отрасли и события) — второй раунд уходит в pivot.
-        return {"status": "ok", "provider": "test", "results": [{"url": "https://e.example/1", "title": "Weather", "snippet": "Rain"}]}
-
-    monkeypatch.setattr(source_agent, "search_web", search)
-
-    signal_discovery._search_web_evidence(
-        {"name": "Бурение", "query_seeds_json": ["directional drilling"]},
-        signal_discovery.SignalDiscoveryConfig(web_query_limit=3, limit=5, research_rounds=2, web_fulltext_limit=0),
-    )
-
-    assert queries
-    assert not [query for query in queries if "2026" in query]
-    assert any(query.startswith("2027 ") for query in queries)
-
-
 # --- 8. Итог задачи показывает новые шаги -------------------------------------------
 
 
-def test_external_summary_shows_rounds_fulltext_and_batch_review(monkeypatch):
+def test_external_summary_shows_the_search_and_page_counters(monkeypatch):
     monkeypatch.setattr(repository, "create_signal_generation_run", lambda **kwargs: None)
-    monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
-    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
+    fulltext = {"attempted": 5, "fetched": 3, "too_short": 1, "failed": 1, "via": {"core": 1, "browser": 1}, "pdf": 1}
     result = {
         "signal_discovery": True,
-        "config": {"web_only": True, "offline": False, "dry_run": True},
+        "config": {"offline": False, "dry_run": True},
         "run": {"topics": [{
             "topic": "Бурение",
-            "web_search": {
-                "status": "ok",
-                "queries": ["q1", "q2"],
-                "results": 7,
-                "research_rounds": [{"mode": "initial"}, {"mode": "pivot"}],
-                "fulltext": {"attempted": 5, "fetched": 3, "too_short": 1, "failed": 1, "skipped_budget": 0},
-            },
-            "batch_review": {"status": "ok", "source": "ai", "reviewed": 4, "dropped": 1, "duplicates": 1,
-                             "decisions": [{"signal_key": "x"}], "interest_scores": {"y": 80}},
+            "web_search": {"status": "ok", "provider": "openai_web_search", "evidence_count": 2,
+                           "research": {"status": "ok", "events": 5, "evidence_count": 2, "attempts": 1,
+                                        "unverified": [{"url": "x"}], "dropped": [], "fulltext": fulltext,
+                                        "already_collected": [{"url": "y"}]}},
             "candidates": [],
         }]},
     }
@@ -411,9 +202,9 @@ def test_external_summary_shows_rounds_fulltext_and_batch_review(monkeypatch):
     summary = signal_discovery.apply_external_result(result, job_id=1)
 
     topic = summary["topics"][0]
-    assert topic["research_modes"] == ["initial", "pivot"]
-    assert topic["fulltext"]["fetched"] == 3
-    assert topic["batch_review"] == {"status": "ok", "source": "ai", "reviewed": 4, "dropped": 1, "duplicates": 1}
+    assert topic["provider"] == "openai_web_search"
+    assert topic["research"] == {"status": "ok", "events": 5, "evidence_count": 2, "attempts": 1, "unverified": 1,
+                                 "dropped": 0, "fulltext": fulltext, "already_collected": 1}
 
 
 # --- 10. Внешняя очередь не исполняется на месте, конвейер — под профилем -------------
@@ -469,14 +260,15 @@ def test_bare_compose_up_starts_only_core_services():
 
 
 def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):
-    """Тексты страниц едут в кандидатах; в блоке web_search темы — только счётчики."""
+    """Тексты страниц едут в находках; в блоке web_search темы только счётчики."""
     page = {**_web_item("https://example.com/a"), "extracted_fact": "Contract signed for oil and gas drilling automation."}
     monkeypatch.setattr(
         signal_discovery,
-        "_search_web_evidence",
-        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 1, "evidence": [page]},
+        "_topic_web_evidence",
+        lambda topic, topic_name, config, **kwargs: {"status": "ok", "provider": "openai_web_search", "research": {},
+                                                     "evidence": [page]},
     )
-    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True)
+    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True)
 
     run = signal_discovery.run_discovery(config, {"topics": [{"name": "Бурение"}], "tags": []})
 
@@ -504,7 +296,7 @@ def test_fetched_page_date_travels_as_iso_string(monkeypatch):
     )
 
     evidence, _ = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/a")], "Бурение", limit=5
+        [_web_item("https://example.com/a")], "Бурение"
     )
 
     assert evidence[0]["published_at"] == "2026-09-01T00:00:00+00:00"

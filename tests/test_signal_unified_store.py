@@ -10,9 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
-from oiltech_digest.db import repository
+from oiltech_digest.db import feed_signals, repository
 from oiltech_digest.db import marks
+from oiltech_digest.ingestion.normalize import url_key
 from oiltech_digest.processing import external_ai, reprints
+from tests.signal_card_support import before_otbor
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 ECOLOGY = "Экология, промышленная безопасность и охрана труда"
@@ -71,17 +73,26 @@ def _article(n, *, collected=None, title=None, source="Лента"):
     return int(article_id)
 
 
+SNAPSHOT = [{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}]
+
+
 def _process(article_id, *, relevant=True, summary="Суть статьи", title_ru=None, theme=DRILLING, score=70.0):
-    """Итог обработки статьи воркером — так, как его применяет ядро."""
-    item = {"article_id": article_id, "relevance": {"relevant": relevant, "reason": "r", "model": "m"}}
-    if relevant:
-        item["summary"] = {"summary": summary, "model": "m"}
-        item["translation"] = {"title_ru": title_ru or f"Статья {article_id}", "model": "m"}
-        item["tagging"] = {"tag_id": _tag(theme), "confidence": 0.9, "model": "m"}
-        item["scoring"] = {"total_score": score, "score_label": "Выше средней", "explanation": "e", "items": [],
-                           "model": "m", "profile": "business",
-                           "criteria_snapshot": [{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}]}
-    external_ai.apply_process_result({"articles": [item]})
+    """Статья до «Отбора»: вердикт гейта, тег и балл прежней обработки (история, сняты 08.11), затем суть и перевод,
+    итог воркера, как его применяет ядро."""
+    if not relevant:
+        _reject_by_gate(article_id)
+        return
+    before_otbor(article_id, tag_id=_tag(theme), score=score, snapshot=SNAPSHOT)
+    external_ai.apply_process_result({"articles": [{
+        "article_id": article_id, "summary": {"summary": summary, "model": "m"},
+        "translation": {"title_ru": title_ru or f"Статья {article_id}", "model": "m"}}]})
+
+
+def _reject_by_gate(article_id):
+    """Вердикт гейта «не брать» (история: так статью снимала перепроверка гейтом до 08.11); мост синхронизирован, как
+    после записи вердикта."""
+    before_otbor(article_id, relevant=False)
+    feed_signals.sync_quietly([article_id])
 
 
 def _business(user, **params):
@@ -123,14 +134,14 @@ def _radar_card(key, title, *, category=None, url=None, score=60, **extra):
     return signal_id
 
 
-def _finding(key, title, url, **payload):
-    """Находка поиска радара — тема с одним кандидатом, как её отдаёт воркер ядру."""
-    from oiltech_digest import signal_discovery
-
-    signal = signal_discovery._normalize_signal_payload(
-        {"title": title, "summary": title, "maturity": "shortlist", "score": 70, **payload}, DRILLING)
-    signal.update({"signal_key": key, "evidence_count": 1, "evidence": [{"source_url": url, "title": title}]})
-    return {"topic": DRILLING, "candidates": [{"signal": signal, "rejected": False}]}
+def _finding(key, title, url, *, company=""):
+    """Находка поиска радара: тема с одной находкой, как её отдаёт воркер ядру (_finding_candidate): заголовок
+    страницы и ссылка, черновая компания модели поиска лежит в ссылке."""
+    signal = {"title": title, "theme": DRILLING, "summary": "", "companies": [], "maturity": "watch", "score": 0,
+              "signal_key": key, "evidence_count": 1,
+              "evidence": [{"source_url": url, "title": title, "raw_payload": {"research_title": title,
+                                                                              "company": company}}]}
+    return {"topic": DRILLING, "candidates": [{"signal": signal}]}
 
 
 def _discovery_config():
@@ -177,7 +188,7 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
         _process(article_id, title_ru=f"Бизнес-новость {n}")
     article = _article(8)
     _process(article)
-    repository.set_article_relevance(article, False, "передумал")
+    _reject_by_gate(article)
     feed = {card["origin_article_id"]: card["id"] for card in _business(user) if card["origin"] == "feed"}
     assert sorted(feed) == sorted(articles.values())
     with repository.get_connection() as conn:
@@ -196,18 +207,21 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
     assert _rows(_get("/api/signals", user, q="#" + str(shared)))[0]["evidence"][0]["source_url"] == "https://feed.example/7"
 
 
-def test_radar_finding_with_the_address_of_a_feed_article_is_stored_as_without_the_feed(user):
-    # Адрес публикации уникален: ссылку держит кто-то один. Радар ведёт себя так, будто сигналов
-    # ленты нет, — находка с адресом статьи ленты становится карточкой радара со своей ссылкой.
+def test_radar_finding_with_the_address_of_a_feed_article_is_no_new_card(user):
+    # Адрес публикации уникален: ссылку держит кто-то один. Находка с адресом статьи сбора не новый материал
+    # (#138): карточки радара нет, в итоге задачи ссылка «уже в сборе».
     article = _article(9)
+    with repository.get_connection() as conn:
+        # Ключ адреса статьи, как его пишет сбор (insert_article): по нему ядро узнаёт ссылку из сбора.
+        conn.execute("UPDATE articles SET url_key = %s WHERE id = %s", (url_key("https://feed.example/9"), article))
+        conn.commit()
     _process(article)
 
-    _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
+    result = _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
 
-    (card,) = _rows(_get("/api/signals", user))
-    assert [item["source_url"] for item in card["evidence"]] == ["https://feed.example/9"]
-    # Сигнал ленты остаётся в витрине «бизнес» по своей статье (до агента дедупа — два сигнала),
-    # и статья — по-прежнему его публикация: ту же ссылку видно и на нём.
+    assert repository.signal_key_owners(["leak"]) == {}
+    assert [item["url"] for item in result["topic_results"][0]["already_collected"]] == ["https://feed.example/9"]
+    # Сигнал ленты остаётся в витрине «бизнес» по своей статье, и статья по-прежнему его публикация.
     (feed_card,) = _business(user)
     assert feed_card["origin_article_id"] == article
     assert [item["source_url"] for item in feed_card["evidence"]] == ["https://feed.example/9"]
@@ -238,19 +252,18 @@ def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, ad
     assert _get("/api/signals", user, showcase="business", hidden=True).status_code == 422
 
 
-def test_feed_signal_follows_resummary_retagging_and_rescoring(user):
+def test_feed_signal_follows_resummary_and_the_history_tag_and_score(user):
+    """Сигнал ленты повторяет новую суть и заголовок статьи, а у статьи до «Отбора» ещё тему и балл её тега и балла
+    (история: тег и балл статьи сняты 08.11, мост берёт их при следующей записи статьи)."""
     article = _article(1)
     _process(article, summary="Первая суть", title_ru="Первый заголовок", score=50)
+    before_otbor(article, tag_id=_tag(ECOLOGY), score=88.0, snapshot=SNAPSHOT)
 
     external_ai.apply_process_result(
         {"articles": [{"article_id": article, "summary": {"summary": "Новая суть", "model": "m"},
-                       "translation": {"title_ru": "Новый заголовок", "model": "m"},
-                       "relevance": {"relevant": True, "reason": "r"}}]},
+                       "translation": {"title_ru": "Новый заголовок", "model": "m"}}]},
         only=["summary", "translation"],
     )
-    repository.upsert_article_tag(article, _tag(ECOLOGY), 0.8, "другая тема")
-    repository.replace_article_score(article, 88.0, "Высокая", "e", [], "m", profile="business",
-                                     criteria_snapshot=[{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}])
 
     (card,) = _business(user)
     assert (card["title_ru"], card["summary"], card["theme"], card["score"]) == (
@@ -261,7 +274,7 @@ def test_feed_signal_leaves_the_showcase_with_its_article(user):
     kept, rejected_later, deleted = _article(1), _article(2), _article(3)
     for article in (kept, rejected_later, deleted):
         _process(article)
-    repository.set_article_relevance(rejected_later, False, "перепроверка: не нефтесервис")
+    _reject_by_gate(rejected_later)
     with repository.get_connection() as conn:
         conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (deleted,))
         conn.commit()
@@ -354,7 +367,7 @@ def test_new_finding_of_the_same_event_sits_in_the_existing_business_card(user, 
     business = _radar_card("biz", "ZenaTech купила Velocity Geomatics", category="business",
                            companies=["ZenaTech"], url="https://radar.example/zena-1")
     topic = _finding("zena-again", "Покупка Velocity Geomatics компанией ZenaTech", "https://radar.example/zena-2",
-                     companies=["ZenaTech"], signal_category="business")
+                     company="ZenaTech")
     monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _SameEventJudge())
 
     signal_discovery._dedupe_run(_discovery_config(), {"existing_signals": repository.list_signals_for_dedup()},
@@ -406,30 +419,6 @@ def test_history_backfill_is_a_dry_run_by_default_and_never_doubles(user, capsys
     created = [line for line in capsys.readouterr().out.splitlines() if "новых сигналов" in line]
     assert ["новых сигналов: 2;" in created[0], "новых сигналов: 0;" in created[1]] == [True, True]
     assert sorted(card["origin_article_id"] for card in _business(user)) == [august, october]
-
-
-def test_merge_of_business_duplicates_lists_pairs_and_merges_only_named_ones(user, capsys):
-    from oiltech_digest import cli
-
-    older = _radar_card("biz-1", "ZenaTech купила Velocity Geomatics", category="business", companies=["ZenaTech"])
-    newer = _radar_card("biz-2", "Покупка Velocity Geomatics: ZenaTech", category="business", companies=["ZenaTech"])
-    other = _radar_card("biz-3", "Татнефть строит завод сорбентов", category="business", companies=["Татнефть"])
-
-    cli.main(["merge-business-duplicates"])
-    out = capsys.readouterr().out
-    assert f"{newer}:{older}" in out and str(other) + ":" not in out
-    assert len(_business(user)) == 3  # сухой прогон
-
-    # Пара не из списка — отказ целиком, ни одной склейки.
-    with pytest.raises(SystemExit):
-        cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older},{other}:{older}"])
-    assert len(_business(user)) == 3
-
-    cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older}"])
-
-    (main, single) = sorted(_business(user), key=lambda card: card["id"])
-    assert (main["id"], single["id"]) == (older, other)
-    assert main["merged_count"] == 1
 
 
 def test_feed_signal_follows_the_telegram_title_repair(user):
@@ -507,7 +496,7 @@ def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_se
     for article in (visible, reviewed, hidden, old):
         _process(article)
     for article in (reviewed, hidden):
-        repository.set_article_relevance(article, False, "перепроверка: не нефтесервис")
+        _reject_by_gate(article)
     _feedback(_feed_signal_id(reviewed), "reject", event_type="verdict")
     _participants(_feed_signal_id(visible), "Halliburton", "Keystone AS")
 

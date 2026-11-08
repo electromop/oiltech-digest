@@ -482,13 +482,13 @@ def test_enqueue_daily_signal_discovery_command_prints_created_job(monkeypatch, 
         "oiltech_digest.background_jobs.enqueue_daily_signal_discovery",
         lambda force=False: {
             "enqueued": True,
-            "job": {"id": 92, "queue_name": "ai", "payload_json": {"max_signals": 20}},
+            "job": {"id": 92, "queue_name": "ai", "payload_json": {"days": 3}},
         },
     )
 
     cli.cmd_enqueue_daily_signal_discovery(argparse.Namespace(force=False))
 
-    assert "enqueue-daily-signal-discovery: job id=92 queue=ai max_signals=20" in capsys.readouterr().out
+    assert "enqueue-daily-signal-discovery: job id=92 queue=ai" in capsys.readouterr().out
 
 
 def test_enqueue_daily_signal_discovery_command_prints_skip(monkeypatch, capsys):

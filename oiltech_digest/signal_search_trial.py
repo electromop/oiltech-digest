@@ -2,8 +2,8 @@
 проходят «Отбор», в витрины не попадает ничего. По цифрам владелец решает частоту поиска и включение радара.
 
 - plan/estimate — сухой прогон (по умолчанию): темы, число вызовов и оценка цены до оплаты; ничего не пишет.
-- enqueue — запуск: задача прогона радара в режиме «поиск только находит» (otbor в задаче, флаг ядра не нужен) с
-  меткой пробного прогона. Ядро пишет находки отдельно от радара (signal_discovery, trial): метка пути
+- enqueue — запуск: задача прогона радара («поиск только находит», как у любого прогона с 08.11) с меткой пробного
+  прогона. Ядро пишет находки отдельно от радара (signal_discovery, trial): метка пути
   SIGNAL_SELECTOR_TRIAL и свой ключ, существующие сигналы прогон не меняет.
 - after_search — ядро, когда находки записаны: задачи «Отбора» по ним в тени проверки #134 (вид задачи и воркер те же,
   что в работе; ответы проверяет код ядра, otbor.apply_result), решение — в строке находки таблицы проверки
@@ -54,7 +54,7 @@ def priced(model: str) -> bool:
 def plan(*, since: date, until: date, per_topic: int | None = None, model: str | None = None,
          reasoning: str | None = None, otbor_model: str | None = None, otbor_reasoning: str | None = None
          ) -> dict[str, Any]:
-    """Что прогон сделает: темы (при «Отборе» с темой рынка), период, модели и потолок. Без годных моделей — отказ."""
+    """Что прогон сделает: темы (все, и рынок тоже), период, модели и потолок. Без годных моделей отказ."""
     if until < since:
         raise TrialError(f"период пуст: {since.isoformat()} позже {until.isoformat()}")
     model = (model or config.SIGNAL_RESEARCH_MODEL).strip()
@@ -75,7 +75,7 @@ def plan(*, since: date, until: date, per_topic: int | None = None, model: str |
         if not priced(name):
             raise TrialError(f"у модели {name} нет строки в OPENAI_MODEL_PRICES: цену до оплаты не посчитать")
     return {
-        "topics": signal_discovery.search_topic_names(market=True),
+        "topics": signal_discovery.search_topic_names(),
         # Период поиска — days до until (research_period); ноль код прочёл бы как «по умолчанию», поэтому хотя бы день.
         "since": since.isoformat(), "until": until.isoformat(), "days": max(1, (until - since).days),
         "per_topic": per_topic,
@@ -119,13 +119,7 @@ def enqueue(trial: dict[str, Any]) -> dict[str, Any]:
                                             statuses=("queued", "running", "finalizing")):
         raise TrialError("идёт другой прогон радара: дождитесь его конца")
     payload = {
-        "topic": None, "days": trial["days"], "limit": config.SIGNAL_DISCOVERY_LIMIT,
-        "min_score": config.SIGNAL_DISCOVERY_MIN_SCORE, "offline": False, "dry_run": False,
-        "max_signals": config.SIGNAL_DISCOVERY_MAX_SIGNALS, "web_search": True, "web_only": True,
-        "web_query_limit": config.SIGNAL_DISCOVERY_WEB_QUERY_LIMIT,
-        "research_rounds": config.SIGNAL_DISCOVERY_RESEARCH_ROUNDS,
-        "web_fulltext_limit": config.SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT,
-        "search_mode": "openai_web", "otbor": True,
+        "topic": None, "days": trial["days"], "offline": False, "dry_run": False,
         "research_model": trial["model"], "research_reasoning": trial["reasoning"],
         "research_limit": trial["per_topic"], "research_days": trial["days"], "period_end": trial["until"],
         "trigger": TRIGGER,
@@ -140,7 +134,7 @@ def enqueue(trial: dict[str, Any]) -> dict[str, Any]:
 
 def after_search(job_id: int, applied: dict[str, Any], trial: dict[str, Any]) -> dict[str, Any]:
     """Ядро, когда находки пробного прогона записаны: задачи «Отбора» в тени проверки #134 (shadow) пачками по
-    OTBOR_BATCH, по полосе пересчётов. Флаг «Отбора» не нужен: решения в витрины не идут."""
+    OTBOR_BATCH, по полосе пересчётов. Решения в витрины не идут."""
     from oiltech_digest import network_policy
 
     ids = sorted({int(value) for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []})

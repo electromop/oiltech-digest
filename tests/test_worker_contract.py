@@ -126,6 +126,36 @@ def test_check_lanes_fails_on_contract_mismatch(isolated_db, monkeypatch, capsys
     assert "ТРЕВОГА" in capsys.readouterr().out
 
 
+def _ready_now() -> None:
+    """Часы ВМ colima подводятся назад: задача на миг «из будущего» (run_after > now() базы) и не выдаётся."""
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE background_jobs SET run_after = now() - interval '5 seconds' WHERE status = 'queued'")
+        conn.commit()
+
+
+def test_article_batch_goes_only_to_a_build_of_contract_11(isolated_db, monkeypatch):
+    """Снятие старой цепочки 08.11: в пакете статей ленты только суть и перевод, тегов и критериев в нём нет. Сборка
+    контракта 10 на нём упала бы до первой статьи, а на прежнем звала бы гейт, тег и балл, которые ядро не пишет:
+    такой сборке задача не выдаётся и валится с причиной, сборке 11 выдаётся."""
+    core = _core(monkeypatch)
+    old = repository.create_background_job("process_articles", {"limit": 5}, queue_name="external-ai",
+                                           execution_region="external", capability="openai")
+    _ready_now()
+
+    refused = _claim(core, "nl-ai-1", ["external-ai"], {**_current(), contract.HEADER_CONTRACT: "10"}).json()
+
+    assert refused == {"job": None}
+    stored = repository.get_background_job(int(old["id"]))
+    assert stored["status"] == "failed" and "нужен контракт 11" in stored["error_message"]
+
+    fresh = repository.create_background_job("process_articles", {"limit": 5}, queue_name="external-ai",
+                                             execution_region="external", capability="openai")
+    _ready_now()
+    job = _claim(core, "nl-ai-1", ["external-ai"], _current()).json()["job"]
+    assert job is not None and job["id"] == int(fresh["id"])
+    assert "tags" not in job["payload"] and "criteria" not in job["payload"]
+
+
 def test_nl_can_read_consumer_versions_with_worker_token(isolated_db, monkeypatch):
     """На NL нет базы: версии потребителей скрипт выката читает у ядра по токену воркера."""
     core = _core(monkeypatch)

@@ -29,9 +29,8 @@ class _RecordingClient:
 
     model = "fake"
 
-    def __init__(self, relevant: bool = True) -> None:
+    def __init__(self) -> None:
         self.calls: list[dict] = []
-        self.relevant = relevant
 
     def complete_json(self, instructions, user_input, schema, max_output_tokens=900,
                       model=None, reasoning_effort=None):
@@ -43,23 +42,17 @@ class _RecordingClient:
             "input": user_input,
             "max_output_tokens": max_output_tokens,
         })
-        if name == "article_relevance":
-            return AIResponse(data={"relevant": self.relevant, "reason": "x"}, model=model or "fake")
         if name == "article_summary":
             return AIResponse(data={"summary": "s"}, model="fake")
         if name == "article_title_edit":
             return AIResponse(data={"title_ru": "Хуситы ударили по НПЗ в Эр-Рияде"}, model="fake")
-        if name == "article_tag":
-            return AIResponse(data={"tag_id": 10, "confidence": 0.5, "rationale": "r"}, model="fake")
-        if name == "article_score":
-            return AIResponse(
-                data={"total_score": 50, "score_label": "Средняя", "explanation": "e", "items": []},
-                model="fake",
-            )
+        if name == "article_title_translation":
+            return AIResponse(data={"title_ru": "Переведённый заголовок"}, model="fake")
         return AIResponse(data={}, model="fake")
 
 
 def _external_payload(article_extra: dict | None = None) -> dict:
+    """Пакет ядра для воркера: только статьи (тегов и критериев в пакете с 08.11 нет)."""
     article = {
         "id": 1,
         "title": "Война: удары по городу, есть жертвы",
@@ -68,56 +61,56 @@ def _external_payload(article_extra: dict | None = None) -> dict:
         "raw_text": "Военная сводка без отношения к нефтегазу.",
         "source_name": "Интерфакс ТЭК",
         "source_category": "Новости",
+        "otbor_decision": "accept",
     }
     article.update(article_extra or {})
-    return {
-        "articles": [article],
-        "tags": [{"id": 10, "name": "Бурение", "parent_name": "Технологии", "name_en": "Drilling",
-                  "keywords_json": [], "keywords_en_json": []}],
-        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "description": "",
-                      "keywords_json": [], "keywords_en_json": []}],
-    }
+    return {"articles": [article]}
 
 
-def test_external_ai_irrelevant_skips_summary_tag_score(monkeypatch):
-    """Гейт релевантности первым: нерелевантную статью НЕ суммируем/тегируем/скорим."""
-    client = _RecordingClient(relevant=False)
+@pytest.mark.parametrize("decision", [
+    pytest.param({"otbor_decision": "reject"}, id="otbor-rejected"),
+    pytest.param({"otbor_decision": None, "relevant": False}, id="gate-rejected-before-otbor"),
+])
+@pytest.mark.parametrize("path", [
+    pytest.param({}, id="scheduler-batch"),
+    pytest.param({"article_ids": [1]}, id="explicit-list"),
+    pytest.param({"only": ["summary"]}, id="only"),
+])
+def test_rejected_article_gets_no_summary_in_any_path(monkeypatch, decision, path):
+    """Отклонённую статью («Отбором», без его решения гейтом до «Отбора») воркер не обрабатывает ни в каком пути:
+    гейта, который мог передумать, с 08.11 нет, и платить за суть отклонённой незачем."""
+    client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
 
-    result = external_ai.process_payload(_external_payload())
+    result = external_ai.process_payload({**_external_payload(decision), **path})
 
-    assert [c["name"] for c in client.calls] == ["article_relevance"]
-    assert result["stats"]["rejected"] == 1
-    assert result["stats"]["summary"] == 0
-    item = result["articles"][0]
-    assert item["relevance"]["relevant"] is False
-    assert "summary" not in item and "scoring" not in item
+    assert client.calls == []
+    assert set(result["articles"][0]) == {"article_id", "errors"}
+    assert result["stats"] == {"processed": 1, "summary": 0, "translated": 0, "errors": 0}
 
 
-def test_scheduler_batch_does_not_rescore_scored_article(monkeypatch):
+def test_scheduler_batch_calls_only_the_missing_stage(monkeypatch):
     """#53: пакет планировщика (без article_ids) проходит на NL только недостающие стадии, как
-    локальный конвейер. Раньше статья без перевода получала новую суть и новый балл на каждом проходе."""
-    client = _RecordingClient(relevant=True)
+    локальный конвейер: статья с готовой сутью без перевода получает только перевод, не новую суть."""
+    client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
-    payload = _external_payload({"relevant": True, "summary": "готовая суть", "title_ru": None,
-                                 "existing_tag_id": 10, "existing_score_id": 7})
+    payload = _external_payload({"summary": "готовая суть", "title_ru": None})
 
     result = external_ai.process_payload(payload)
 
-    assert [c["name"] for c in client.calls] == []  # старый код: гейт, суть, тег и балл заново
+    assert [c["name"] for c in client.calls] == []  # русский заголовок по правилам: без модели
     item = result["articles"][0]
     assert set(item) == {"article_id", "errors", "translation"}  # недостающее — только перевод
-    assert item["translation"]["title_ru"] == payload["articles"][0]["title"]  # русский — без модели
+    assert item["translation"]["title_ru"] == payload["articles"][0]["title"]
 
 
 def test_accepted_article_gets_its_russian_title_edited_by_the_rules(monkeypatch):
     """Решение владельца 03.11: у принятой статьи русский заголовок не по правилам эксперта (#150) правит «Суть и
     перевод» — тем же шагом, что переводит иноязычный; в итоге модель и токены, ядро учтёт расход."""
-    client = _RecordingClient(relevant=True)
+    client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
     title = "Хуситы ударили по НПЗ в Эр-Рияде — Новости о нефти и газе в России и мире - Нефть и капитал"
-    payload = _external_payload({"title": title, "relevant": True, "summary": "готовая суть", "title_ru": None,
-                                 "existing_tag_id": 10, "existing_score_id": 7})
+    payload = _external_payload({"title": title, "summary": "готовая суть", "title_ru": None})
 
     item = external_ai.process_payload(payload)["articles"][0]
 
@@ -126,26 +119,26 @@ def test_accepted_article_gets_its_russian_title_edited_by_the_rules(monkeypatch
     assert item["translation"]["model"] == "fake" and item["translation"]["provider"] == "openai"
 
 
-_READY = {"relevant": True, "summary": "готовая суть", "title_ru": "готовый заголовок"}
-
-
 @pytest.mark.parametrize(
-    ("extra", "stop_word", "fail_on", "calls", "written"),
+    ("extra", "fail_on", "calls", "written"),
     [
-        # Гейт статью ещё не судил, суть есть: гейт, тег и балл — суть не перегенерируется.
-        pytest.param({"summary": "готовая суть", "title_ru": "готовый заголовок"}, None, None,
-                     ["article_relevance", "article_tag", "article_score"], {"relevance", "tagging", "scoring"},
-                     id="E1-gate-not-judged"),
-        # Не хватает только балла — одна оценка.
-        pytest.param({**_READY, "existing_tag_id": 10}, None, None, ["article_score"], {"scoring"},
-                     id="E2-only-score-missing"),
-        # Стоп-слово у релевантной: модель не зовётся, статью снимают стоп-слова, как раньше.
-        pytest.param(_READY, "жертвы", None, [], {"relevance"}, id="E3-stop-word"),
-        # Упал тег — в этом проходе балла нет, статья придёт в следующий пакет.
-        pytest.param(_READY, None, "article_tag", ["article_tag"], set(), id="E4-tag-failed"),
+        # Принята «Отбором», ничего нет: суть, затем перевод иноязычного заголовка.
+        pytest.param({"title": "Rig count rises", "language": "en"}, None,
+                     ["article_summary", "article_title_translation"], {"summary", "translation"},
+                     id="E1-accepted-nothing-yet"),
+        # Принята гейтом до «Отбора» (история), суть есть: догоняет только перевод.
+        pytest.param({"otbor_decision": None, "relevant": True, "summary": "готовая суть",
+                      "title": "Rig count rises", "language": "en"}, None,
+                     ["article_title_translation"], {"translation"}, id="E2-gate-accepted-only-translation"),
+        # Всё есть: модель не зовётся.
+        pytest.param({"summary": "готовая суть", "title_ru": "готовый заголовок"}, None, [], set(),
+                     id="E3-nothing-missing"),
+        # Упала суть: в этом проходе перевода нет, статья придёт в следующий пакет.
+        pytest.param({"title": "Rig count rises", "language": "en"}, "article_summary", ["article_summary"], set(),
+                     id="E4-summary-failed"),
     ],
 )
-def test_scheduler_batch_stage_edges(monkeypatch, extra, stop_word, fail_on, calls, written):
+def test_scheduler_batch_stage_edges(monkeypatch, extra, fail_on, calls, written):
     """Граничные случаи цикла стадий пакета планировщика (#53, ревью #79) — страж цикла."""
 
     class _Client(_RecordingClient):
@@ -155,136 +148,43 @@ def test_scheduler_batch_stage_edges(monkeypatch, extra, stop_word, fail_on, cal
                 raise RuntimeError("сбой модели")
             return response
 
-    client = _Client(relevant=True)
+    client = _Client()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
-    payload = _external_payload(extra)
-    if stop_word:
-        payload["tags"][0]["negative_keywords_json"] = [stop_word]
 
-    item = external_ai.process_payload(payload)["articles"][0]
+    item = external_ai.process_payload(_external_payload(extra))["articles"][0]
 
     assert [c["name"] for c in client.calls] == calls
     assert set(item) - {"article_id", "errors"} == written
     assert bool(item["errors"]) is (fail_on is not None)
-    if stop_word:
-        assert item["relevance"]["model"] == "negative-keyword"
 
 
 def test_explicit_article_list_and_only_recompute_what_is_asked(monkeypatch):
-    """Страж #53: явный список (перекачка тела, импорт статьи) пересчитывает всё, как раньше, а
-    пометка only — запрошенные стадии, даже у статьи с готовыми сутью, тегом и баллом."""
-    client = _RecordingClient(relevant=True)
+    """Страж #53: явный список (перекачка тела, импорт статьи) пересчитывает суть и перевод, как раньше, а
+    пометка only пересчитывает запрошенные стадии, даже у статьи с готовыми сутью и переводом."""
+    client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
-    done = {"relevant": True, "summary": "готовая суть", "title_ru": "готовый заголовок",
-            "existing_tag_id": 10, "existing_score_id": 7}
+    done = {"summary": "готовая суть", "title_ru": "готовый заголовок", "title": "Rig count rises", "language": "en"}
 
     external_ai.process_payload({**_external_payload(done), "article_ids": [1]})
-    assert [c["name"] for c in client.calls] == ["article_relevance", "article_summary", "article_tag", "article_score"]
+    assert [c["name"] for c in client.calls] == ["article_summary", "article_title_translation"]
 
     client.calls.clear()
-    external_ai.process_payload({**_external_payload(done), "only": ["scoring"]})
-    assert [c["name"] for c in client.calls] == ["article_score"]
+    external_ai.process_payload({**_external_payload(done), "only": ["summary"]})
+    assert [c["name"] for c in client.calls] == ["article_summary"]
 
 
-def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
-    """Гейт идёт ПЕРВЫМ и судит по сырому тексту — AI-суть не попадает ему на вход."""
-    client = _RecordingClient(relevant=True)
+def test_worker_payload_needs_no_tags_or_criteria(monkeypatch):
+    """Пакет без тегов и критериев (тег и балл статьи сняты 08.11) воркер исполняет: раньше он падал до первой
+    статьи («No tags supplied»), и такой пакет сборке контракта 10 ядро не выдаёт (contract.required_contract)."""
+    from oiltech_digest import contract
+
+    client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
 
-    # Явный список (перекачка тела): статья с готовой сутью заново проходит весь конвейер.
-    result = external_ai.process_payload({**_external_payload({"summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}), "article_ids": [1]})
-
-    names = [c["name"] for c in client.calls]
-    assert names[0] == "article_relevance"
-    assert names == ["article_relevance", "article_summary", "article_tag", "article_score"]
-    rel_input = next(c["input"] for c in client.calls if c["name"] == "article_relevance")
-    assert "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ" not in rel_input
-    assert "summary:" not in rel_input
-    assert result["stats"]["relevant"] == 1
-
-
-def test_external_batch_refuses_weights_not_summing_to_100(monkeypatch):
-    """Сессия G, C0: на боевом пути NL сумма весов не проверялась — при сумме ≠ 100 итог
-    Σ final·вес/100 молча раздувался и обрезался до 100. Отказ — до первого платного вызова."""
-    client = _RecordingClient(relevant=True)
-    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
-    payload = _external_payload()
-    first = payload["criteria"][0]
-    payload["criteria"] = [first, {**first, "id": 21, "name": "Второй"}]   # 100 + 100 = 200
-
-    with pytest.raises(ValueError, match="100"):
-        external_ai.process_payload(payload)
-    assert client.calls == []   # ни одного платного вызова
-
-
-def test_external_batch_without_scoring_ignores_the_weights(monkeypatch):
-    """Перегенерация сути (only без scoring) баллы не считает: веса ей не помеха."""
-    client = _RecordingClient(relevant=True)
-    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
-    payload = {**_external_payload(), "only": ["summary", "translation"]}
-    payload["criteria"] = [{**payload["criteria"][0], "weight": 60}]
-
-    result = external_ai.process_payload(payload)
+    result = external_ai.process_payload(_external_payload())
 
     assert result["stats"]["summary"] == 1
-    assert "article_score" not in [c["name"] for c in client.calls]
-
-
-def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
-    """Гейт зовётся с отдельной (более сильной) моделью и повышенным reasoning."""
-    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_MODEL", "strong-model")
-    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_REASONING", "high")
-    client = _RecordingClient(relevant=True)
-
-    # Суть — различимая строка, а не одна буква: в промпте гейта с 17.09 есть блок
-    # тематик заказчика, и проверка на односимвольное «S» ловила бы любую тематику
-    # с латинской S в названии, а не подачу сути.
-    pipeline.relevance_article(
-        {"title": "t", "raw_text": "x", "summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}, client
-    )
-
-    call = client.calls[-1]
-    assert call["name"] == "article_relevance"
-    assert call["model"] == "strong-model"
-    assert call["reasoning"] == "high"
-    assert call["max_output_tokens"] == 2500
-    assert "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ" not in call["input"]  # суть не в промпте гейта
-    assert "summary:" not in call["input"]
-
-
-def test_relevance_article_retries_with_compact_prompt_on_output_limit(monkeypatch):
-    from oiltech_digest.processing.openai_client import AIClientError
-
-    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_MODEL", "gpt-5-nano")
-    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_REASONING", "medium")
-
-    class FlakyClient:
-        model = "fake"
-
-        def __init__(self):
-            self.calls = []
-
-        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
-            self.calls.append({
-                "input": user_input,
-                "model": model,
-                "reasoning": reasoning_effort,
-                "max_output_tokens": max_output_tokens,
-            })
-            if len(self.calls) == 1:
-                raise AIClientError("OpenAI response does not contain output text (incomplete_details={'reason': 'max_output_tokens'})")
-            return AIResponse(data={"relevant": False, "reason": "нет связи с нефтегазом"}, model=model or "fake")
-
-    client = FlakyClient()
-    long_text = "бурение " * 1200
-
-    response = pipeline.relevance_article({"title": "t", "raw_text": long_text, "summary": "S"}, client)
-
-    assert response.data["relevant"] is False
-    assert len(client.calls) == 2
-    assert client.calls[0]["reasoning"] == "medium"
-    assert client.calls[1]["reasoning"] == "minimal"
-    assert len(client.calls[1]["input"]) < len(client.calls[0]["input"])
+    assert contract.required_contract("process_articles", {"articles": []}) == 11
 
 
 def test_reasoning_effort_across_gpt5_generations():
@@ -342,18 +242,6 @@ def test_default_scoring_weights_equal_100_in_each_profile():
         assert len({item["name"] for item in criteria}) == len(criteria)
 
 
-def test_keyword_tag_selects_best_tag():
-    article = {
-        "title": "Electric frac fleet reduces diesel consumption",
-        "raw_text": "New electric frac technology improves hydraulic fracturing operations.",
-    }
-    tags = [
-        {"id": 1, "keywords_json": [], "keywords_en_json": ["seismic"]},
-        {"id": 2, "keywords_json": ["ГРП"], "keywords_en_json": ["electric frac", "hydraulic fracturing"]},
-    ]
-    assert pipeline.keyword_tag(article, tags)["tag_id"] == 2
-
-
 def test_incident_without_solution_is_capped_by_code():
     """#54: признак «инцидент без решения» ограничивает балл кодом, а не просьбой к модели.
     Правило «инциденты — низко» жило только в промпте, и удар по складу ГСМ получил ровно 60."""
@@ -380,42 +268,6 @@ def test_incident_without_solution_is_capped_by_code():
         assert [item["ai_score_raw"] for item in unflagged["items"]] == [60, 85]
 
 
-def test_incident_cap_survives_rescore_without_ai():
-    """#54: rescore-recompute пересчитывает final из сохранённых ai_score и keyword_score
-    (repository.recompute_total_scores_from_items), а признака инцидента в базе нет. Поэтому
-    потолок ложится и на них: иначе пересчёт без ИИ вернул бы инциденту прежний балл."""
-    criteria = [{"id": 1, "name": "Значимость", "weight": 100,
-                 "keywords_json": ["удар", "гсм", "пожар"], "keywords_en_json": []}]
-    article = {"title": "Удар по складу ГСМ", "raw_text": "После удара начался пожар."}
-    answer = {"incident_without_solution": True, "explanation": ".",
-              "items": [{"criterion_id": 1, "ai_score": 60, "rationale": "."}]}
-
-    item = pipeline.normalize_score_payload(article, criteria, answer)["items"][0]
-
-    recomputed = max(item["ai_score"], item["keyword_score"] * pipeline.SCORE_KEYWORD_WEIGHT
-                     + item["ai_score"] * pipeline.SCORE_AI_WEIGHT)  # формула пересчёта
-    assert recomputed <= pipeline.INCIDENT_CRITERION_CAP  # потолок одного final: пересчёт даёт 68
-
-
-def test_score_schema_requires_incident_flag():
-    """#54: признак — обязательное поле ответа модели; офлайн-клиент отвечает false."""
-    from oiltech_digest.processing.prompts import SCORE_SCHEMA
-
-    schema = SCORE_SCHEMA["schema"]
-    assert "incident_without_solution" in schema["required"]
-    assert schema["properties"]["incident_without_solution"] == {"type": "boolean"}
-    offline = OfflineAIClient().complete_json("x", "title: t\ntext: t", SCORE_SCHEMA)
-    assert offline.data["incident_without_solution"] is False
-
-
-def test_scoring_prompt_states_the_incident_band():
-    """#54: у правила есть число — то же, что у потолка в коде."""
-    from oiltech_digest.processing.prompts import SCORING_INSTRUCTIONS
-
-    assert "incident_without_solution" in SCORING_INSTRUCTIONS
-    assert f"0–{pipeline.INCIDENT_CRITERION_CAP}" in SCORING_INSTRUCTIONS
-
-
 def test_incident_flag_without_items_caps_the_keyword_fallback():
     """E5 (ревью #79): признак без подпунктов — критерий падает на ключевой балл, и потолок
     ложится на него: 30/30/30, исходные 100 — в ai_score_raw."""
@@ -429,39 +281,6 @@ def test_incident_flag_without_items_caps_the_keyword_fallback():
     assert (item["keyword_score"], item["ai_score"], item["final_score"]) == (30, 30, 30)
     assert item["ai_score_raw"] == 100
     assert result["incident_without_solution"] is True and result["total_score"] == 30
-
-
-def test_incident_flag_stays_in_job_result_while_db_gets_the_capped_score(monkeypatch):
-    """Ревью #79: ложное «инцидент без решения» уводит статью из ленты (фильтр от 50), из доводов
-    радара и из «высоких» у кандидата — и найти её потом не по чему. Схема не меняется: признак и
-    ai_score_raw едут в итоге задачи (ядро пишет его в background_jobs.result_json целиком), а в
-    статью ядро пишет урезанный балл, как и без этих полей."""
-
-    class _IncidentClient(_RecordingClient):
-        def complete_json(self, instructions, user_input, schema, **kwargs):
-            response = super().complete_json(instructions, user_input, schema, **kwargs)
-            if schema["name"] != "article_score":
-                return response
-            return AIResponse(data={"incident_without_solution": True, "explanation": ".",
-                                    "items": [{"criterion_id": 20, "ai_score": 85, "rationale": "."}]}, model="fake")
-
-    monkeypatch.setattr(external_ai, "make_client", lambda offline: _IncidentClient())
-    result = external_ai.process_payload(_external_payload({**_READY, "existing_tag_id": 10}))
-
-    scoring = result["articles"][0]["scoring"]
-    assert scoring["incident_without_solution"] is True
-    assert [(i["ai_score_raw"], i["ai_score"], i["final_score"]) for i in scoring["items"]] == [(85, 30, 30)]
-
-    written = []
-    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
-    monkeypatch.setattr(external_ai.repository, "replace_article_score",
-                        lambda *args, **kwargs: written.append(args))
-    monkeypatch.setattr(external_ai, "_insert_run", lambda *args, **kwargs: None)
-    external_ai.apply_process_result(result)
-
-    _article_id, total, label, _explanation, items, _model = written[0]
-    assert (total, label) == (30.0, "Низкая")
-    assert [item["ai_score"] for item in items] == [30]  # в колонку ai_score — урезанное, как было
 
 
 def test_glossary_prompt_selects_relevant_oilfield_terms():
@@ -1149,6 +968,8 @@ def test_offline_summary_is_deterministic():
 
 
 def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
+    """Местный конвейер ленты: принятой «Отбором» статье суть и перевод заголовка, отклонённой гейтом до «Отбора»
+    (история) ничего; тег и балл статьи не считаются (сняты 08.11, тему и баллы ставит «Карточка»)."""
     article = {
         "id": 501,
         "title": "Electric frac fleet reduces diesel consumption",
@@ -1161,29 +982,11 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
             "The fleet reduces diesel consumption and lowers emissions for oilfield service crews."
         ),
         "text_truncated": False,
+        "otbor_decision": "accept",
     }
-    tags = [
-        {
-            "id": 10,
-            "name": "ГРП",
-            "parent_name": "Технологии",
-            "keywords_json": [],
-            "keywords_en_json": ["electric frac", "hydraulic fracturing"],
-        }
-    ]
-    criteria = [
-        {
-            "id": 20,
-            "name": "Технологическая значимость",
-            "weight": 100,
-            "keywords_json": [],
-            "keywords_en_json": ["electric frac", "hydraulic fracturing", "oilfield service"],
-        }
-    ]
+    rejected = {**article, "id": 502, "otbor_decision": None, "relevant": False}
     state = {"runs": []}
 
-    monkeypatch.setattr(pipeline.repository, "list_enabled_tags", lambda: tags)
-    monkeypatch.setattr(pipeline.repository, "list_enabled_scoring_criteria", lambda: criteria)
     monkeypatch.setattr(
         pipeline.repository,
         "upsert_article_card",
@@ -1196,62 +999,16 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
         "set_article_title_ru",
         lambda article_id, title_ru: state.update({"title_ru": title_ru}),
     )
-    monkeypatch.setattr(
-        pipeline.repository,
-        "set_article_relevance",
-        lambda article_id, relevant, reason, model=None: state.update(
-            {"relevant": relevant, "relevance_reason": reason, "relevance_model": model}
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline.repository,
-        "upsert_article_tag",
-        lambda article_id, tag_id, confidence, rationale, model=None: state.update(
-            {"tag_id": tag_id, "tag_confidence": confidence, "tag_rationale": rationale, "tag_model": model}
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline.repository,
-        "replace_article_score",
-        lambda article_id, total_score, score_label, explanation, items, model=None, *, profile=None,
-        criteria_snapshot=None: state.update(
-            {
-                "score_article_id": article_id,
-                "total_score": total_score,
-                "score_label": score_label,
-                "score_explanation": explanation,
-                "score_items": items,
-                "score_model": model,
-                "score_snapshot": criteria_snapshot,
-            }
-        ),
-    )
     monkeypatch.setattr(pipeline.repository, "insert_ai_run", lambda rec: state["runs"].append(rec))
 
-    stats = pipeline.process_pipeline_articles([article], OfflineAIClient(), fetch_full=False)
+    stats = pipeline.process_pipeline_articles([article, rejected], OfflineAIClient(), fetch_full=False)
 
-    assert stats == {
-        "processed": 1,
-        "fulltext": 0,
-        "summary": 1,
-        "relevant": 1,
-        "rejected": 0,
-        "tagged": 1,
-        "translated": 1,
-        "scored": 1,
-        "errors": 0,
-    }
+    assert stats == {"processed": 2, "fulltext": 0, "summary": 1, "translated": 1, "rejected": 1, "errors": 0}
+    assert state["article_id"] == 501
     assert state["summary"].startswith(article["title"])
-    assert state["relevant"] is True
     assert state["title_ru"]  # иностранный заголовок переведён отдельной стадией
-    assert state["tag_id"] == 10
-    assert state["total_score"] >= 65
-    assert state["score_label"] in {"Выше средней", "Высокая"}
-    # Балл помнит, каким набором посчитан (сессия G): снимок критериев на момент оценки.
-    assert [(s["id"], s["weight"]) for s in state["score_snapshot"]] == [(20, 100.0)]
-    # Релевантность идёт ПЕРВОЙ — гейт до суммаризации (фикс «мусор в выборке» 2026-06).
-    # Перевод заголовка — отдельная стадия после сути.
-    assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "translation", "tagging", "scoring"]
+    # Перевод заголовка: отдельная стадия после сути; отклонённой статье ни одного вызова.
+    assert [(run["article_id"], run["stage"]) for run in state["runs"]] == [(501, "summary"), (501, "translation")]
     assert all(run["provider"] == "offline" and run["status"] == "ok" for run in state["runs"])
 
     class PublishedAt:
@@ -1273,8 +1030,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
                 "published_at": PublishedAt(),
                 "tag_name": "ГРП",
                 "parent_tag_name": "Технологии",
-                "total_score": state["total_score"],
-                "score_label": state["score_label"],
+                "total_score": 72.0,
+                "score_label": "Выше средней",
                 "summary": state["summary"],
                 "image_url": "",
             }
@@ -1294,7 +1051,7 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     assert content["news"][0]["article_id"] == 501
     assert content["news"][0]["kind"] is None
     assert content["news"][0]["category"] == "Технологии / ГРП"
-    assert content["news"][0]["score"] == state["total_score"]
+    assert content["news"][0]["score"] == 72.0
     assert content["news"][0]["summary"]
     assert not content["news"][0]["summary"].startswith(article["title"] + ":")
 
@@ -1321,122 +1078,6 @@ def test_ai_response_cost_unknown_model_falls_back():
     response = AIResponse(data={}, model="some-future-model", input_tokens=1_000_000, output_tokens=1_000_000)
     expected = config.OPENAI_INPUT_USD_PER_MTOK + config.OPENAI_OUTPUT_USD_PER_MTOK
     assert abs(response.cost_usd - expected) < 1e-9
-
-
-def test_keyword_tag_falls_back_to_unclassified_not_first_tag():
-    """Статья, не совпавшая ни с одним ключевым словом, не должна молча уезжать в первый тег.
-
-    Раньше фоллбэк брал tags[0]: при таксономии D01–D18 это была «Сейсморазведка», при
-    13 тематиках заказчика стала бы «Геологоразведка». Мусор копился в одном направлении
-    и выглядел как обычная классификация. Заказчик 13.09 сам предложил приёмник.
-    """
-    from oiltech_digest.processing import pipeline
-
-    tags = [
-        {"id": 1, "name": "Геологоразведка", "keywords_json": ["сейсморазведка"], "keywords_en_json": []},
-        {"id": 2, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []},
-        {"id": 99, "name": pipeline.UNCLASSIFIED_TAG_NAME, "keywords_json": [], "keywords_en_json": []},
-    ]
-    article = {"title": "Совершенно посторонний текст", "summary": "", "raw_text": "про котиков"}
-    assert pipeline.keyword_tag(article, tags)["tag_id"] == 99
-
-    # Совпадение по ключевому слову по-прежнему выигрывает у приёмника.
-    drilling = {"title": "Новое бурение на кусте", "summary": "", "raw_text": "бурение"}
-    assert pipeline.keyword_tag(drilling, tags)["tag_id"] == 2
-
-
-def test_keyword_tag_keeps_old_behaviour_without_unclassified_tag():
-    """Если приёмник не заведён, поведение прежнее — иначе упали бы старые установки."""
-    from oiltech_digest.processing import pipeline
-
-    tags = [
-        {"id": 1, "name": "Первый", "keywords_json": [], "keywords_en_json": []},
-        {"id": 2, "name": "Второй", "keywords_json": [], "keywords_en_json": []},
-    ]
-    article = {"title": "Ничего не совпадает", "summary": "", "raw_text": ""}
-    assert pipeline.keyword_tag(article, tags)["tag_id"] == 1
-
-
-def test_relevance_prompt_carries_customer_topics(monkeypatch):
-    """Тематики заказчика доезжают до гейта.
-
-    До 17.09 теги влияли только на классификацию уже отобранного: заказчик правил их
-    на экране и выборка не менялась вообще. Он спрашивал об этом прямо 07.09.
-    """
-    pipeline._TAGS_SCOPE_CACHE.update({"block": None, "at": 0.0})
-    monkeypatch.setattr(
-        pipeline.repository, "list_enabled_tags",
-        lambda: [{
-            "id": 26, "name": "Автоматизация и промышленный AI", "name_en": "Industrial AI",
-            "keywords_json": ["АСУ ТП", "телеметрия"], "keywords_en_json": ["SCADA"],
-            "negative_keywords_json": ["смартфон"],
-        }],
-    )
-    prompt = pipeline._relevance_prompt({"title": "t", "raw_text": "x"})
-    assert "тематики заказчика:" in prompt
-    assert "Автоматизация и промышленный AI" in prompt
-    assert "SCADA" in prompt
-    assert "минус: смартфон" in prompt
-
-
-def test_relevance_prompt_survives_tag_read_failure(monkeypatch):
-    """Сбой чтения тематик не роняет гейт — судим без них, как раньше."""
-    pipeline._TAGS_SCOPE_CACHE.update({"block": None, "at": 0.0})
-
-    def boom():
-        raise RuntimeError("база недоступна")
-
-    monkeypatch.setattr(pipeline.repository, "list_enabled_tags", boom)
-    prompt = pipeline._relevance_prompt({"title": "t", "raw_text": "x"})
-    assert "title: t" in prompt
-    assert "тематики заказчика" not in prompt
-
-
-def test_relevance_prompt_prefers_passed_tags_over_database(monkeypatch):
-    """Ключевое для прода: ИИ-стадия исполняется на зарубежном воркере, у которого
-    БАЗЫ НЕТ. Теги обязаны приезжать параметром, иначе чтение падает в except и
-    тематики молча не влияют ни на что именно в боевом режиме."""
-    def must_not_be_called():
-        raise AssertionError("гейт полез в базу вместо переданных тегов")
-
-    monkeypatch.setattr(pipeline.repository, "list_enabled_tags", must_not_be_called)
-    prompt = pipeline._relevance_prompt(
-        {"title": "t", "raw_text": "x"},
-        tags=[{"name": "Бурение", "keywords_json": ["направленное бурение"],
-               "keywords_en_json": [], "negative_keywords_json": []}],
-    )
-    assert "тематики заказчика:" in prompt
-    assert "Бурение" in prompt
-
-
-def test_tags_scope_keeps_english_keywords_when_russian_list_is_long():
-    """Общий срез ключей съедался русскими (их 33-52 на тематику) и до промпта не
-    доезжал ни один английский — а гейт судит и англоязычные тексты."""
-    from oiltech_digest.processing.prompts import tags_scope_block
-
-    block = tags_scope_block([{
-        "name": "Автоматизация", "name_en": "Industrial AI",
-        "keywords_json": [f"ключ{i}" for i in range(40)],
-        "keywords_en_json": ["SCADA", "digital twin"],
-        "negative_keywords_json": [],
-    }])
-    assert "SCADA" in block
-    assert "digital twin" in block
-
-
-def test_tags_scope_excludes_catch_all_tag():
-    """Служебный приёмник «Не классифицировано» — не тематика заказчика: по правилу
-    2б попадание в тематику это довод ЗА, и приёмник делал бы доводом ЗА всё непонятое."""
-    from oiltech_digest.processing.prompts import tags_scope_block
-
-    block = tags_scope_block([
-        {"name": "Не классифицировано / новая тема", "keywords_json": [],
-         "keywords_en_json": [], "negative_keywords_json": []},
-        {"name": "Бурение", "keywords_json": ["ГРП-флот"], "keywords_en_json": [],
-         "negative_keywords_json": []},
-    ])
-    assert "Не классифицировано" not in block
-    assert "Бурение" in block
 
 
 def test_external_refetch_rejects_substituted_body(monkeypatch):

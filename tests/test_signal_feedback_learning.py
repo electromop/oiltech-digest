@@ -1,8 +1,8 @@
-"""ОС коллег по технологическому радару доходит до обучения агента (решение владельца 28.09).
+"""ОС коллег по технологическому радару доходит до памяти агента (решение владельца 28.09).
 
-Проверяется на настоящей базе: какой пример увидит судья и какая подсказка поиска
-останется, если коллега оценил карточку, поменял оценку, выбрал её в дайджест или
-назвал дублем.
+Проверяется на настоящей базе: какой вердикт и какая подсказка поиска останутся в памяти, если
+коллега оценил карточку, поменял оценку, выбрал её в дайджест или назвал дублем. Судья, который
+читал эту память во входе, снят 08.11: память копится для будущей ОС поиска и для глоссария.
 """
 
 from oiltech_digest import signal_feedback
@@ -79,7 +79,7 @@ def test_duplicate_verdict_hides_the_card_although_it_was_reviewed(isolated_db):
     }
 
 
-def test_wrong_block_teaches_the_judge_what_not_to_bring(isolated_db):
+def test_wrong_block_is_kept_as_the_verdict_of_the_card(isolated_db):
     user = _user()
     signal = _signal("biz", "Сделка M&A сервисной компании", url="https://example.com/deal")
 
@@ -90,13 +90,9 @@ def test_wrong_block_teaches_the_judge_what_not_to_bring(isolated_db):
     )
 
     assert _active("signal_verdict", signal) == ["wrong_block"]
-    block = signal_feedback.feedback_prompt_block()
-    rejected = block.split("feedback_rejected_examples", 1)[1]
-    assert "wrong_block (это бизнес-сигнал, а не технология" in rejected
-    assert "Сделка M&A сервисной компании" in rejected
 
 
-def test_rejected_examples_reach_the_judge_even_behind_many_approvals(isolated_db):
+def test_memory_snapshot_keeps_rejections_behind_many_approvals(isolated_db):
     for index in range(130):
         repository.upsert_signal_agent_memory(
             memory_key=f"approved-{index}", memory_type="signal_verdict", subject="approved", score=90,
@@ -107,36 +103,11 @@ def test_rejected_examples_reach_the_judge_even_behind_many_approvals(isolated_d
         facts={"signal_title": "Школьный проект по литию", "reason": "шум"},
     )
 
-    block = signal_feedback.feedback_prompt_block()
     snapshot = signal_feedback.memory_snapshot_rows()
 
-    assert "Школьный проект по литию" in block.split("feedback_rejected_examples", 1)[1]
+    # Одобрения и отказы поровну: по весу в снимок воркеру попали бы одни одобрения.
     assert any(row["subject"] == "reject" for row in snapshot["signal_verdict"])
-    # Судье на воркере без базы — тот же набор, что и на ядре.
-    with signal_feedback.use_memory_snapshot(snapshot):
-        assert "Школьный проект по литию" in signal_feedback.feedback_prompt_block()
-
-
-def test_duplicates_do_not_crowd_real_rejections_out_of_the_judge_prompt(isolated_db):
-    # Память прода 28.09: «Дубль» числится среди отказов, но с весом +85, и 11 дублей
-    # занимали все 8 мест раздела — ни один из 16 настоящих отказов (−80) судья не видел.
-    for subject, score, count in (("approved", 90, 12), ("merge_duplicate", 85, 11),
-                                  ("reject", -80, 10), ("wrong_domain", -80, 3), ("too_generic", -80, 3)):
-        for index in range(count):
-            repository.upsert_signal_agent_memory(
-                memory_key=f"{subject}-{index}", memory_type="signal_verdict", subject=subject, score=score,
-                facts={"signal_title": f"{subject} {index}", "reason": "разметка"},
-            )
-
-    snapshot = signal_feedback.memory_snapshot_rows()
-    for block in (signal_feedback.feedback_prompt_block(), None):
-        if block is None:
-            with signal_feedback.use_memory_snapshot(snapshot):
-                block = signal_feedback.feedback_prompt_block()
-        rejected = block.split("feedback_rejected_examples", 1)[1].split("feedback_", 1)[0]
-        verdicts = [line.split("verdict=", 1)[1].split(" ", 1)[0] for line in rejected.splitlines() if "verdict=" in line]
-        assert len(verdicts) == signal_feedback.PROMPT_NEGATIVE_EXAMPLES
-        assert set(verdicts) <= {"reject", "wrong_domain", "too_generic"}
+    assert any(row["facts_json"]["signal_title"] == "Школьный проект по литию" for row in snapshot["signal_verdict"])
 
 
 def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_db):
@@ -313,10 +284,12 @@ def test_same_title_on_another_card_is_left_alone(isolated_db):
 def test_digest_selection_leaves_training_examples_for_real_feedback(isolated_db):
     user = _user()
     signal = _signal("tr", "Сейсморазведка без кабеля", url="https://example.com/tr")
-    example = repository.create_signal_training_example(
-        generation_run_id=None, signal_id=signal, topic=THEME, signal_key="tr", pipeline_verdict="kept",
-        input_payload={}, raw_output={}, normalized_output={},
-    )
+    # Обучающий пример прежней цепочки (история: с 08.11 новых нет).
+    with repository.get_connection() as conn:
+        example = conn.execute(
+            "INSERT INTO signal_training_examples (signal_id, topic, signal_key, pipeline_verdict, input_json)"
+            " VALUES (%s, %s, 'tr', 'kept', '{}'::jsonb) RETURNING id", (signal, THEME)).fetchone()[0]
+        conn.commit()
     event = repository.record_signal_feedback_event(None, "added_to_digest", signal_id=signal, user_id=user)
 
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user, event_id=event)

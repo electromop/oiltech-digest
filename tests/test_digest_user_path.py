@@ -4,6 +4,7 @@
 запросы, что шлёт экран: отметка в ленте и на радаре, конструктор выпуска (месяц,
 лимит 500, «Оценка от 0 до 100»), черновик. Каждый тест — один риск пути; тексты тестов
 называют риск, а не механику. Выгрузка — test_digest_user_export.py.
+Тема и балл публикации у сигнала ленты: test_digest_signal_readers.py.
 
 Часы окна ленты заморожены на 29.09 12:00 МСК: сентябрь открыт, август — архив.
 """
@@ -440,37 +441,30 @@ def test_chosen_copy_of_a_closed_month_does_not_take_the_news_out_of_the_open_mo
     assert analyst.issue(SEPT) == [("article", september)]
 
 
-def _rejected_by_the_gate(*article_ids: int) -> dict:
-    """Ответ воркера перепроверки релевантности: гейт отклонил эти статьи."""
-    return {"recheck_relevance": True, "articles": [
-        {"article_id": article_id, "errors": [],
-         "relevance": {"relevant": False, "reason": "не нефтесервис", "model": "negative-keyword"}}
-        for article_id in article_ids
-    ]}
+def _marked_for_deletion(*article_ids: int) -> None:
+    """Пометка на удаление, как её ставила перепроверка гейтом с --mark (снята 08.11; пометки остались)."""
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET pending_deletion = TRUE, deletion_reason = 'не нефтесервис', "
+                     "marked_for_deletion_at = now() WHERE id = ANY(%s)", (list(article_ids),))
+        conn.commit()
 
 
-def test_relevance_recheck_keeps_articles_marked_for_the_issue(issue):
-    """Ревью #88. Перепроверка релевантности (enqueue-recheck) удаляет отклонённые гейтом статьи, а с
-    --mark помечает их на удаление. Защищены были только статьи из сохранённых черновиков, а с #84
-    выпуск строится по отметкам: выбранная, но не сохранённая в черновик статья удалялась вместе с
-    отметкой — и уходила из выпуска. Отметка «в дайджест» теперь защищает, как черновик: статья
-    пропускается и учитывается в отчёте (skipped_in_digest). --force — как раньше, без защиты."""
-    from oiltech_digest.processing import external_ai
-
+def test_purge_of_marked_for_deletion_keeps_articles_marked_for_the_issue(issue):
+    """Ревью #88. Разовая чистка помеченных на удаление (recheck-purge) удаляет статьи физически. Защищены были только
+    статьи из сохранённых черновиков, а с #84 выпуск строится по отметкам: выбранная, но не сохранённая в черновик
+    статья удалялась бы вместе с отметкой и уходила из выпуска. Отметка «в дайджест» защищает, как черновик: статья
+    пропускается и возвращается в выпуск снятием пометки. --force, как раньше, без защиты."""
     analyst, a = issue["analyst"], issue["a"]
     analyst.mark(a["hi"])
+    _marked_for_deletion(a["hi"], a["low"])
 
-    deleted = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"], a["low"]))
-    assert (deleted["deleted"], deleted["skipped_in_digest"]) == (1, 1)
-    marked = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"], a["mid"]), mark=True)
-    assert (marked["marked"], marked["skipped_in_digest"]) == (1, 1)
+    assert repository.purge_pending_deletion() == 1
     with connection.get_connection() as conn:
-        left = dict(conn.execute(
-            "SELECT id, pending_deletion FROM articles WHERE id = ANY(%s)", ([a["hi"], a["mid"], a["low"]],)
-        ).fetchall())
-    assert left == {a["hi"]: False, a["mid"]: True}
+        left = {row[0] for row in conn.execute("SELECT id FROM articles WHERE id = ANY(%s)", ([a["hi"], a["low"]],))}
+    assert left == {a["hi"]}
+    assert repository.unmark_all_pending_deletion() == 1
     assert analyst.issue() == [("article", a["hi"])]
 
-    forced = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"]), force=True)
-    assert forced["deleted"] == 1
+    _marked_for_deletion(a["hi"])
+    assert repository.purge_pending_deletion(force=True) == 1
     assert analyst.issue() == []

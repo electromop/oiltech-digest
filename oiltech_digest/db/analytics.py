@@ -8,7 +8,12 @@
 Месяц — календарный по Москве и по дате СБОРА (collected_at), как в
 repository.monthly_platform_stats: по дате публикации архивные ленты искажали бы
 динамику текущей работы. Незаконченный месяц сравнивается с тем же числом дней
-прошлого — иначе «сентябрь по 19-е» всегда проигрывал бы полному августу."""
+прошлого — иначе «сентябрь по 19-е» всегда проигрывал бы полному августу.
+
+Тема и балл берутся у публикации ленты (repository.publication_joins: у сигнала ленты, у статьи без него прежние тег и
+балл). Пороги «сильных» и «топа» по ступеням балла сигнала (SIGNAL_SCORE_BANDS): «сильный сигнал» от границы
+«полезный», «топ» от границы «сильный» (на проде 61 и 74; до 08.11 было 60 и 70 по баллу статьи). Пороги идут в ответе
+(score_thresholds): по ним экран подписывает плитки и графики."""
 
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from psycopg.rows import dict_row
 
 from oiltech_digest import config, feed_window, fx
 from oiltech_digest.db import connection, marks
+from oiltech_digest.db.repository import publication_joins
 
 TZ = "Europe/Moscow"
 _MONTH = f"to_char(a.collected_at AT TIME ZONE '{TZ}', 'YYYY-MM')"
@@ -34,10 +40,10 @@ _SAME_PERIOD = (
 # старше 30 дней к моменту сбора): архивная лента, впервые собранная, дала бы «сигнал
 # через полгода», хотя платформа тут ни при чём.
 _SPEED_FILTER = (
-    "a.published_at IS NOT NULL AND s.created_at >= a.published_at "
+    "a.published_at IS NOT NULL AND pub.scored_at >= a.published_at "
     "AND a.collected_at - a.published_at < interval '30 days'"
 )
-_SPEED_HOURS = "extract(epoch FROM s.created_at - a.published_at) / 3600"
+_SPEED_HOURS = "extract(epoch FROM pub.scored_at - a.published_at) / 3600"
 
 COUNTERS = (
     "collected", "en", "full_text", "relevant", "rejected", "summarized", "scored",
@@ -53,21 +59,21 @@ _COUNTERS_SQL = f"""
            count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
            count(*) FILTER (WHERE rel.relevant IS FALSE) AS rejected,
            count(*) FILTER (WHERE rel.relevant IS TRUE AND COALESCE(c.summary, '') <> '') AS summarized,
-           count(*) FILTER (WHERE s.total_score IS NOT NULL) AS scored,
-           count(*) FILTER (WHERE s.total_score >= 60) AS strong,
-           count(*) FILTER (WHERE s.total_score >= 70) AS top,
+           count(*) FILTER (WHERE pub.total_score IS NOT NULL) AS scored,
+           count(*) FILTER (WHERE pub.total_score >= %(strong_from)s) AS strong,
+           count(*) FILTER (WHERE pub.total_score >= %(top_from)s) AS top,
            count(*) FILTER (WHERE a.pending_deletion) AS hidden,
            count(*) FILTER (WHERE r.article_id IS NOT NULL) AS reprints,
            count(*) FILTER (WHERE d.article_id IS NOT NULL OR c.status = 'digest') AS digest_selected,
            count(DISTINCT a.source_id) AS sources_active,
            count(DISTINCT a.source_id) FILTER (WHERE rel.relevant IS TRUE) AS sources_relevant,
-           count(DISTINCT a.source_id) FILTER (WHERE s.total_score >= 60) AS sources_strong,
+           count(DISTINCT a.source_id) FILTER (WHERE pub.total_score >= %(strong_from)s) AS sources_strong,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY {_SPEED_HOURS}) FILTER (WHERE {_SPEED_FILTER}) AS speed_p50_hours,
            percentile_cont(0.9) WITHIN GROUP (ORDER BY {_SPEED_HOURS}) FILTER (WHERE {_SPEED_FILTER}) AS speed_p90_hours
     FROM articles a
     LEFT JOIN article_cards c ON c.article_id = a.id
     LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
-    LEFT JOIN article_scores s ON s.article_id = a.id
+    {publication_joins('a')}
     LEFT JOIN article_reprints r ON r.article_id = a.id
     LEFT JOIN (SELECT a_d.id AS article_id FROM articles a_d
                WHERE {marks.article_marked_sql('a_d.id', 'digest')}) d
@@ -107,18 +113,18 @@ _EXPORTS_SQL = f"""
 # Темы — только действующие корневые теги (13 тематик заказчика с 13.09 и служебный
 # приёмник). Статьи со старой таксономией сюда не попадают: экран показывает, сколько
 # релевантного ещё не размечено по новым темам, вместо смешения двух классификаций.
+# Тема публикации корневая: тема сигнала ленты (имя корневого тега) или корень тега статьи без сигнала; имена корневых
+# тегов уникальны (idx_tags_name_parent), поэтому тег по имени один.
 _THEMES_SQL = f"""
     SELECT {_MONTH} AS month, root.id AS tag_id, root.name AS tag,
            count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
-           count(*) FILTER (WHERE s.total_score >= 60) AS strong
+           count(*) FILTER (WHERE pub.total_score >= %(strong_from)s) AS strong
     FROM articles a
     JOIN article_cards c ON c.article_id = a.id
     LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
-    JOIN article_tags at ON at.article_id = a.id
-    JOIN tags t ON t.id = at.tag_id
-    JOIN tags root ON root.id = COALESCE(t.parent_id, t.id)
-    LEFT JOIN article_scores s ON s.article_id = a.id
-    WHERE a.collected_at >= {_SINCE} AND root.parent_id IS NULL AND root.enabled
+    {publication_joins('a')}
+    JOIN tags root ON root.name = pub.theme AND root.parent_id IS NULL
+    WHERE a.collected_at >= {_SINCE} AND root.enabled
     GROUP BY 1, 2, 3
     ORDER BY 1, 4 DESC
 """
@@ -127,19 +133,19 @@ _TOP_SOURCES_SQL = f"""
     SELECT month, source_id, source, strong, relevant, collected
     FROM (
         SELECT {_MONTH} AS month, a.source_id, src.name AS source,
-               count(*) FILTER (WHERE s.total_score >= 60) AS strong,
+               count(*) FILTER (WHERE pub.total_score >= %(strong_from)s) AS strong,
                count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
                count(*) AS collected,
                row_number() OVER (
                    PARTITION BY {_MONTH}
-                   ORDER BY count(*) FILTER (WHERE s.total_score >= 60) DESC,
+                   ORDER BY count(*) FILTER (WHERE pub.total_score >= %(strong_from)s) DESC,
                             count(*) FILTER (WHERE rel.relevant IS TRUE) DESC, src.name
                ) AS place
         FROM articles a
         JOIN sources src ON src.id = a.source_id
         LEFT JOIN article_cards c ON c.article_id = a.id
         LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
-        LEFT JOIN article_scores s ON s.article_id = a.id
+        {publication_joins('a')}
         WHERE a.collected_at >= {_SINCE}
         GROUP BY 1, 2, 3
     ) ranked
@@ -170,6 +176,15 @@ def _month_keys(now_local: datetime, months: int) -> list[str]:
     return keys[::-1]
 
 
+def score_thresholds() -> dict[str, int]:
+    """С какого балла публикация считается «сильным сигналом» и «топом»: нижние границы ступеней «полезный» и «сильный»
+    балла сигнала (SIGNAL_SCORE_BANDS: сильный, полезный, наблюдать). Две верхние ступени стоят там, где прежние 60 и
+    70: по ним второй вызов «Карточки» сверен с экспертом (#133), и бизнес-лента подписывает те же сигналы «Полезный» и
+    «Сильный»."""
+    strong, useful = config.SIGNAL_SCORE_BANDS[:2]
+    return {"strong": useful, "top": strong}
+
+
 def _empty_counters(month: str) -> dict[str, Any]:
     return {"month": month, **{key: 0 for key in COUNTERS}, "speed_p50_hours": None, "speed_p90_hours": None}
 
@@ -184,7 +199,8 @@ def monthly_analytics(months: int = 6, *, include_cost: bool = False, top_source
     keys = _month_keys(now_local, max(months, 2))
     previous = keys[-2]
     day_cap = min(now_local.day, calendar.monthrange(int(previous[:4]), int(previous[5:]))[1])
-    back = {"back": max(months, 2) - 1}
+    thresholds = score_thresholds()
+    back = {"back": max(months, 2) - 1, "strong_from": thresholds["strong"], "top_from": thresholds["top"]}
     same_period = {**back, "month": previous, "day": day_cap}
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -221,6 +237,7 @@ def monthly_analytics(months: int = 6, *, include_cost: bool = False, top_source
             "articles_month": config.ANALYTICS_TARGET_ARTICLES_MONTH,
             "ai_rub_month": config.ANALYTICS_TARGET_AI_RUB_MONTH,
         },
+        "score_thresholds": thresholds,
     }
     if include_cost:
         # Курс ЦБ на последний день месяца, у текущего — на сегодня (fx.usd_rub).

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, feed_window
+from oiltech_digest import api, contract, feed_window
 
 
 def _freeze_inside_month(monkeypatch, month: str) -> None:
@@ -29,7 +29,10 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.connection.executed.append((sql, list(params or [])))
-        if "FROM article_score_items" in sql:
+        if "DISTINCT ON (x.origin_article_id)" in sql:
+            # Сигнала ленты у статьи нет: разбивка и тема с баллом у неё свои (repository.publication_joins).
+            self.rows = []
+        elif "FROM article_score_items" in sql:
             self.rows = [
                 {
                     "article_id": 42,
@@ -1613,13 +1616,15 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert payload[0]["score_items"][0]["name"] == "Технологическая значимость"
 
     articles_sql, articles_params = fake_conn.executed[0]
+    # Тема и балл берутся у публикации ленты (08.11): у сигнала ленты, у статьи без него её тег и балл.
+    assert api.repository.publication_joins("a") in articles_sql
     # Поиск идёт по видимому заголовку (title_ru с откатом на оригинал), телу, сути И тегу —
     # проверяем состав, а не точную склейку строки, иначе тест ломается от переносов.
     assert "LOWER(" in articles_sql and "LIKE %s" in articles_sql
-    for fragment in ("c.title_ru", "a.title", "a.raw_text", "c.summary", "t.name", "parent.name"):
+    for fragment in ("c.title_ru", "a.title", "a.raw_text", "c.summary", "pub.tag_name", "pub.parent_tag_name"):
         assert fragment in articles_sql, f"поиск обязан покрывать {fragment}"
     assert "s.name = %s" in articles_sql
-    assert "(t.name = %s OR parent.name = %s)" in articles_sql
+    assert "(pub.tag_name = %s OR pub.parent_tag_name = %s)" in articles_sql
     # Отметка общая (#111): без условия на учётку.
     assert "LEFT JOIN article_marks am ON am.article_id = a.id\n" in articles_sql
     assert "COALESCE(am.status, 'new') = %s" in articles_sql
@@ -1627,8 +1632,8 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "a.language = %s" in articles_sql
     # min_score применяется ТОЛЬКО к уже оценённым: у неоценённых балла нет, и COALESCE(...,0)
     # выдавал бы их за 0, отсекая свежий приток порогом (лента выглядела замороженной).
-    assert "(sc.total_score IS NULL OR sc.total_score >= %s)" in articles_sql
-    assert "COALESCE(sc.total_score, 0) <= %s" in articles_sql
+    assert "(pub.total_score IS NULL OR pub.total_score >= %s)" in articles_sql
+    assert "COALESCE(pub.total_score, 0) <= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) >= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) <= %s" in articles_sql
     # Фильтры, затем limit; учётки в параметрах нет.
@@ -2195,7 +2200,7 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
         api.external_ai,
         "build_process_articles_payload",
         lambda payload, job_id=None: built_for.append(job_id)
-        or {"kind": "process_articles", "articles": [{"id": 1}], "tags": [], "criteria": []},
+        or {"kind": "process_articles", "articles": [{"id": 1}]},
     )
     captured = {}
 
@@ -2225,7 +2230,8 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
 
     response = client.post(
         "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
+        # Пакет статей ленты выдаётся только сборке контракта 11 (снятие старой цепочки 08.11).
+        headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},
         json={"worker_id": "eu-1", "queues": ["external-ai"], "capabilities": ["openai"], "max_lease_seconds": 300},
     )
 
@@ -2442,50 +2448,6 @@ def test_external_worker_complete_applies_source_candidate_result(monkeypatch):
     assert response.status_code == 200
     assert applied == [({"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}, {"job_id": 10})]
     assert completed[0][1]["result"]["applied"] == {"articles": 1, "ok": 1}
-
-
-def test_external_worker_complete_reads_recheck_flags_from_payload_json(monkeypatch):
-    """Флаги мягкого режима recheck читаются из payload_json — РЕАЛЬНОГО ключа строки задачи.
-
-    Баг T3 (P1, потеря данных): код читал job.get("payload"), которого в строке нет —
-    get_background_job делает SELECT *, поэтому ключ называется payload_json (schema.sql:304).
-    В результате mark/dry_run/force ВСЕГДА были False, и recheck удалял статьи ФИЗИЧЕСКИ,
-    даже когда оператор явно просил только пометить (--mark) или лишь посмотреть (--dry-run).
-    Так уже потеряли ~2000 статей. Прод гонит AI на внешнем воркере, т.е. это живой путь.
-
-    Прежние тесты этот баг не ловили, потому что мокали задачу рукописным словарём без
-    payload_json — здесь форма строки повторяет то, что реально отдаёт репозиторий.
-    """
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        api.repository,
-        "get_background_job",
-        lambda job_id: {
-            "id": job_id,
-            "kind": "recheck_relevance",
-            "payload_json": {"mark": True, "dry_run": False, "force": True},
-        },
-    )
-    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(
-        api.external_ai,
-        "apply_recheck_result",
-        lambda result, **kwargs: captured.update(kwargs) or {"checked": 1, "marked": 1},
-    )
-    monkeypatch.setattr(api.repository, "finish_external_background_job", lambda job_id, **kwargs: True)
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/api/external-worker/jobs/10/complete",
-        headers={"Authorization": "Bearer secret"},
-        json={"lease_token": "lease", "result": {"recheck_relevance": True, "articles": []}},
-    )
-
-    assert response.status_code == 200
-    assert captured.get("mark") is True, "mark потерян → статьи удалятся ФИЗИЧЕСКИ вместо пометки"
-    assert captured.get("force") is True
-    assert captured.get("dry_run") is False
 
 
 def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
@@ -2910,7 +2872,8 @@ def test_feed_search_covers_translated_title_and_tag(monkeypatch):
     (1) на карточке показывается COALESCE(c.title_ru, a.title), а искали только по
         a.title — русский заголовок иностранной статьи не находился;
     (2) теги в поиск не входили вовсе, хотя в сборщике дайджеста такой поиск уже был.
-    Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
+    Требование владельца 12.09: теги влияют и на парсинг, и на выдачу. С 08.11 вместо тега статьи тема её публикации
+    (repository.publication_joins): тема сигнала ленты, у статьи без него тег и его родитель.
     """
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
@@ -2922,7 +2885,8 @@ def test_feed_search_covers_translated_title_and_tag(monkeypatch):
 
     sql = captured["sql"]
     assert "c.title_ru" in sql, "поиск обязан покрывать переведённый заголовок"
-    assert "t.name" in sql and "parent.name" in sql, "поиск обязан покрывать тег и родителя"
+    assert "COALESCE(pub.tag_name, '') || ' ' || COALESCE(pub.parent_tag_name, '')" in sql, (
+        "поиск обязан покрывать тему публикации: тему сигнала ленты, у статьи без него тег и родителя")
 
 
 def test_feedback_reasons_use_official_wording():
@@ -2981,7 +2945,7 @@ def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
     monkeypatch.setattr(
         signal_discovery,
         "build_external_payload",
-        lambda payload: {"kind": "signal_discovery", "config": {"web_only": payload["web_only"]},
+        lambda payload: {"kind": "signal_discovery", "config": {"offline": payload["offline"], "days": payload["days"]},
                          "snapshot": {"topics": [{"name": "Бурение"}]}},
     )
     monkeypatch.setattr(
@@ -2990,22 +2954,24 @@ def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
         lambda **kwargs: {
             "id": 13, "kind": "signal_discovery", "queue_name": "external-agents", "execution_region": "external",
             "capability": "openai", "status": "running", "progress": 10, "attempts": 1, "max_attempts": 1,
-            "run_after": None, "payload_json": {"web_only": True}, "result_json": None, "error_message": None,
-            "created_at": None, "started_at": None, "finished_at": None,
+            "run_after": None, "payload_json": {"offline": False, "days": 3}, "result_json": None,
+            "error_message": None, "created_at": None, "started_at": None, "finished_at": None,
         },
     )
     client = TestClient(api.app)
 
+    # Прогону радара нужна сборка NL нынешнего контракта: старая прогнала бы прежнюю цепочку
+    # (contract.required_contract).
     response = client.post(
         "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
+        headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},
         json={"worker_id": "nl-agents-1", "queues": ["external-agents"], "capabilities": ["openai"]},
     )
 
     assert response.status_code == 200
     assert response.json()["job"]["payload"] == {
         "kind": "signal_discovery",
-        "config": {"web_only": True},
+        "config": {"offline": False, "days": 3},
         "snapshot": {"topics": [{"name": "Бурение"}]},
     }
 
@@ -3029,7 +2995,7 @@ def test_external_worker_complete_applies_signal_discovery_and_keeps_only_summar
         lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
     )
     client = TestClient(api.app)
-    worker_result = {"signal_discovery": True, "config": {"web_only": True},
+    worker_result = {"signal_discovery": True, "config": {"offline": False},
                      "run": {"topics": [{"topic": "Бурение", "candidates": [{"signal": {"title": "x" * 5000}}]}]}}
 
     response = client.post(

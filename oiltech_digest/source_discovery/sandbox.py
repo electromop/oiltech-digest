@@ -15,6 +15,7 @@ from oiltech_digest.ingestion import request_parser
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
 from oiltech_digest.processing import pipeline
+from oiltech_digest.source_discovery import legacy_stages
 from oiltech_digest.source_discovery.agent import (
     core_ai_offline,
     recommend_source_action,
@@ -271,13 +272,13 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
     if not tags:
         raise ValueError("Нет активных тегов. Запустите seed-tags.")
     criteria = repository.list_enabled_scoring_criteria()
-    pipeline._validate_weights(criteria)
+    legacy_stages._validate_weights(criteria)
     stats = {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0}
     articles = repository.list_source_candidate_articles(candidate_id, limit=limit, only_unprocessed=True)
     for article in articles:
         stats["processed"] += 1
         try:
-            blocked_reason = pipeline._negative_keyword_block(article, tags)
+            blocked_reason = legacy_stages._negative_keyword_block(article, tags)
             if blocked_reason:
                 _save_rejected(article, blocked_reason, "negative-keyword")
                 stats["rejected"] += 1
@@ -292,11 +293,11 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
             summary_resp = pipeline.summarize_article(article, client)
             article = {**article, "summary": summary_resp.data.get("summary")}
             title_ru, translate_resp = pipeline.title_ru_for_article(article, client)
-            tag_resp = pipeline.tag_article(article, tags, client)
-            tag_id = pipeline._valid_tag_id(tag_resp.data.get("tag_id"), tags)
+            tag_resp = legacy_stages.tag_article(article, tags, client)
+            tag_id = legacy_stages._valid_tag_id(tag_resp.data.get("tag_id"), tags)
             if tag_id == 0:
-                tag_id = pipeline.keyword_tag(article, tags)["tag_id"]
-            score_resp = pipeline.score_article(article, criteria, client)
+                tag_id = legacy_stages.keyword_tag(article, tags)["tag_id"]
+            score_resp = legacy_stages.score_article(article, criteria, client)
             score_payload = pipeline.normalize_score_payload(article, criteria, score_resp.data)
             repository.update_source_candidate_article_result(
                 int(article["id"]),
@@ -334,13 +335,13 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
 
 def _relevance(article: dict, tags: list[dict], client, *, offline: bool) -> tuple[bool, str | None, str | None]:
     if not offline:
-        response = pipeline.relevance_article(article, client)
+        response = legacy_stages.relevance_article(article, client)
         return bool(response.data.get("relevant")), response.data.get("reason"), response.model
     # Без ИИ OfflineAIClient на релевантность всегда отвечает «да», и вердикт по такой
     # выборке завышен: все статьи релевантны → «add». Вместо заглушки — ключи тематик
     # заказчика в заголовке и тексте. Тему кандидата (source_category) не смотрим: её
     # название почти всегда совпадает с ключом своего тега, и проверка снова стала бы «да».
-    match = pipeline.keyword_tag({"title": article.get("title"), "raw_text": article.get("raw_text")}, tags)
+    match = legacy_stages.keyword_tag({"title": article.get("title"), "raw_text": article.get("raw_text")}, tags)
     if not match["matches"]:
         return False, "без ИИ: в тексте нет ключевых слов тематик заказчика", OFFLINE_RELEVANCE_MODEL
     tag_name = next((tag.get("name") for tag in tags if tag["id"] == match["tag_id"]), None)

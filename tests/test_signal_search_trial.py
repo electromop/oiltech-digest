@@ -124,7 +124,7 @@ def test_trial_run_passes_findings_through_otbor_and_changes_no_showcase_section
         {DEAL: answer(), TECH: reject("oil_gas_no_link")},
         cited=[DEAL_URL, TECH_URL, KNOWN_URL, COLLECTED_URL])
 
-    # Широкий промпт за октябрь при выключенном флаге «Отбора» на ядре не нужен: прогон его везёт сам.
+    # Широкий промпт за октябрь прогон везёт сам.
     [call] = search.calls
     assert call["schema"] == "radar_topic_research_broad" and "Период: с 2026-10-01 по 2026-10-31" in call["input"]
     # «Отбор» решил обе новые находки: та, что уже на платформе, и ссылка сбора в него не идут.
@@ -216,19 +216,6 @@ def test_dates_of_the_period_are_whole_days(user, contour):
 
     # research_period отсчитывает days до period_end: 30 дней до 31.10 — с 01.10.
     assert (trial["days"], trial["until"]) == (30, "2026-10-31")
-
-
-def test_trial_runs_with_otbor_switched_off_as_on_prod(user, contour, monkeypatch):
-    # На проде флаг «Отбора» выключен: пробный прогон сам везёт «поиск только находит» и сам ставит «Отбор» находок.
-    monkeypatch.setattr(config, "OTBOR_ENABLED", False)
-    tag(DRILLING)
-
-    job_id, _, model = run_trial(monkeypatch, [event(DEAL, DEAL_URL)], {DEAL_URL: page(DEAL)}, {DEAL: answer()})
-
-    from oiltech_digest import signal_search_trial
-    result = signal_search_trial.report(job_id)
-    assert len(model.calls) == 1 and (result["new_findings"], result["otbor"]["accepted"]) == (1, 1)
-    assert showcase(user, "technology") == {} and showcase(user, "business") == {}
 
 
 def test_duplicate_of_a_main_finding_collected_during_the_run_reaches_otbor_itself(user, contour, monkeypatch):

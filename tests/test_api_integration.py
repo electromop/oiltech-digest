@@ -1095,74 +1095,6 @@ def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
     assert ru.count("правка Виктора") == 1
 
 
-def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
-    """Мина, найденная на проде 12.09: пересчёт джойнил критерии БЕЗ фильтра enabled.
-
-    Заказчик 11.09 сменил профиль: пять активных дают ровно 100, но три ВЫКЛЮЧЕННЫХ
-    несут ещё 75. Без фильтра сумма весов у старой статьи становилась 175 вместо 100 —
-    баллы уезжали вверх без причины. И отдельно: статью, оценённую только по ныне
-    выключенным критериям, пересчёт обнулил бы молча.
-
-    С сессии G условие строже: пересчёт без ИИ трогает только балл, чьи подпункты — ровно
-    текущий активный набор профиля (а у балла со снимком — ещё и те же тексты). Статья с
-    выключенным критерием среди подпунктов посчитана другим набором: не 140 (с ним) и не 80
-    (по одному живому подпункту, как считал прежний пересчёт), а пропуск — ей нужен
-    пересчёт с ИИ. Баллы здесь — до профилей (без снимка): пересчитываются только явно,
-    с include_legacy.
-    """
-    from oiltech_digest.db import repository
-
-    with connection.get_connection() as conn:
-        source_id = conn.execute(
-            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
-        ).fetchone()[0]
-        live = conn.execute(
-            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
-            "VALUES ('Активный', 100, TRUE, 1) RETURNING id"
-        ).fetchone()[0]
-        dead = conn.execute(
-            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
-            "VALUES ('Выключенный', 75, FALSE, 2) RETURNING id"
-        ).fetchone()[0]
-
-        def add_article(url: str, criteria: list[int]) -> int:
-            aid = conn.execute(
-                "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
-                "VALUES (%s, 'T', %s, now(), 'x', 'ru') RETURNING id", (source_id, url)
-            ).fetchone()[0]
-            sid = conn.execute(
-                "INSERT INTO article_scores (article_id, total_score, score_label) "
-                "VALUES (%s, 50, 'Средняя') RETURNING id", (aid,)
-            ).fetchone()[0]
-            for cid in criteria:
-                conn.execute(
-                    "INSERT INTO article_score_items (article_score_id, criterion_id, ai_score, "
-                    "keyword_score, final_score) VALUES (%s, %s, 80, 0, 80)", (sid, cid),
-                )
-            return aid
-
-        mixed = add_article("https://s.example/mixed", [live, dead])
-        orphan = add_article("https://s.example/orphan", [dead])
-        same_set = add_article("https://s.example/same", [live])
-        conn.commit()
-
-    def totals() -> dict[int, float]:
-        with connection.get_connection() as conn:
-            return {row[0]: float(row[1]) for row in conn.execute("SELECT article_id, total_score FROM article_scores")}
-
-    strict = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
-    assert strict["recomputed"] == 0 and strict["skipped_no_snapshot"] == 3
-    assert totals() == {mixed: 50, orphan: 50, same_set: 50}, "без снимка тексты не сверить — не трогаем"
-
-    legacy = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8, include_legacy=True)
-
-    assert legacy["legacy_recomputed"] == 1 and legacy["skipped_no_snapshot"] == 2
-    # 80 * 100/100 = 80 — только у статьи, чьи подпункты ровно текущий набор.
-    # С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
-    assert totals() == {mixed: 50, orphan: 50, same_set: 80}, "выключенный критерий всё ещё считается"
-
-
 def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
     """Мина, которая УЖЕ сработала на проде 11.09.
 
@@ -1345,51 +1277,6 @@ def test_seed_13_themes_replaces_old_taxonomy(isolated_db):
     # Разделитель «---» из конца файла не должен попасть в стоп-слова: как подстрока
     # он отбивал бы статьи пачками.
     assert not any(str(w).strip("—-– ") == "" for w in neg)
-
-
-def test_retag_reset_returns_articles_to_tagging_queue(isolated_db):
-    """Смена таксономии оставляет 11 тысяч статей с классификацией по мёртвому справочнику.
-
-    Выборка тегирования берёт статьи БЕЗ тега, поэтому снятие связи — и есть способ
-    вернуть статью в очередь. Снимаются только связи с ВЫКЛЮЧЕННЫМИ тегами.
-    """
-    from oiltech_digest.db import repository
-
-    with connection.get_connection() as conn:
-        source_id = conn.execute(
-            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
-        ).fetchone()[0]
-        old_tag = conn.execute(
-            "INSERT INTO tags (name, enabled, sort_order) VALUES ('Мёртвый тег', FALSE, 1) RETURNING id"
-        ).fetchone()[0]
-        live_tag = conn.execute(
-            "INSERT INTO tags (name, enabled, sort_order) VALUES ('Живой тег', TRUE, 2) RETURNING id"
-        ).fetchone()[0]
-
-        def add(url: str, tag_id: int) -> int:
-            aid = conn.execute(
-                "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
-                "VALUES (%s, 'T', %s, now(), 'x', 'ru') RETURNING id", (source_id, url)
-            ).fetchone()[0]
-            conn.execute(
-                "INSERT INTO article_tags (article_id, tag_id, confidence) VALUES (%s, %s, 0.9)",
-                (aid, tag_id),
-            )
-            return aid
-
-        stale = add("https://s.example/stale", old_tag)
-        fresh = add("https://s.example/fresh", live_tag)
-        conn.commit()
-
-    removed = repository.clear_article_tags_for_disabled()
-    assert removed == 1, "снять нужно только связь с выключенным тегом"
-
-    with connection.get_connection() as conn:
-        assert conn.execute("SELECT count(*) FROM article_tags WHERE article_id = %s", (stale,)).fetchone()[0] == 0
-        assert conn.execute("SELECT count(*) FROM article_tags WHERE article_id = %s", (fresh,)).fetchone()[0] == 1
-        # Сами статьи не тронуты.
-        assert conn.execute("SELECT count(*) FROM articles WHERE id IN (%s,%s)", (stale, fresh)).fetchone()[0] == 2
 
 
 def test_seed_does_not_disable_tags_renamed_by_customer(isolated_db):

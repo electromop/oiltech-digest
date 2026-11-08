@@ -31,14 +31,12 @@ def _sections(admin):
 
 def test_business_finding_the_old_search_dropped_reaches_otbor_and_gets_a_russian_title_and_summary(
         user, admin, contour, monkeypatch):
-    # Вход «Отбора» из поиска — только поиск GPT: Brave не подключается и в режиме «оба».
-    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_SEARCH_MODE", "both")
     # Прежний поиск отбросил бы его трижды: «не технология» по своей оценке, технологии не назвал, дата вне периода.
-    search, old_chain = run_radar(monkeypatch, [event(CONTRACT_TITLE, CONTRACT_URL, event_kind="not_technology",
-                                                      technology="", event_date="2024-03-01")],
-                                  {CONTRACT_URL: page(CONTRACT_TITLE)})
+    # Поиск только находит: такую находку решает «Отбор».
+    search = run_radar(monkeypatch, [event(CONTRACT_TITLE, CONTRACT_URL, event_kind="not_technology",
+                                           technology="", event_date="2024-03-01")],
+                       {CONTRACT_URL: page(CONTRACT_TITLE)})
 
-    assert old_chain == []
     assert len(search.calls) == 1
     model = decide(monkeypatch, {CONTRACT_TITLE: answer()})
 
@@ -80,7 +78,7 @@ def test_accepted_finding_gets_its_russian_title_edited_by_the_rules(user, conto
 def test_technical_drops_of_the_search_lie_in_search_sections_and_never_reach_otbor(user, admin, contour, monkeypatch):
     invented, blocked = "https://invented.example/news/1", "https://paywall.example/news/2"
     listing, broken = "https://tgs.example/press-releases", "slb.com/news"
-    _, old_chain = run_radar(
+    run_radar(
         monkeypatch,
         [event("Invented drilling record in Oman", invented), event("Paywalled rig contract in Kuwait", blocked),
          event("TGS multi-client survey offshore Brazil", listing), event("Broken link rig news", broken)],
@@ -89,7 +87,7 @@ def test_technical_drops_of_the_search_lie_in_search_sections_and_never_reach_ot
 
     model = decide(monkeypatch, {})
 
-    assert old_chain == [] and model.calls == []
+    assert model.calls == []
     assert _sections(admin) == {
         "Invented drilling record in Oman": f"Поиск → Ссылка не подтверждена: {UNCONFIRMED_LINK}",
         "Paywalled rig contract in Kuwait": f"Поиск → Текст страницы не получен: {PAGE_NOT_FETCHED}",
@@ -134,8 +132,6 @@ def test_mixed_events_is_a_reason_only_for_a_finding_with_several_links(user, ad
 
 def test_no_cap_on_findings_of_a_topic_every_one_reaches_otbor(user, contour, monkeypatch):
     monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RESEARCH_EVENTS_PER_TOPIC", 1)
-    # Срок докачки страниц темы кончился сразу: при «Отборе» он находки не срезает — без страницы им нечего дать.
-    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS", 1e-9)
     first, second = "https://slb.example/news/rig", "https://halliburton.example/news/frac"
     run_radar(monkeypatch, [event("SLB opens a rig automation centre in Oman", first),
                             event("Halliburton completes its first electric frac fleet job", second)],
@@ -182,14 +178,13 @@ def test_old_worker_build_is_refused_the_radar_run_and_the_otbor_of_findings(use
 
     # Сборка NL контракта 4 не знает ни прогона радара при «Отборе», ни «Ссылок находки» (и повода публикации,
     # #133): задачи она не получает, и они падают с явной причиной (история 50 спеки), а не идут прежней цепочкой
-    # мимо «Отбора». Прогону радара с #138 нужен контракт 9: широкий промпт и модель поиска из задачи; с 04.11 — 10:
-    # «Дедуп» сверяет находки и с лентой.
+    # мимо «Отбора». Прогону радара с 08.11 нужен контракт 11: путь «Отбора» без поля otbor в задаче.
     assert [worker(queue, contract_number=4).claim() for queue in ("external-ai", "external-agents")] == [None, None]
     with repository.get_connection() as conn:
         failed = conn.execute("SELECT kind, error_message FROM background_jobs WHERE status = 'failed'").fetchall()
     assert sorted(kind for kind, _ in failed) == ["otbor", "signal_discovery"]
     needed = dict(failed)
-    assert "нужен контракт 10" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
+    assert "нужен контракт 11" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
 
 
 def test_summary_by_number_is_not_paid_for_a_finding_otbor_rejected(user, contour, monkeypatch, capsys):
@@ -327,13 +322,13 @@ def test_finding_whose_feed_card_hid_during_the_run_becomes_its_own_card(user, c
     assert card["origin"] == "radar" and CONTRACT_URL in {item["source_url"] for item in card["evidence"]}
 
 
-def test_worker_build_without_the_feed_dedup_gets_no_radar_run(user, contour, monkeypatch):
+def test_worker_build_with_the_old_chain_gets_no_radar_run(user, contour, monkeypatch):
     tag(DRILLING)
     background_jobs.enqueue_daily_signal_discovery(force=True)
 
-    # Сборка контракта 9 снимок ленты молча пропустила бы: находка события, которое уже есть в ленте, стала бы
-    # второй карточкой. Задачу она не получает, задача падает с причиной.
-    assert worker("external-agents", contract_number=9).claim() is None
+    # Сборка контракта 10 по задаче без поля otbor прогнала бы прежнюю цепочку (судья, ревью пачки, Brave), а ядро
+    # записало бы её ответы находками для «Отбора». Задачу она не получает, задача падает с причиной.
+    assert worker("external-agents", contract_number=10).claim() is None
     with repository.get_connection() as conn:
         [(error,)] = conn.execute("SELECT error_message FROM background_jobs WHERE status = 'failed'").fetchall()
-    assert "нужен контракт 10" in error
+    assert "нужен контракт 11" in error

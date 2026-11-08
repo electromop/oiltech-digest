@@ -276,8 +276,8 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
     """Материал выпуска и его место: раздел (сначала бизнес), рубрика по порядку таблицы (давнее событие — сразу за
     рубрикой своей темы, тема не из 13 — после всех), балл по убыванию (без балла — последним)."""
     if fields is None:
-        # Статья без сигнала ленты — как сигнал без категории, тема — её корневой тег, балл — её.
-        fields = {"theme": item.get("root_tag"), "score": item.get("score")}
+        # Статья без сигнала ленты идёт как сигнал без категории, тема по её корневому тегу.
+        fields = {"theme": item.get("root_tag")}
     section = section_of(fields.get("signal_category"))
     theme = theme_of(fields.get("theme"))
     rubric, topic = _rubric(theme, section)
@@ -285,7 +285,10 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
     label = label_of(fields.get("event_type"), fields.get("technology_maturity"), section)
     if is_old_event(fields, month):
         rubric, label, rank = OLD_PRACTICE_RUBRIC, OLD_PRACTICE_LABEL, rank + 1
-    score = float(fields["score"]) if fields.get("score") is not None else None
+    # Балл берётся у позиции выпуска: тот же, по которому идут письмо и DOCX (у статьи тема и балл её публикации,
+    # repository.publication_joins, у находки радара и материала её балл). Сигнал, которого «Карточка» ещё не оценила,
+    # балла не имеет и идёт последним в своей рубрике, а не по нулю или по баллу, скопированному со статьи.
+    score = float(item["score"]) if item.get("score") is not None else None
     # Подпись человека (#162) главнее таблицы, в том числе у давнего события; умолчание идёт экрану подсказкой правки.
     label_default, label = label, fields.get("issue_label") or label
     criteria = criteria_of(fields)

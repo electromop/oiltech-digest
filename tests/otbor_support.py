@@ -1,5 +1,5 @@
 """Общее для тестов агента «Отбор» (#130, спека #128): подставная модель «Отбора», статьи сбора, вставленные
-так, как их вставляет сбор (repository.insert_article: при включённом флаге статья идёт через «Отбор»), и
+так, как их вставляет сбор (repository.insert_article: с 08.11 каждая новая статья идёт через «Отбор»), и
 настоящий клиент воркера NL против тестового ядра (signal_card_support.worker). Сами тесты —
 test_otbor_feed.py (шов 1: контур целиком, витрины и разделы), test_otbor_feed_machinery.py (шов 1: прежняя
 механика ленты при «Отборе») и test_otbor_worker.py (шов 1: воркер, контракт, сбои).
@@ -75,10 +75,9 @@ def reject(reason, **overrides):
 
 @pytest.fixture()
 def contour(monkeypatch):
-    """Прод-маршрут: ИИ — на внешнем воркере, «Отбор» включён флагом, модель задана."""
+    """Прод-маршрут: ИИ на внешнем воркере, модель «Отбора» задана (флага у «Отбора» с 08.11 нет)."""
     monkeypatch.setattr(api.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(api.config, "AI_EXECUTION_REGION", "external")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     monkeypatch.setattr(api.config, "OTBOR_MODEL", MODEL)
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
 

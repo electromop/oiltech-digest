@@ -45,18 +45,16 @@ CHOICES = ("industry", "occasion", "oilfield_relevance", "decision", "reject_rea
 
 
 class OtborSetupError(ValueError):
-    """Агента нельзя поставить в работу: выключен флаг или не задана модель."""
+    """Агента нельзя поставить в работу: не задана модель."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
 
 
 def scheduler_step() -> dict[str, Any]:
-    """Шаг планировщика «Отбор», за флагом OTBOR_ENABLED: статьи, находки и материалы, у которых кончились попытки,
+    """Шаг планировщика «Отбор»: статьи, находки и материалы, у которых кончились попытки,
     а итога нет (задачи падали целиком), — в раздел «„Отбор“ не ответил»; новые, которые решает он, — в задачи по
     полосе ежедневной обработки."""
-    if not config.OTBOR_ENABLED:
-        return {"articles": 0, "signals": 0, "jobs": [], "reason": "disabled"}
     # Без модели шаг отказывает в каждом цикле, даже когда новых статей нет: настройка видна сразу.
     configured_model()
     window = {"days": config.OTBOR_NEW_DAYS, "attempts": config.OTBOR_ATTEMPTS, "limit": config.OTBOR_STEP_LIMIT}
@@ -80,11 +78,9 @@ def enqueue(article_ids: list[int], *, signal_ids: list[int] | tuple[int, ...] =
             bulk: bool = False) -> list[dict[str, Any]]:
     """Задачи агента пачками по OTBOR_BATCH: статьи и сигналы (находки и материалы, #131) — своими задачами. bulk —
     названные публикации (повтор после разбора сбоя): по полосе пересчётов, чтобы не стоять перед потоком дня.
-    Только при включённом флаге: до экзамена (#133) агент на проде не работает."""
+    Флага у агента с 08.11 нет: «Отбор» решает всегда (решение владельца, снятие старой цепочки)."""
     from oiltech_digest import network_policy
 
-    if not config.OTBOR_ENABLED:
-        raise OtborSetupError("OTBOR_ENABLED выключен: «Отбор» выходит в работу после экзамена (#133)")
     model = configured_model()
     route = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.OTBOR_BATCH

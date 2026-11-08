@@ -73,9 +73,15 @@ def _business_before_the_decision() -> dict[str, int]:
         ).fetchone()[0]
         conn.commit()
     seed_default_scoring_criteria()   # business непуст — сид заводит только радар
-    items = [{"criterion_id": ids[f"Свой {n}"], "ai_score": 70, "keyword_score": 0, "final_score": 70}
-             for n in range(1, 6)]
-    repository.replace_article_score(ids["article"], 70, "Выше средней", "e", items, "gpt")
+    # Балл статьи из истории (балл статьи снят 08.11): подпункты по своим критериям, как их записала прежняя оценка.
+    with connection.get_connection() as conn:
+        score_id = conn.execute(
+            "INSERT INTO article_scores (article_id, model, total_score, score_label, explanation) "
+            "VALUES (%s, 'gpt', 70, 'Выше средней', 'e') RETURNING id", (ids["article"],)).fetchone()[0]
+        for n in range(1, 6):
+            conn.execute("INSERT INTO article_score_items (article_score_id, criterion_id, keyword_score, ai_score, "
+                         "final_score) VALUES (%s, %s, 0, 70, 70)", (score_id, ids[f"Свой {n}"]))
+        conn.commit()
     return ids
 
 

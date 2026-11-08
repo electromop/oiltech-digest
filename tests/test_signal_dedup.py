@@ -117,15 +117,10 @@ def test_no_pairs_no_client():
     assert made == [] and result["stats"]["pairs"] == 0
 
 
-def _candidate(title, companies, *, key, url, score=70, rejected=False):
-    signal = signal_discovery._normalize_signal_payload(
-        {"title": title, "title_ru": title, "summary": title, "maturity": "reject" if rejected else "shortlist",
-         "score": score, "companies": companies},
-        GEO,
-    )
-    signal.update({"signal_key": key, "evidence_count": 1,
-                   "evidence": [{"source_url": url, "title": title}]})
-    return signal
+def _candidate(title, companies, *, key, url):
+    """Находка поиска, как её отдаёт воркер (_finding_candidate): в сигнале заголовок страницы и ссылка, черновые
+    данные модели поиска (русский заголовок, компания) лежат в ссылке, их видит «Дедуп»."""
+    return _otbor_finding(key, url, title, title, ", ".join(companies))["signal"]
 
 
 def test_worker_marks_repeats_of_existing_and_in_run_duplicates(monkeypatch):
@@ -133,20 +128,15 @@ def test_worker_marks_repeats_of_existing_and_in_run_duplicates(monkeypatch):
                  "title_ru": "Покупка Velocity Geomatics компанией ZenaTech", "theme": MARKET,
                  "summary": "", "companies": ["ZenaTech"], "score": 30.0, "evidence_count": 1,
                  "fresh": False, "verdict": "approved", "evidence_urls": ["https://old.example/zena"]}]
-    snapshot = {"topics": [{"name": GEO}, {"name": MARKET}], "article_evidence": {}, "known_urls": [],
-                "existing_signals": existing}
-    by_topic = {
+    snapshot = {"topics": [{"name": GEO}, {"name": MARKET}], "known_urls": [], "existing_signals": existing}
+    found = {
         GEO: [_candidate("ZenaTech покупает Velocity Geomatics", ["ZenaTech"], key="z1", url="https://a.example/1"),
               _candidate("Татнефть строит завод сорбентов лития", ["Татнефть"], key="t1", url="https://a.example/2")],
-        MARKET: [_candidate("Завод сорбентов Татнефти для лития", ["Татнефть"], key="t2", url="https://b.example/3",
-                            score=60)],
+        MARKET: [_candidate("Завод сорбентов Татнефти для лития", ["Татнефть"], key="t2", url="https://b.example/3")],
     }
-    monkeypatch.setattr(signal_discovery, "_cluster_evidence", lambda evidence, topic: [[{"t": topic, "i": i}] for i in range(len(by_topic[topic]))])
-    monkeypatch.setattr(signal_discovery, "_dedupe_evidence", lambda evidence: evidence)
-    monkeypatch.setattr(signal_discovery, "_search_web_evidence", lambda topic, config, **kwargs: {"evidence": [{}], "status": "ok"})
-    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot",
-                        lambda cluster, topic, offline=True: (dict(by_topic[topic][cluster[0]["i"]]), {}))
-    monkeypatch.setattr(signal_discovery, "_signal_key", lambda signal, cluster: signal["signal_key"])
+    monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda topic, topic_name, config, **kwargs: {
+        "status": "ok", "provider": "openai_web_search", "research": {},
+        "evidence": [item for signal in found[topic_name] for item in signal["evidence"]]})
     judge = _Judge("ZenaTech")
     judge_tatneft = _Judge("сорбент")
 
@@ -156,36 +146,29 @@ def test_worker_marks_repeats_of_existing_and_in_run_duplicates(monkeypatch):
             return first if first.data["same_event"] else judge_tatneft.complete_json(*args, **kwargs)
 
     monkeypatch.setattr(signal_discovery, "make_client", lambda offline: _Both())
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, web_only=True, dry_run=False)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False)
 
     run = signal_discovery.run_discovery(config, snapshot)
 
     json.dumps(run)  # уходит ядру по HTTP
     geo, market = run["topics"]
     assert geo["candidates"][0]["duplicate_of"] == {"signal_id": 18}  # повтор одобренного
-    assert "duplicate_of" not in geo["candidates"][1]  # главная Татнефти — выше балл
-    assert market["candidates"][0]["duplicate_of"] == {"signal_key": "t1"}
+    assert "duplicate_of" not in geo["candidates"][1]  # главная Татнефти найдена первой
+    assert market["candidates"][0]["duplicate_of"] == {"signal_key": geo["candidates"][1]["signal"]["signal_key"]}
     assert run["dedup"]["duplicates_new"] == 2 and run["dedup"]["existing_merges"] == []
 
 
 def test_worker_offline_skips_dedup():
-    config = signal_discovery.SignalDiscoveryConfig(offline=True, web_only=False)
+    config = signal_discovery.SignalDiscoveryConfig(offline=True)
     run = signal_discovery.run_discovery(config, {"topics": [], "existing_signals": []})
     assert run["dedup"] == {"skipped": "offline"}
 
 
-def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(monkeypatch):
-    upserted, evidence, merged, touched, examples = [], [], [], [], []
-    monkeypatch.setattr(repository, "upsert_signal", lambda signal: upserted.append(signal["signal_key"]) or 101)
-    monkeypatch.setattr(repository, "upsert_signal_evidence", lambda sid, item: evidence.append((sid, item["source_url"])) or 1)
-    monkeypatch.setattr(repository, "refresh_signal_evidence_count", lambda sid: 2)
-    monkeypatch.setattr(repository, "resolve_signal_merge_root", lambda sid: sid)
-    monkeypatch.setattr(repository, "touch_signal", lambda sid: touched.append(sid))
-    monkeypatch.setattr(repository, "mark_signal_merged",
-                        lambda sid, into, reason="": merged.append((sid, into, reason)) or True)
-    monkeypatch.setattr(repository, "create_signal_training_example", lambda **kwargs: examples.append(kwargs) or 1)
-    monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
-    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
+def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(isolated_db):
+    zena = repository.upsert_signal(_signal_row("zena", "Покупка Velocity Geomatics"))
+    repository.upsert_signal_evidence(zena, {"source_url": "https://old.example/zena", "title": "t"})
+    deal = repository.upsert_signal(_signal_row("deal", "ZenaTech: сделка с Velocity"))
+    repeat_card = repository.upsert_signal(_signal_row("deal-repeat", "Сделка ZenaTech и Velocity"))
     main = _candidate("Татнефть строит завод сорбентов", ["Татнефть"], key="t1", url="https://a.example/2")
     repeat = _candidate("Завод сорбентов Татнефти", ["Татнефть"], key="t2", url="https://b.example/3")
     old = _candidate("ZenaTech покупает Velocity", ["ZenaTech"], key="z1", url="https://a.example/1")
@@ -193,42 +176,35 @@ def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(monkey
         "topics": [
             # Дубль стоит РАНЬШЕ своей главной карточки — порядок записи не должен это ломать.
             {"topic": MARKET, "candidates": [
-                {"signal": repeat, "rejected": False, "duplicate_of": {"signal_key": "t1"}, "duplicate_reason": "тот же завод"},
-                {"signal": old, "rejected": False, "duplicate_of": {"signal_id": 18}, "duplicate_reason": "та же сделка"},
+                {"signal": repeat, "duplicate_of": {"signal_key": "t1"}, "duplicate_reason": "тот же завод"},
+                {"signal": old, "duplicate_of": {"signal_id": zena}, "duplicate_reason": "та же сделка"},
             ]},
-            {"topic": GEO, "candidates": [{"signal": main, "rejected": False}]},
+            {"topic": GEO, "candidates": [{"signal": main}]},
         ],
-        "dedup": {"pairs": 3, "judged": 3, "same": 2, "existing_merges": [{"signal_id": 41, "into": 40, "reason": "та же сделка"}]},
+        "dedup": {"pairs": 3, "judged": 3, "same": 2,
+                  "existing_merges": [{"signal_id": repeat_card, "into": deal, "reason": "та же сделка"}]},
     }
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False)
 
-    result = signal_discovery.apply_discovery(config, run, generation_run_id=5)
+    result = _apply(run)
 
-    assert upserted == ["t1"]  # новой карточки у дублей нет
-    assert (101, "https://b.example/3") in evidence and (18, "https://a.example/1") in evidence
-    assert sorted(touched) == [18, 101]
-    assert merged == [(41, 40, "та же сделка")]
+    owners = repository.signal_key_owners(["t1", "t2", "z1"])
+    assert set(owners) == {"t1"}  # новой карточки у дублей нет: главная стала находкой для «Отбора»
+    assert _urls(owners["t1"]["id"]) == {"https://a.example/2", "https://b.example/3"}
+    assert "https://a.example/1" in _urls(zena)
+    assert repository.resolve_signal_merge_root(repeat_card) == deal
     assert result["dedup"]["merged_new"] == 2 and result["dedup"]["merged_existing"] == 1
     assert result["all_signals"] == 1 and result["topic_results"][0]["duplicates"] == 2
-    assert sorted(example["pipeline_verdict"] for example in examples) == ["accepted", "duplicate", "duplicate"]
 
 
-def test_core_keeps_signal_when_main_card_is_gone(monkeypatch):
-    upserted = []
-    monkeypatch.setattr(repository, "upsert_signal", lambda signal: upserted.append(signal["signal_key"]) or 7)
-    monkeypatch.setattr(repository, "upsert_signal_evidence", lambda sid, item: 1)
-    monkeypatch.setattr(repository, "refresh_signal_evidence_count", lambda sid: 1)
-    monkeypatch.setattr(repository, "resolve_signal_merge_root", lambda sid: None)
-    monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
-    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
+def test_core_keeps_signal_when_main_card_is_gone(isolated_db):
     repeat = _candidate("ZenaTech покупает Velocity", ["ZenaTech"], key="z1", url="https://a.example/1")
-    run = {"topics": [{"topic": GEO, "candidates": [
-        {"signal": repeat, "rejected": False, "duplicate_of": {"signal_id": 999}}]}], "dedup": {"pairs": 1}}
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
+    run = {"topics": [{"topic": GEO, "candidates": [{"signal": repeat, "duplicate_of": {"signal_id": 999}}]}],
+           "dedup": {"pairs": 1}}
 
-    result = signal_discovery.apply_discovery(config, run)
+    result = _apply(run)
 
-    assert upserted == ["z1"] and result["all_signals"] == 1
+    # Главной нет: находка идёт своей карточкой, её решит «Отбор».
+    assert set(repository.signal_key_owners(["z1"])) == {"z1"} and result["all_signals"] == 1
 
 
 def _signal_row(key, title):
@@ -294,7 +270,7 @@ def test_refound_link_of_hidden_card_goes_to_main_card_not_into_hidden_row(isola
     again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="hidden", url="https://a.example/9")
 
     # Результат без дедупа (старая сборка воркера, офлайн, судья ошибся) — ключ скрытой карточки.
-    result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})
+    result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again}]}]})
 
     assert {row["id"] for row in repository.list_signals(limit=10)} == {main}
     assert {"https://a.example/1", "https://a.example/9"} <= _urls(main)
@@ -322,7 +298,7 @@ def test_duplicate_carrying_key_of_visible_card_hides_that_card_too(isolated_db)
     again = _candidate("ZenaTech купила Velocity", ["ZenaTech"], key="owner", url="https://a.example/u")
 
     _apply({"topics": [{"topic": GEO, "candidates": [
-        {"signal": again, "rejected": False, "duplicate_of": {"signal_id": target}, "duplicate_reason": "та же сделка"}]}],
+        {"signal": again, "duplicate_of": {"signal_id": target}, "duplicate_reason": "та же сделка"}]}],
         "dedup": {"pairs": 1}})
 
     # Карточка-владелец ссылки не остаётся видимой пустышкой: она тот же материал.
@@ -339,7 +315,7 @@ def test_duplicate_carrying_key_of_reviewed_card_updates_that_card(isolated_db):
     again = _candidate("ZenaTech купила Velocity", ["ZenaTech"], key="owner", url="https://a.example/u")
 
     result = _apply({"topics": [{"topic": GEO, "candidates": [
-        {"signal": again, "rejected": False, "duplicate_of": {"signal_id": target}}]}], "dedup": {"pairs": 1}})
+        {"signal": again, "duplicate_of": {"signal_id": target}}]}], "dedup": {"pairs": 1}})
 
     # Разобранная остаётся собой и при ссылке — судья не переспорит разбор.
     assert {row["id"] for row in repository.list_signals(limit=10)} == {target, owner}
@@ -381,7 +357,8 @@ def test_core_sets_dedup_cap_for_worker(monkeypatch):
     monkeypatch.setattr(repository, "list_reviewed_signal_urls", lambda: [])
     monkeypatch.setattr(repository, "list_signals_for_dedup", lambda: [])
     monkeypatch.setattr(repository, "list_feed_signals_for_dedup", lambda **kwargs: [])
-    monkeypatch.setattr(repository, "list_signal_article_evidence", lambda **kwargs: [])
+    monkeypatch.setattr(repository, "collected_url_keys_since", lambda **kwargs: [])
+    monkeypatch.setattr(repository, "covered_collection_sites", lambda **kwargs: [])
     monkeypatch.setattr(signal_discovery, "_selected_topics", lambda topic: [{"name": GEO}])
     snapshot = signal_discovery.build_discovery_snapshot(signal_discovery.SignalDiscoveryConfig())
     assert snapshot["dedup_max_pairs"] == 7
@@ -493,7 +470,7 @@ def test_worker_takes_hidden_flag_from_the_core_snapshot(monkeypatch):
 # Бизнес-карточку видно в витрине «бизнес» (#95): найденная снова её ссылка — её повтор
 # (test_signal_unified_store), а не новая карточка. «Другое» не видно нигде.
 @pytest.mark.parametrize("hide", ["archive", "other"])
-def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_visible_card(isolated_db, hide):
+def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_finding_for_otbor(isolated_db, hide):
     hidden = repository.upsert_signal(_signal_row("hidden", "Velocity Geomatics: первые данные"))
     repository.upsert_signal_evidence(hidden, {"source_url": "https://a.example/1", "title": "t"})
     assert repository.refresh_signal_evidence_count(hidden) == 1
@@ -504,11 +481,11 @@ def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_visible_card(isola
                                   "signal_category": "other"})
     again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="fresh", url="https://a.example/1")
 
-    result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})
+    result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again}]}]})
 
-    visible = {row["id"] for row in repository.list_signals(limit=10)}
-    assert hidden not in visible and len(visible) == 1
-    (fresh,) = visible
+    # Скрытая неразобранная ссылку не держит: она уходит в новую находку, а находку до решения «Отбора» не видно нигде.
+    fresh = repository.signal_key_owners(["fresh"])["fresh"]["id"]
+    assert repository.list_signals(limit=10) == []
     assert _urls(fresh) == {"https://a.example/1"} and _urls(hidden) == set()
     assert result["all_signals"] == 1
     # Счётчик отдавшей ссылку пересчитан — в «Скрытых» не висит прежнее число.
@@ -524,7 +501,7 @@ def test_refound_archived_card_with_its_own_key_stays_archived(isolated_db):
     repository.archive_signals([archived], reason="test")
     again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="same", url="https://a.example/1")
 
-    _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})
+    _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again}]}]})
 
     assert repository.list_signals(limit=10) == []
     assert _urls(archived) == {"https://a.example/1"}
@@ -569,11 +546,10 @@ def _finding_evidence(url, page_title, research_title, company, summary="Сут�
 
 
 def _otbor_finding(key, url, page_title, research_title, company):
-    """Находка при «Отборе», как её отдаёт _finding_candidate: в сигнале только заголовок страницы."""
+    """Находка поиска, как её отдаёт _finding_candidate: в сигнале только заголовок страницы."""
     evidence = _finding_evidence(url, page_title, research_title, company)
     return {"signal": {"title": page_title, "theme": GEO, "summary": "", "companies": [], "maturity": "watch",
-                       "score": 0, "signal_key": key, "evidence_count": 1, "evidence": [evidence]},
-            "raw_output": {}, "rejected": False, "otbor": True}
+                       "score": 0, "signal_key": key, "evidence_count": 1, "evidence": [evidence]}}
 
 
 def test_company_written_with_comma_or_legal_form_is_the_same_company():

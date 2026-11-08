@@ -108,8 +108,8 @@ _PLACEHOLDER_COMPANY = re.compile(r"не указ|упомин|источник|
 
 
 def wait_beating(pool: ThreadPoolExecutor, futures: Iterable[Future], beat: Callable[[], None]) -> None:
-    """Ждать вызовы пула радара (судья, дедуп), подавая признак продвижения аренды NL из
-    основного потока — не из рабочих.
+    """Ждать вызовы пула судьи пар, подавая признак продвижения аренды NL из основного
+    потока, а не из рабочих.
 
     beat бросает StopRequested или LeaseLost — тогда ещё не начатые вызовы снимаются: выход
     из `with` ждёт пул целиком (shutdown(wait=True)) и иначе оплатил бы всю очередь для
@@ -299,30 +299,6 @@ def _rank(node: dict[str, Any]) -> tuple:
         int(node.get("id") or 0),
         node.get("order", 0),
     )
-
-
-def pairs_among_stored(cards: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVERLAP) -> list[dict[str, Any]]:
-    """Пары-кандидаты среди уже сохранённых карточек — правилом дедупа (find_pairs: похожий
-    заголовок, общая компания или ссылка), без судьи: для разовой склейки со списком на
-    просмотр человеку. Главная пары — по тем же правилам, что у дедупа (_rank): разобранная,
-    затем более ранняя."""
-    nodes = [
-        # «Свежая» — чтобы find_pairs сравнивал сохранённые между собой: пара с неразобранной
-        # судится, две разобранные — нет (_eligible), как у дедупа.
-        {"kind": "existing", "id": int(card["id"]), "reviewed": bool(card.get("reviewed")),
-         "verdict": card.get("verdict"), "fresh": True, "urls": list(card.get("urls") or []),
-         "signal": {**card, "companies": list(card.get("companies") or [])}}
-        for card in cards
-    ]
-    pairs = []
-    for i, j, overlap in find_pairs(nodes, min_overlap=min_overlap):
-        main, duplicate = sorted((nodes[i], nodes[j]), key=_rank)
-        pairs.append({
-            "main": main["id"], "duplicate": duplicate["id"], "overlap": round(overlap, 2),
-            "companies": sorted(company_keys(nodes[i]["signal"]) & company_keys(nodes[j]["signal"])),
-            "urls": sorted(url_keys(nodes[i]["urls"]) & url_keys(nodes[j]["urls"])),
-        })
-    return pairs
 
 
 def assign_duplicates(nodes: list[dict[str, Any]], edges: list[tuple[int, int, str]]) -> dict[int, tuple[int, str]]:

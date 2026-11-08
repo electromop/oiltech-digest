@@ -310,16 +310,18 @@ def test_signal_card_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag,
         _cleanup(proc)
 
 
-@pytest.mark.parametrize(("flag", "runs"), [(None, False), ("0", False), ("1", True)])
-def test_otbor_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag, runs):
-    """Шаг «Отбор» (#130) — за флагом, по умолчанию выключен: флаг включают после пересборки NL (контракт 4)
-    и экзамена, иначе старая сборка отказывала бы каждой задаче."""
+@pytest.mark.parametrize("stale_flag", [None, "0"])
+def test_otbor_steps_run_every_cycle(tmp_path, monkeypatch, stale_flag):
+    """Шаги конвейера «Отбора» (#130, #131, #132) идут в каждом цикле: флаг OTBOR_ENABLED снят 08.11 вместе с гейтом
+    ленты, и строка, оставшаяся в .env, их не выключает. «Отбор» идёт после обработки ленты, «Суть и перевод»
+    сигналов за ним, баллы «Карточки» после её основного вызова."""
     monkeypatch.delenv("OTBOR_ENABLED", raising=False)
-    proc = _scheduler(tmp_path, **({} if flag is None else {"OTBOR_ENABLED": flag}))
+    proc = _scheduler(tmp_path, **({} if stale_flag is None else {"OTBOR_ENABLED": stale_flag}))
     try:
         assert _wait(lambda: "Cycle finished" in proc.out_path.read_text(), 20), proc.out_path.read_text()
         names = [name for name, _pid in _fake_steps(proc.steps_path)]
-        assert ("enqueue-otbor" in names) is runs
+        assert {"enqueue-otbor", "enqueue-signal-summary", "enqueue-signal-scores"} <= set(names)
+        assert names.index("enqueue-otbor") < names.index("enqueue-signal-summary") < names.index("enqueue-signal-scores")
     finally:
         _cleanup(proc)
 

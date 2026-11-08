@@ -34,7 +34,7 @@ if os.environ.get("LIVE_CALLS_LOG"):
     from oiltech_digest.processing import openai_client
     _orig = openai_client.OfflineAIClient.complete_json
     def _slow(self, instructions, user_input, schema, **kwargs):
-        if schema["name"] == "article_relevance":
+        if schema["name"] == "article_summary":  # гейт ленты снят 08.11: первый вызов модели по статье это суть
             with open(os.environ["LIVE_CALLS_LOG"], "a", encoding="utf-8") as fh:
                 fh.write(user_input.splitlines()[0] + "\\n")
             if user_input.splitlines()[0] == os.environ.get("LIVE_HANG_ON"):
@@ -127,8 +127,6 @@ def _batch(sql, count: int) -> tuple[list[int], int]:
     """Статьи «Живая статья N» (N по порядку пакета) и задача ИИ-пакета явным списком."""
     source = sql("INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
                  "VALUES ('Live', 'News', 'https://live.example', TRUE, 'request') RETURNING id")[0][0]
-    sql("INSERT INTO tags (name, enabled, sort_order) VALUES ('Бурение', TRUE, 1)")
-    sql("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
     now = datetime.now(timezone.utc)
     ids = [sql("INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language, content_hash) "
                "VALUES (%s, %s, %s, %s, %s, %s, 'ru', %s) RETURNING id",
@@ -180,7 +178,7 @@ def test_sigterm_mid_batch_requeues_in_seconds_and_nothing_is_paid_twice(live):
     second.wait(timeout=30)
 
     paid = called(first_calls) + called(second_calls)
-    assert len(paid) == len(ids) and len(set(paid)) == len(ids)  # каждая статья — ровно один вызов гейта
+    assert len(paid) == len(ids) and len(set(paid)) == len(ids)  # каждая статья: ровно один вызов сути
 
 
 def test_stalled_step_hands_back_done_part_and_nothing_done_is_paid_twice(live):

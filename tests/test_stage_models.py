@@ -17,7 +17,7 @@ import pytest
 
 from oiltech_digest import cli, config, signal_dedup, signal_discovery
 from oiltech_digest.db import connection, repository
-from oiltech_digest.processing import external_ai, openai_client, pipeline, reprints
+from oiltech_digest.processing import external_ai, openai_client, reprints
 from oiltech_digest.processing.openai_client import (
     AIResponse,
     OpenAIResponsesClient,
@@ -157,25 +157,12 @@ class _RecordingClient:
         self.calls.append({"name": schema["name"], "model": model, "reasoning": reasoning_effort,
                            "max_output_tokens": max_output_tokens})
         data = {
-            "article_tag": {"tag_id": 1, "confidence": 0.9, "rationale": "бурение"},
             "article_reprint_verdict": {"same_event": False, "primary_id": 1, "reason": "разные события"},
         }[schema["name"]]
         return AIResponse(data=data, model=model or self.model, input_tokens=1500, output_tokens=60)
 
 
 ARTICLE = {"id": 1, "source_name": "A", "published_at": "2026-10-01", "title": "New rig", "raw_text": "x"}
-
-
-def test_tags_use_their_own_model_reasoning_and_budget(monkeypatch):
-    monkeypatch.setattr(config, "OPENAI_TAG_MODEL", "tag-model")
-    monkeypatch.setattr(config, "OPENAI_TAG_REASONING", "medium")
-    client = _RecordingClient()
-
-    pipeline.tag_article({"title": "Drilling", "raw_text": "Новый буровой станок."}, [{"id": 1, "name": "Бурение"}], client)
-
-    (call,) = client.calls
-    assert (call["model"], call["reasoning"]) == ("tag-model", "medium")
-    assert call["max_output_tokens"] == output_budget(1000, "medium")
 
 
 def test_reprint_judge_uses_its_own_model_reasoning_and_budget(monkeypatch):
@@ -191,34 +178,33 @@ def test_reprint_judge_uses_its_own_model_reasoning_and_budget(monkeypatch):
 
 
 def test_minimal_keeps_todays_limits(monkeypatch):
-    """На нынешнем уровне (minimal) лимиты ответа прежние: правка не меняет поведение прода до смены моделей."""
-    for name in ("OPENAI_TAG_REASONING", "OPENAI_REPRINT_REASONING"):
-        monkeypatch.setattr(config, name, "minimal")
+    """На нынешнем уровне (minimal) лимит ответа судьи перепечаток прежний: правка не меняет поведение прода."""
+    monkeypatch.setattr(config, "OPENAI_REPRINT_REASONING", "minimal")
     client = _RecordingClient()
 
-    pipeline.tag_article(ARTICLE, [{"id": 1, "name": "Бурение"}], client)
     reprints.judge_pair(ARTICLE, {**ARTICLE, "id": 2, "source_name": "B"}, client)
 
-    assert [c["max_output_tokens"] for c in client.calls] == [1000, 700]
+    assert [c["max_output_tokens"] for c in client.calls] == [700]
 
 
-def test_tags_fall_back_but_dedup_does_not():
-    """Теги без строки в .env — на OPENAI_MODEL, как раньше. У «Дедупа» отката нет (спека #128, история 48): пусто — пусто,
-    и стадия падает с причиной. Второе мнение о теме (прежняя цепочка радара) без своей строки и без модели дедупа —
-    на модели ленты, как до правки."""
-    # Пустые, а не удалённые: config при импорте читает .env, и строка оттуда подменила бы отсутствующую переменную.
-    env = {**os.environ, "OPENAI_MODEL": "main-model", "OPENAI_REASONING_EFFORT": "low", "OPENAI_TAG_MODEL": "",
-           "OPENAI_TAG_REASONING": "", "OPENAI_REPRINT_MODEL": "", "OPENAI_REPRINT_REASONING": "",
-           "SIGNAL_DEDUP_MODEL": "", "SIGNAL_DEDUP_REASONING": "", "SIGNAL_THEME_CHECK_MODEL": ""}
-    probe = ("from oiltech_digest import config as c; "
-             "print(repr((c.OPENAI_TAG_MODEL, c.OPENAI_TAG_REASONING, c.OPENAI_REPRINT_MODEL, c.OPENAI_REPRINT_REASONING, "
-             "c.SIGNAL_DEDUP_MODEL, c.SIGNAL_DEDUP_REASONING, c.SIGNAL_THEME_CHECK_MODEL)))")
+def test_main_model_defaults_to_gpt6_and_dedup_has_no_fallback():
+    """Основная модель без строки в .env: gpt-6-luna, только линейка gpt-6 (решение владельца 08.11; gpt-5,
+    gpt-5-mini и gpt-5-nano снимают 11.12.2026). У «Дедупа» отката на неё нет (спека #128, история 48): пусто
+    остаётся пустым, и стадия падает с причиной."""
+    env = {key: value for key, value in os.environ.items() if key != "OPENAI_MODEL"}
+    env.update({"OPENAI_REASONING_EFFORT": "low", "OPENAI_REPRINT_MODEL": "", "OPENAI_REPRINT_REASONING": "",
+                "SIGNAL_DEDUP_MODEL": "", "SIGNAL_DEDUP_REASONING": ""})
+    # .env рабочей копии не читаем: строка оттуда подменила бы умолчание основной модели.
+    probe = ("import dotenv; dotenv.load_dotenv = lambda *args, **kwargs: False; "
+             "from oiltech_digest import config as c; "
+             "print(repr((c.OPENAI_MODEL, c.price_for_model(c.OPENAI_MODEL), c.OPENAI_REPRINT_MODEL, "
+             "c.OPENAI_REPRINT_REASONING, c.SIGNAL_DEDUP_MODEL, c.SIGNAL_DEDUP_REASONING)))")
 
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
                             cwd=REPO_ROOT, env=env)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == repr(("main-model", "low", "", "low", "", "low", "main-model"))
+    assert result.stdout.strip() == repr(("gpt-6-luna", (0.10, 0.50), "", "low", "", "low"))
 
 
 # --- «Дедуп» без модели: сбой с причиной до вызовов, а не «разные события» у каждой пары --------------------------
@@ -269,7 +255,7 @@ def test_radar_run_without_dedup_model_fails_before_search(monkeypatch):
     monkeypatch.setattr(config, "SIGNAL_DEDUP_MODEL", "")
     searched: list[str] = []
     monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda *args, **kwargs: searched.append("x"))
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True)
 
     with pytest.raises(signal_dedup.DedupSetupError):
         signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
@@ -396,23 +382,3 @@ def test_client_still_fails_on_cut_or_foreign_output(monkeypatch, text):
         client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none")
 
 
-def test_tag_rules_name_tags_from_the_list():
-    """Правило темы рынка называет тег из списка (переигровка 03.11: общая фраза «если такой тег есть» не сработала у
-    gpt-6-luna); нет тега в списке — нет правила."""
-    tags = [{"id": 31, "name": "Рынок, бизнес-модели и M&A"}, {"id": 32, "name": pipeline.UNCLASSIFIED_TAG_NAME},
-            {"id": 20, "name": "Бурение"}]
-
-    rules = pipeline.tag_rules(tags)
-
-    assert rules[0].endswith("— тег «Рынок, бизнес-модели и M&A».")
-    assert rules[1] == f"«{pipeline.UNCLASSIFIED_TAG_NAME}» — только когда не подходит ни один тег."
-    assert pipeline.tag_rules([{"id": 20, "name": "Бурение"}]) == []
-
-    client = _RecordingClient()
-    prompts: list[str] = []
-    original = client.complete_json
-    client.complete_json = lambda instructions, user_input, *args, **kwargs: (prompts.append(user_input),
-                                                                              original(instructions, user_input, *args,
-                                                                                       **kwargs))[1]
-    pipeline.tag_article(ARTICLE, tags, client)
-    assert prompts[0].endswith("rules:\n- " + "\n- ".join(rules))

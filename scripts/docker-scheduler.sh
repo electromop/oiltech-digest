@@ -112,25 +112,11 @@ SOURCE_DISCOVERY_MAX_ITERATIONS="${SOURCE_DISCOVERY_MAX_ITERATIONS:-3}"
 SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS="${SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS:-4}"
 SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES="${SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES:-100}"
 SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS="${SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS:-100}"
-SIGNAL_DISCOVERY_ENABLED="${SIGNAL_DISCOVERY_ENABLED:-0}"
-SIGNAL_DISCOVERY_EVERY_CYCLES="${SIGNAL_DISCOVERY_EVERY_CYCLES:-4}"
-SIGNAL_DISCOVERY_DAYS="${SIGNAL_DISCOVERY_DAYS:-14}"
-SIGNAL_DISCOVERY_LIMIT="${SIGNAL_DISCOVERY_LIMIT:-80}"
-SIGNAL_DISCOVERY_MIN_SCORE="${SIGNAL_DISCOVERY_MIN_SCORE:-40}"
-SIGNAL_DISCOVERY_MAX_SIGNALS="${SIGNAL_DISCOVERY_MAX_SIGNALS:-10}"
-SIGNAL_DISCOVERY_OFFLINE="${SIGNAL_DISCOVERY_OFFLINE:-1}"
-SIGNAL_DISCOVERY_WEB="${SIGNAL_DISCOVERY_WEB:-0}"
-SIGNAL_DISCOVERY_WEB_ONLY="${SIGNAL_DISCOVERY_WEB_ONLY:-0}"
-SIGNAL_DISCOVERY_WEB_QUERY_LIMIT="${SIGNAL_DISCOVERY_WEB_QUERY_LIMIT:-8}"
-SIGNAL_DISCOVERY_RESEARCH_ROUNDS="${SIGNAL_DISCOVERY_RESEARCH_ROUNDS:-2}"
-SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT="${SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT:-20}"
+# Прогон радара ставит только суточный шаг (enqueue-daily-signal-discovery): периодический шаг прежней цепочки снят 08.11.
 SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 # Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
 # включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.
 SIGNAL_CARD_ENABLED="${SIGNAL_CARD_ENABLED:-0}"
-# Агент «Отбор» (#130): статьи, вставленные при включённом флаге, решает он, а не гейт ленты. По умолчанию
-# выключен: включать после пересборки NL (контракт 4) и экзамена (#133) — флаг и для вставки статей (ядро).
-OTBOR_ENABLED="${OTBOR_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -194,12 +180,11 @@ while true; do
     fi
   fi
 
-  if [ "$OTBOR_ENABLED" = "1" ]; then
-    # Новые статьи, находки поиска и материалы коллег — агенту «Отбор» на NL; принятые статьи получат суть, тег и
-    # балл обработкой ленты следующего цикла, находки и материалы — суть и русский заголовок своим шагом (#131).
-    run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
-    run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
-  fi
+  # Агент «Отбор» (#130) решает каждую новую статью, находку поиска и материал коллеги (флаг и гейт ленты сняты
+  # 08.11): принятые статьи получат суть и перевод обработкой ленты следующего цикла, находки и материалы: суть и
+  # русский заголовок своим шагом (#131).
+  run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
+  run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
 
   if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then
     # Западные источники (network_region='external') фетчим через зарубежный воркер —
@@ -229,10 +214,8 @@ while true; do
     run_step "enqueue-signal-cards" python -m oiltech_digest.cli enqueue-signal-cards
   fi
 
-  if [ "$OTBOR_ENABLED" = "1" ]; then
-    # Второй вызов «Карточки» (#132): баллы по профилю категории — после её основного вызова.
-    run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
-  fi
+  # Второй вызов «Карточки» (#132): баллы по профилю категории, после её основного вызова.
+  run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
 
   if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then
     if [ "$SOURCE_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SOURCE_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
@@ -294,34 +277,6 @@ while true; do
 
   if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
     run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
-  fi
-
-  if [ "$SIGNAL_DISCOVERY_ENABLED" = "1" ]; then
-    if [ "$SIGNAL_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SIGNAL_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
-      _signal_offline_flag="--offline"
-      if [ "$SIGNAL_DISCOVERY_OFFLINE" != "1" ]; then
-        _signal_offline_flag="--no-offline"
-      fi
-      _signal_web_flag=""
-      if [ "$SIGNAL_DISCOVERY_WEB" = "1" ]; then
-        _signal_web_flag="--web"
-      fi
-      _signal_web_only_flag=""
-      if [ "$SIGNAL_DISCOVERY_WEB_ONLY" = "1" ]; then
-        _signal_web_only_flag="--web-only"
-      fi
-      run_step "enqueue-signal-discovery" python -m oiltech_digest.cli enqueue-signal-discovery \
-        --days "$SIGNAL_DISCOVERY_DAYS" \
-        --limit "$SIGNAL_DISCOVERY_LIMIT" \
-        --min-score "$SIGNAL_DISCOVERY_MIN_SCORE" \
-        --max-signals "$SIGNAL_DISCOVERY_MAX_SIGNALS" \
-        --web-query-limit "$SIGNAL_DISCOVERY_WEB_QUERY_LIMIT" \
-        --research-rounds "$SIGNAL_DISCOVERY_RESEARCH_ROUNDS" \
-        --web-fulltext-limit "$SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT" \
-        $_signal_web_flag \
-        $_signal_web_only_flag \
-        $_signal_offline_flag
-    fi
   fi
 
   # Сторож полос: застой внешней очереди или очередь без живого воркера — «FAIL

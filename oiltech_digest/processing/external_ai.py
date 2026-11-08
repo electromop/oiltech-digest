@@ -8,26 +8,29 @@ from typing import Any, Callable
 
 from oiltech_digest import contract
 from oiltech_digest.db import repository
-from oiltech_digest.scoring_profiles import SCORING_PROFILES
 from oiltech_digest.processing import fulltext_recompute
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
-    _negative_keyword_block,
-    _validate_weights,
-    keyword_tag,
     make_client,
     normalize_score_payload,
+    summarize_article,
+    title_ru_for_article,
+)
+# Гейт, стоп-слова, тег и балл статьи сняты с ленты 08.11; их зовёт только оценка кандидата агента источников
+# (process_source_candidate_payload), код которого не удаляется (решение владельца 08.11).
+from oiltech_digest.source_discovery.legacy_stages import (
+    _negative_keyword_block,
+    _valid_tag_id,
+    _validate_weights,
+    keyword_tag,
     relevance_article,
     score_article,
-    summarize_article,
     tag_article,
-    title_ru_for_article,
 )
 
 logger = logging.getLogger(__name__)
 
-RECHECK_BATCH_DEFAULT = 100
 TRANSLATE_BATCH_DEFAULT = 100
 
 
@@ -37,12 +40,9 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     С job_id (выдача воркеру) статьи резервируются за задачей: соседняя ИИ-полоса не
     возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles).
     Пометка only проверяется здесь, до выдачи: при записи ответ модели уже оплачен. Она же
-    уходит воркеру — не запрошенное он не зовёт (process_payload); воркер до 28.09 её не
-    знает и гоняет весь конвейер, а ядро всё равно пишет только запрошенное."""
+    уходит воркеру: не запрошенное он не зовёт (process_payload). Стадии пакета: суть и
+    перевод заголовка (тег и балл статьи сняты 08.11, их критериев и тегов в пакете нет)."""
     stages = stages_to_write(payload.get("only"))
-    criteria = repository.list_enabled_scoring_criteria()
-    if "scoring" in stages:
-        _refuse_broken_weights(criteria)
     article_ids = [int(item) for item in payload.get("article_ids") or []]
     limit = int(payload.get("limit") or contract.PROCESS_LIMIT_DEFAULT)
     if job_id is not None:
@@ -55,14 +55,13 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     # Явный список не обходит «Отбор» (#130): отклонённую им и ждущую его решения воркер не получает.
     articles = [article for article in articles if not repository.held_by_otbor(article)]
     if payload.get(fulltext_recompute.PAYLOAD_FLAG) and articles:
-        # Пересчёт после полного текста ждал пакет, выданный с обрывком: его гейт мог статью
-        # отвергнуть, а месяц — закрыться. За таких модель не платится.
+        # Пересчёт после полного текста ждал пакет, выданный с обрывком: статью могли отклонить,
+        # скрыть или отметить в выпуск, а месяц закрыть. За таких модель не платится.
         keep = fulltext_recompute.still_applicable([int(article["id"]) for article in articles])
         articles = [article for article in articles if int(article["id"]) in keep]
     if payload.get("only") and "summary" in stages:
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
-        # (_article_prompt кладёт summary), и модель повторила бы её слово в слово. Без
-        # перегенерации сути записанная остаётся: теги и балл считаются по ней.
+        # (_article_prompt кладёт summary), и модель повторила бы её слово в слово.
         articles = [{**article, "summary": None} for article in articles]
     worker_payload = {
         "kind": "process_articles",
@@ -70,21 +69,18 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         "limit": limit,
         "article_ids": article_ids,
         "articles": [_jsonable_dict(article) for article in articles],
-        "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
-        "criteria": [_jsonable_dict(item) for item in criteria],
     }
     if payload.get("only"):
-        worker_payload["only"] = list(payload["only"])
+        worker_payload["only"] = sorted(stages)
     return worker_payload
 
 
 def _refuse_broken_weights(criteria: list[dict[str, Any]]) -> None:
-    """Сумма весов ≠ 100 (или критериев нет) — задачу с баллом не выдаём.
+    """Сумма весов ≠ 100 (или критериев нет): оценку кандидата агента источников не выдаём.
 
     Итог балла — Σ final·вес/100 с обрезкой до 100 (pipeline.normalize_score_payload). При
-    сумме 200 он молча раздувается, и ошибки не видно нигде: локальные пути сумму проверяют
-    (_validate_weights), а путь через NL до сессии G — нет. Отказ здесь, до резерва статей:
-    выдача проваливает задачу, воркер её не получает, модель не оплачивается."""
+    сумме 200 он молча раздувается, и ошибки не видно нигде. Отказ здесь, до сбора статей
+    кандидата: выдача проваливает задачу, воркер её не получает, модель не оплачивается."""
     try:
         _validate_weights(criteria)
     except ValueError as exc:
@@ -149,68 +145,48 @@ class StopRequested(LeaseLost):
     """
 
 
-def _stages_left(article: dict[str, Any], stages: frozenset[str]) -> frozenset[str]:
-    """Стадии пакета планировщика, которых у статьи ещё нет (#53).
+def _stages_left(article: dict[str, Any], stages: frozenset[str], *, missing_only: bool) -> frozenset[str]:
+    """Стадии, которые воркер зовёт у статьи.
 
-    Как локальный конвейер (pipeline.process_pipeline_articles): записанные вердикт гейта,
-    суть, перевод, тег и балл заново не зовутся, отвергнутая гейтом статья дальше не идёт.
-    Решение «Отбора» (#130) главнее гейта: принятая им статья гейт не проходит, отклонённая
-    дальше не идёт. Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
-    verdict = repository.otbor_verdict(article)
-    if verdict is False or (verdict is None and article.get("relevant") is False):
+    У отклонённой («Отбором», а без его решения гейтом ленты до «Отбора») ни одной, в любом пути: гейта,
+    который мог передумать, с 08.11 нет, и платить за суть отклонённой незачем. Пакет планировщика
+    (missing_only, #53) зовёт только недостающие: записанные суть и перевод заново не зовутся. Явный список
+    и пометка only пересчитывают запрошенное целиком. Поля кладёт ядро (repository.get_articles_by_ids с
+    include_summary)."""
+    if repository.article_rejected(article):
         return frozenset()
-    done = {
-        "relevance": verdict is not None or article.get("relevant") is True,
-        "summary": bool(article.get("summary")),
-        "translation": bool(article.get("title_ru")),
-        "tagging": article.get("existing_tag_id") is not None,
-        "scoring": article.get("existing_score_id") is not None,
-    }
+    if not missing_only:
+        return stages
+    done = {"summary": bool(article.get("summary")), "translation": bool(article.get("title_ru"))}
     return frozenset(stage for stage in stages if not done[stage])
 
 
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Run the AI pipeline without direct database access.
+    """Run the AI pipeline without direct database access: суть и перевод заголовка принятых статей.
 
     ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи — это
     продлевает lease задачи у core. Без него длинный батч на медленной модели
-    (gpt-5.5) истекает по lease (600с) ещё до завершения, и задача бесконечно
+    истекает по lease (600с) ещё до завершения, и задача бесконечно
     переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
     Ему передаётся итог на этот момент: если следующая статья зависнет на остановке
     воркера, сделанное уйдёт ядру и не оплатится второй раз (worker_shutdown).
 
-    ``only`` в payload — какие стадии нужны (перегенерация сути: только суть и перевод).
-    Остальные не зовутся: ядро их всё равно не запишет (apply_process_result), а платили за
-    них больше двух третей расхода перегенерации (27.09 один гейт — $0,59 из $0,83). Без
-    стадии relevance нет и гейта: его вердикт ядро не пишет, а отвергнутая им статья осталась
-    бы со старой сутью (27.09 — 7 из 52). Пометки нет (старое ядро, обычный пакет) — весь
-    конвейер, как раньше.
+    ``only`` в payload: какие стадии нужны (пересчёт сути после полного текста: только суть).
+    Остальные не зовутся: ядро их всё равно не запишет (apply_process_result). Гейт, тег и
+    балл статьи сняты 08.11 (решает «Отбор», тему и баллы ставит «Карточка»): ядро выдаёт
+    задачу только сборке контракта 11 (contract.required_contract).
     """
     stages = stages_to_write(payload.get("only"))  # граница: битая пометка — до любого вызова модели
     client = make_client(bool(payload.get("offline", False)))
-    tags = payload.get("tags") or []
-    criteria = payload.get("criteria") or []
-    if not tags:
-        raise ValueError("No tags supplied in external AI payload")
-    if not criteria:
-        raise ValueError("No scoring criteria supplied in external AI payload")
-    if "scoring" in stages:
-        # Сумма весов ≠ 100 — отказ до первого вызова модели, как на локальных путях: итог
-        # Σ final·вес/100 иначе молча исказился бы. Пакет от ядра старше сессии G мог прийти
-        # без этой проверки на выдаче.
-        _validate_weights(criteria)
-
     result: dict[str, Any] = {
         "external_ai": True,
         "kind": "process_articles",
-        "stats": {"processed": 0, "summary": 0, "relevant": 0, "rejected": 0,
-                  "tagged": 0, "translated": 0, "scored": 0, "errors": 0},
+        "stats": {"processed": 0, "summary": 0, "translated": 0, "errors": 0},
         "articles": [],
     }
     # Пакет планировщика — ни списка статей, ни пометки only (#53): только недостающие стадии.
-    # Он берёт статьи, которым не хватает ЛЮБОЙ стадии, и статья без перевода или с упавшим
-    # тегом получала новую суть и новый балл на каждом проходе. Явный список (перекачка тела,
-    # импорт статьи) и only пересчитывают запрошенное целиком, как раньше.
+    # Статья без перевода получала бы новую суть на каждом проходе. Явный список (перекачка
+    # тела, импорт статьи) и only пересчитывают запрошенное целиком, как раньше.
     scheduler_batch = not payload.get("article_ids") and payload.get("only") is None
     for article in payload.get("articles") or []:
         if heartbeat is not None:
@@ -232,43 +208,8 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
-        todo = _stages_left(article, stages) if scheduler_batch else stages
-        # Решённую «Отбором» статью (#130) не решают ни гейт, ни стоп-слова: «по смыслу прячет только «Отбор»».
-        otbor_decided = article.get("otbor_decision") is not None
-        if otbor_decided:
-            todo = todo - {"relevance"}
+        todo = _stages_left(article, stages, missing_only=scheduler_batch)
         try:
-            if "relevance" in stages and not otbor_decided:
-                # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
-                blocked_reason = _negative_keyword_block(article, tags)
-                if blocked_reason:
-                    item["relevance"] = {
-                        "relevant": False,
-                        "reason": blocked_reason,
-                        "model": "negative-keyword",
-                        "provider": "offline",
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "cost_usd": 0.0,
-                    }
-                    result["stats"]["rejected"] += 1
-                    result["articles"].append(item)
-                    continue
-            if "relevance" in todo:
-                # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
-                # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
-                relevance_resp = relevance_article(article, client, tags=tags)
-                relevant = bool(relevance_resp.data.get("relevant"))
-                item["relevance"] = _response_payload(
-                    relevance_resp,
-                    {"relevant": relevant, "reason": relevance_resp.data.get("reason")},
-                )
-                result["stats"]["relevant" if relevant else "rejected"] += 1
-                if not relevant:
-                    result["articles"].append(item)
-                    continue
-
             if "summary" in todo:
                 summary_resp = summarize_article(article, client)
                 item["summary"] = _response_payload(
@@ -280,7 +221,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
 
             if "translation" in todo:
                 # Перевод заголовка — отдельная стадия: иностранный переводится, русский не по правилам эксперта
-                # правится. Статья здесь принята: отклонённую гейтом или «Отбором» конвейер сюда не пускает, а явные
+                # правится. Статья здесь принята: отклонённую конвейер сюда не пускает (_stages_left), а явные
                 # списки с пометкой only ставятся по принятым (перегенерация сути, правка заголовков месяца).
                 title_ru, translate_resp = title_ru_for_article(article, client, edit_russian=True)
                 if title_ru is not None:
@@ -291,27 +232,6 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                         item["translation"] = {"title_ru": title_ru, "model": None, "provider": "offline",
                                                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
                                                "cost_usd": 0.0}
-
-            if "tagging" in todo:
-                tag_resp = tag_article(article, tags, client)
-                tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
-                if tag_id == 0:
-                    tag_id = int(keyword_tag(article, tags)["tag_id"])
-                item["tagging"] = _response_payload(
-                    tag_resp,
-                    {
-                        "tag_id": tag_id,
-                        "confidence": _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
-                        "rationale": tag_resp.data.get("rationale"),
-                    },
-                )
-                result["stats"]["tagged"] += 1
-
-            if "scoring" in todo:
-                score_resp = score_article(article, criteria, client)
-                score_payload = normalize_score_payload(article, criteria, score_resp.data)
-                item["scoring"] = _response_payload(score_resp, score_payload)
-                result["stats"]["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - one bad article must not kill the whole batch
             result["stats"]["errors"] += 1
             item["errors"].append(str(exc)[:1000])
@@ -425,121 +345,6 @@ def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callabl
 
 
 # ---------------------------------------------------------------------------
-# Перепрогон релевантности (gate-only) для чистки базы новым сильным гейтом.
-# Нерелевантные статьи удаляются физически на стороне core (apply_recheck_result).
-# ---------------------------------------------------------------------------
-
-def build_recheck_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Развернуть DB-задачу recheck_relevance в самодостаточный внешний payload.
-    Гейт судит по сырому тексту; теги нужны для блокировки по стоп-словам (паритет с продом)."""
-    article_ids = [int(item) for item in payload.get("article_ids") or []]
-    articles = repository.get_articles_by_ids(article_ids) if article_ids else []
-    return {
-        "kind": "recheck_relevance",
-        "article_ids": article_ids,
-        "articles": [_jsonable_dict(article) for article in articles],
-        "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
-    }
-
-
-def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Только гейт релевантности по сырому тексту (без summary/tag/score). Без доступа к БД."""
-    client = make_client(bool(payload.get("offline", False)))
-    tags = payload.get("tags") or []
-    result: dict[str, Any] = {
-        "recheck_relevance": True,
-        "kind": "recheck_relevance",
-        "stats": {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0},
-        "articles": [],
-    }
-    for article in payload.get("articles") or []:
-        if heartbeat is not None:
-            try:
-                heartbeat(result)
-            except StopRequested:
-                result["partial"] = True
-                break
-            except LeaseLost:
-                # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
-                # работать дальше = платить за результат, который core не примет.
-                raise
-            except TypeError:  # колбэк не принял итог — ошибка кода, не сети (см. process_payload)
-                raise
-            except Exception:  # noqa: BLE001
-                pass
-        item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
-        result["stats"]["processed"] += 1
-        try:
-            blocked_reason = _negative_keyword_block(article, tags)
-            if blocked_reason:
-                item["relevance"] = {"relevant": False, "reason": blocked_reason, "model": "negative-keyword"}
-                result["stats"]["rejected"] += 1
-            else:
-                resp = relevance_article(article, client, tags=tags)
-                relevant = bool(resp.data.get("relevant"))
-                item["relevance"] = _response_payload(resp, {"relevant": relevant, "reason": resp.data.get("reason")})
-                result["stats"]["relevant" if relevant else "rejected"] += 1
-        except Exception as exc:  # noqa: BLE001 - одна плохая статья не валит батч
-            result["stats"]["errors"] += 1
-            item["errors"].append(str(exc)[:1000])
-        result["articles"].append(item)
-    return result
-
-
-def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False,
-                         mark: bool = False, job_id: int | None = None) -> dict[str, Any]:
-    """Применить вердикты к core: релевантные — персист, нерелевантные — УДАЛИТЬ.
-    Статьи из выпусков (сохранённый черновик или отметка «в дайджест») по умолчанию
-    пропускаются (force=False).
-
-    dry_run=True — НИЧЕГО не менять/не удалять: только посчитать и собрать превью.
-    mark=True — нерелевантные НЕ удалять физически, а ПОМЕТИТЬ на удаление
-    (pending_deletion): исчезают из ленты, но в БД (восстановимы recheck-unmark,
-    физически удаляются разом recheck-purge). Безопасный режим по умолчанию для чистки."""
-    stats = {"checked": 0, "kept": 0, "deleted": 0, "marked": 0, "skipped_in_digest": 0, "errors": 0}
-    rejected_ids: list[int] = []
-    reason_by_id: dict[int, str | None] = {}
-    for item in result.get("articles") or []:
-        article_id = int(item["article_id"])
-        relevance = item.get("relevance")
-        if item.get("errors") or not relevance:
-            stats["errors"] += len(item.get("errors") or []) or 1
-            continue
-        stats["checked"] += 1
-        # Прогон пишем ДО ветвления по вердикту: вызов к OpenAI оплачен независимо от того,
-        # релевантна статья или нет. Раньше _insert_run стоял ТОЛЬКО в ветке relevant=True →
-        # гейт-вызовы по ОТКЛОНЁННЫМ статьям (~40% базы) и весь dry_run не попадали в
-        # ai_processing_runs, и экран «AI-затраты» систематически занижал счёт (сверка с
-        # дашбордом OpenAI 2026-07-23 дала разрыв до 4.5× на шумных батчах перепроверки).
-        run_model = relevance.get("model")
-        if run_model and run_model != "negative-keyword":
-            _insert_run(article_id, "relevance", {**relevance, "provider": "openai"}, job_id=job_id)
-        if bool(relevance.get("relevant")):
-            if not dry_run:
-                repository.set_article_relevance(article_id, True, relevance.get("reason"), relevance.get("model"))
-            stats["kept"] += 1
-        elif dry_run:
-            stats["deleted"] += 1  # сколько БЫ удалили
-            rejected_ids.append(article_id)
-            reason_by_id[article_id] = relevance.get("reason")
-        elif mark:
-            outcome = repository.mark_article_for_deletion(article_id, relevance.get("reason"), force=force)
-            stats["marked" if outcome == "marked" else "skipped_in_digest"] += 1
-        else:
-            deleted = repository.delete_article(article_id, force=force)
-            stats["deleted" if deleted else "skipped_in_digest"] += 1
-    if dry_run and rejected_ids:
-        # подтянуть заголовок/источник для просмотра (статьи ещё на месте)
-        rows = repository.get_articles_by_ids(rejected_ids)
-        stats["rejected_preview"] = [
-            {"id": int(r["id"]), "title": r.get("title"), "source": r.get("source_name"),
-             "reason": reason_by_id.get(int(r["id"]))}
-            for r in rows
-        ]
-    return stats
-
-
-# ---------------------------------------------------------------------------
 # Бэкфилл перевода заголовков по всей базе (отдельная стадия) через воркер.
 # ---------------------------------------------------------------------------
 
@@ -644,7 +449,11 @@ def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None)
     return stats
 
 
-PROCESS_STAGES = ("summary", "translation", "relevance", "tagging", "scoring")
+PROCESS_STAGES = ("summary", "translation")
+# Стадии, снятые 08.11: гейт ленты, тег и балл статьи. Задача, поставленная до выката (пересчёт после полного
+# текста: суть, тег и балл), выдаётся с тем, что от неё осталось, а не падает. Итог сборки NL, выданный до выката,
+# может нести их ответы: они не пишутся, но расход записывается, вызов оплачен.
+RETIRED_STAGES = ("relevance", "tagging", "scoring")
 
 
 def _write_summary(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
@@ -656,58 +465,9 @@ def _write_translation(article_id: int, payload: dict[str, Any], context: dict[s
         repository.set_article_title_ru(article_id, _core_glossary(payload["title_ru"], context))
 
 
-def _write_relevance(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
-    repository.set_article_relevance(article_id, bool(payload.get("relevant")), payload.get("reason"), payload.get("model"))
-
-
-def _write_tagging(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
-    repository.upsert_article_tag(
-        article_id, int(payload["tag_id"]), float(payload.get("confidence") or 0), payload.get("rationale"), payload.get("model")
-    )
-
-
-def _write_scoring(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
-    items = payload.get("items") or []
-    profile, snapshot = _score_provenance(payload, items)
-    repository.replace_article_score(
-        article_id,
-        float(payload["total_score"]),
-        str(payload["score_label"]),
-        str(payload.get("explanation") or ""),
-        items,
-        payload.get("model"),
-        profile=profile,
-        criteria_snapshot=snapshot,
-    )
-
-
-def _score_provenance(payload: dict[str, Any], items: list[dict[str, Any]]) -> tuple[str | None, list[dict] | None]:
-    """Профиль и снимок критериев из итога воркера — граница, чужую форму не пишем.
-
-    Сборка NL до сессии G их не присылает, битые или не покрывающие подпункты отбрасываются:
-    тогда (None) ядро строит их само по id подпунктов (repository.replace_article_score)."""
-    profile = payload.get("profile") if payload.get("profile") in SCORING_PROFILES else None
-    raw = payload.get("criteria_snapshot")
-    if not isinstance(raw, list) or not raw:
-        return profile, None
-    try:
-        snapshot = [
-            {"id": int(entry["id"]), "name": str(entry["name"]), "weight": float(entry["weight"]),
-             "text_hash": str(entry["text_hash"])}
-            for entry in raw
-        ]
-        covered = {int(item["criterion_id"]) for item in items} <= {entry["id"] for entry in snapshot}
-    except (KeyError, TypeError, ValueError):
-        return profile, None
-    return profile, (snapshot if covered else None)
-
-
 _STAGE_WRITERS = {
     "summary": _write_summary,
     "translation": _write_translation,
-    "relevance": _write_relevance,
-    "tagging": _write_tagging,
-    "scoring": _write_scoring,
 }
 
 
@@ -718,14 +478,19 @@ class InvalidJobPayload(ValueError):
 def stages_to_write(only: Any) -> frozenset[str]:
     """Какие стадии пишет ядро. None — все; иначе непустой список известных стадий.
 
-    Пометку ставит enqueue-resummarize, но читается она из payload_json задачи — граница:
-    строка «summary» дала бы множество букв (ничего не записать), пустой список — все
-    стадии. Ошибка здесь — ошибка кода: падаем при выдаче и ещё раз до любой записи."""
+    Пометку ставят пересчёт после полного текста, перегенерация сути и правка заголовков, но читается
+    она из payload_json задачи, это граница: строка «summary» дала бы множество букв (ничего не записать),
+    пустой список дал бы все стадии. Снятые стадии (RETIRED_STAGES) из пометки выпадают; пометка из одних
+    снятых тоже ошибка. Ошибка здесь значит ошибку кода: падаем при выдаче и ещё раз до любой записи."""
     if only is None:
         return frozenset(PROCESS_STAGES)
-    if not isinstance(only, (list, tuple)) or not only or not all(stage in PROCESS_STAGES for stage in only):
+    known = (*PROCESS_STAGES, *RETIRED_STAGES)
+    if not isinstance(only, (list, tuple)) or not only or not all(stage in known for stage in only):
         raise InvalidJobPayload(f"only: непустой список стадий из {PROCESS_STAGES}, получено {only!r}")
-    return frozenset(only)
+    kept = frozenset(stage for stage in only if stage in PROCESS_STAGES)
+    if not kept:
+        raise InvalidJobPayload(f"only: стадии {only!r} сняты 08.11, писать нечего")
+    return kept
 
 
 def apply_process_result(
@@ -736,18 +501,17 @@ def apply_process_result(
     job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
     (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт.
 
-    only — какие стадии записать (перегенерация сути: `enqueue-resummarize`). Воркер с 28.09
-    не запрошенное не зовёт (process_payload), а сборка NL до 28.09 пометки не знает и гоняет
-    весь конвейер — поэтому фильтр остаётся здесь: так задачу исполняет любая сборка NL.
-    Остальное не пишется: гейт, передумав, убрал бы статью из ленты, а теги и балл
-    сдвинулись бы у отобранного в выпуск. Расход по всем стадиям учитывается — он оплачен."""
+    only: какие стадии записать (пересчёт после полного текста, перегенерация сути, правка
+    заголовков): воркер не запрошенное не зовёт (process_payload), а фильтр остаётся здесь, чтобы
+    запись не зависела от сборки NL. Расход по всем стадиям учитывается: он оплачен, в том числе
+    снятых (RETIRED_STAGES) из итога, выданного сборке до выката: их ответы не пишутся."""
     write = stages_to_write(only)
-    stats = {"articles": 0, "summary": 0, "relevance": 0, "translation": 0, "tagging": 0, "scoring": 0, "errors": 0}
+    stats = {"articles": 0, "summary": 0, "translation": 0, "errors": 0}
     contexts = _glossary_contexts(result)
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
-        for stage in PROCESS_STAGES:
+        for stage in (*PROCESS_STAGES, *RETIRED_STAGES):
             payload = item.get(stage)
             if not payload:
                 continue
@@ -1093,14 +857,6 @@ def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id:
             "error_message": None,
         }
     )
-
-
-def _valid_tag_id(value: Any, tags: list[dict]) -> int:
-    try:
-        tag_id = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return tag_id if any(int(tag["id"]) == tag_id for tag in tags) else 0
 
 
 def _clamp(value: float, low: float, high: float) -> float:

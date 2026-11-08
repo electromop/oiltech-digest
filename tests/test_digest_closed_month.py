@@ -99,8 +99,8 @@ def test_closed_issue_keeps_the_last_correction_made_before_the_close(issue, mon
 # ---------------------------------------------------------------------------
 
 def _refind(key: str, text: str, *, link: str, score: float = 81) -> int:
-    """Прогон радара снова нашёл карточку (signal_discovery._store_candidate): тот же ключ, новый
-    текст модели и тема, новая ссылка, пересчёт числа ссылок."""
+    """Карточку радара записали снова тем же ключом (repository.upsert_signal; до 08.11 так её переписывала повторная
+    находка прежней цепочки радара): новый текст модели и тема, новая ссылка, пересчёт числа ссылок."""
     signal_id = repository.upsert_signal({
         "signal_key": key, "title": f"{text} (en)", "title_ru": text, "theme": "Цифровизация",
         "summary": f"Суть: {text}.", "thesis": f"Тезис: {text}.", "maturity": "watch", "score": score,
@@ -259,9 +259,9 @@ def test_card_without_a_link_date_is_dated_by_its_moscow_arrival_day(issue):
 
 def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, monkeypatch, capsys):
     """repair-article-bodies --apply меняет тела статей и по умолчанию ставит пересчёт ИИ заменённых:
-    суть, тег и балл заново (с #134 без гейта). У статьи закрытого месяца это переписало бы закрытый
-    выпуск. Тело меняется (выпуск его не показывает), а пересчёт — только в окне ленты, как у
-    пересчёта балла (rescore_selection): архив — только просмотр. Кого пропустили — в отчёте."""
+    суть заново (тег и балл статьи сняты 08.11). У статьи закрытого месяца это переписало бы закрытый
+    выпуск. Тело меняется (выпуск его не показывает), а пересчёт ставится только в окне ленты: архив только на
+    просмотр. Кого пропустили, видно в отчёте."""
     from oiltech_digest import cli, network_policy
     from oiltech_digest.ingestion import body_repair
 
@@ -294,8 +294,8 @@ def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, m
 
 def test_body_repair_recount_skips_the_gate_and_articles_chosen_for_the_issue(issue, monkeypatch, capsys):
     """#134 (заметка 02.11): перерасчёт после починки тел звал гейт и переписывал статьи выпуска. Теперь он идёт тем
-    же путём, что пересчёт после полного текста: суть, тег и балл без гейта (решение ленты дальше за «Отбором»), мимо
-    выбранного «в дайджест» и черновика выпуска."""
+    же путём, что пересчёт после полного текста: только суть (решение ленты за «Отбором», тег и балл статьи сняты
+    08.11), мимо выбранного «в дайджест» и черновика выпуска."""
     from oiltech_digest import cli, network_policy
     from oiltech_digest.db import marks
     from oiltech_digest.ingestion import body_repair
@@ -325,4 +325,4 @@ def test_body_repair_recount_skips_the_gate_and_articles_chosen_for_the_issue(is
         queued = [(row[0]["article_ids"], row[0].get("only")) for row in conn.execute(
             "SELECT payload_json FROM background_jobs WHERE kind = 'process_articles' ORDER BY id"
         ).fetchall()]
-    assert queued == [([plain], ["summary", "tagging", "scoring"])]
+    assert queued == [([plain], ["summary"])]
