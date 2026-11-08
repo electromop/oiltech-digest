@@ -112,7 +112,7 @@ SOURCE_DISCOVERY_MAX_ITERATIONS="${SOURCE_DISCOVERY_MAX_ITERATIONS:-3}"
 SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS="${SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS:-4}"
 SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES="${SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES:-100}"
 SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS="${SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS:-100}"
-# Прогон радара — только суточный шаг (enqueue-daily-signal-discovery): периодический шаг прежней цепочки снят 08.11.
+# Прогон радара ставит только суточный шаг (enqueue-daily-signal-discovery): периодический шаг прежней цепочки снят 08.11.
 SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 # Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
 # включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from oiltech_digest import api
 from oiltech_digest.db import repository
 from oiltech_digest.db import marks
+from oiltech_digest.ingestion.normalize import url_key
 from oiltech_digest.processing import external_ai, reprints
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
@@ -124,8 +125,8 @@ def _radar_card(key, title, *, category=None, url=None, score=60, **extra):
 
 
 def _finding(key, title, url, *, company=""):
-    """Находка поиска радара — тема с одной находкой, как её отдаёт воркер ядру (_finding_candidate): заголовок
-    страницы и ссылка, черновая компания модели поиска — в ссылке."""
+    """Находка поиска радара: тема с одной находкой, как её отдаёт воркер ядру (_finding_candidate): заголовок
+    страницы и ссылка, черновая компания модели поиска лежит в ссылке."""
     signal = {"title": title, "theme": DRILLING, "summary": "", "companies": [], "maturity": "watch", "score": 0,
               "signal_key": key, "evidence_count": 1,
               "evidence": [{"source_url": url, "title": title, "raw_payload": {"research_title": title,
@@ -197,16 +198,20 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
 
 
 def test_radar_finding_with_the_address_of_a_feed_article_is_no_new_card(user):
-    # Адрес публикации уникален: ссылку держит кто-то один. Находка с адресом статьи сбора — не новый материал
+    # Адрес публикации уникален: ссылку держит кто-то один. Находка с адресом статьи сбора не новый материал
     # (#138): карточки радара нет, в итоге задачи ссылка «уже в сборе».
     article = _article(9)
+    with repository.get_connection() as conn:
+        # Ключ адреса статьи, как его пишет сбор (insert_article): по нему ядро узнаёт ссылку из сбора.
+        conn.execute("UPDATE articles SET url_key = %s WHERE id = %s", (url_key("https://feed.example/9"), article))
+        conn.commit()
     _process(article)
 
     result = _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
 
     assert repository.signal_key_owners(["leak"]) == {}
     assert [item["url"] for item in result["topic_results"][0]["already_collected"]] == ["https://feed.example/9"]
-    # Сигнал ленты остаётся в витрине «бизнес» по своей статье, и статья — по-прежнему его публикация.
+    # Сигнал ленты остаётся в витрине «бизнес» по своей статье, и статья по-прежнему его публикация.
     (feed_card,) = _business(user)
     assert feed_card["origin_article_id"] == article
     assert [item["source_url"] for item in feed_card["evidence"]] == ["https://feed.example/9"]

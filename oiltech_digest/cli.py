@@ -3868,12 +3868,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_enqueue_signals = sub.add_parser(
         "enqueue-signal-discovery",
-        help="поставить прогон радара в очередь: поиск GPT, находки решает «Отбор»; проверка — с --no-offline",
+        help="поставить прогон радара в очередь: поиск GPT, находки решает «Отбор»; проверка с --no-offline",
     )
     p_enqueue_signals.add_argument("--topic", default=None)
     p_enqueue_signals.add_argument("--days", type=int, default=14)
-    p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
-                                   help="без «Дедупа» и на ядре РФ, где OpenAI отвечает 403; рабочий прогон — --no-offline")
+    p_enqueue_signals.add_argument(
+        "--offline", action=argparse.BooleanOptionalAction, default=True,
+        help="без «Дедупа» и на ядре РФ, где OpenAI отвечает 403; рабочий прогон: --no-offline")
     p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
     p_enqueue_signals.set_defaults(func=cmd_enqueue_signal_discovery)
 

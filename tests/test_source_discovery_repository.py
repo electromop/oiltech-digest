@@ -384,7 +384,7 @@ def test_signal_training_example_links_generation_input_and_feedback(isolated_db
         trigger="signal_discovery",
         background_job_id=None,
     )
-    # Обучающий пример судьи прежней цепочки — история: с 08.11 новых нет, таблица и выгрузка остаются.
+    # Обучающий пример судьи прежней цепочки (история): с 08.11 новых нет, таблица и выгрузка остаются.
     with repository.get_connection() as conn:
         example_id = conn.execute(
             """

@@ -70,7 +70,7 @@ def test_any_page_error_keeps_candidate_with_snippet(monkeypatch):
 
 
 def test_fetch_full_text_reads_the_publisher_page_with_the_top_up(monkeypatch):
-    # Страница — условие находки: после запроса идёт добор (PDF, ядро РФ, браузер), страница-список — слабый заголовок.
+    # Страница нужна находке: после запроса идёт добор (PDF, ядро РФ, браузер), у страницы-списка слабый заголовок.
     asked = []
     monkeypatch.setattr(publisher_page, "read", lambda url, title, **kwargs: asked.append((url, title, kwargs)) or {
         "ok": True, "raw_text": "текст", "title": title, "fetcher": "core"})
@@ -160,7 +160,7 @@ def test_config_keeps_explicit_zero_and_takes_core_settings_for_missing(monkeypa
     missing = signal_discovery.config_from_payload({})
 
     assert (zero.research_limit, zero.research_days) == (0, 0)
-    # Задача, поставленная до #138, настроек поиска не несёт — берёт настройки ядра в момент выдачи.
+    # Задача, поставленная до #138, настроек поиска не несёт и берёт настройки ядра в момент выдачи.
     assert (missing.days, missing.research_limit, missing.research_days) == (14, 12, 14)
 
 
@@ -260,7 +260,7 @@ def test_bare_compose_up_starts_only_core_services():
 
 
 def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):
-    """Тексты страниц едут в находках; в блоке web_search темы — только счётчики."""
+    """Тексты страниц едут в находках; в блоке web_search темы только счётчики."""
     page = {**_web_item("https://example.com/a"), "extracted_fact": "Contract signed for oil and gas drilling automation."}
     monkeypatch.setattr(
         signal_discovery,

@@ -145,7 +145,7 @@ function lastListQuery(): SignalQuery {
   return vi.mocked(listSignals).mock.lastCall?.[0] ?? {};
 }
 
-// Прогон 27.09 в 07:15 МСК (04:15 UTC): поиск GPT не ответил во всех темах. Причина — первая ошибка поиска, как её
+// Прогон 27.09 в 07:15 МСК (04:15 UTC): поиск GPT не ответил во всех темах. Причина: первая ошибка поиска, как её
 // записал сервер.
 const FIRST_ERROR = "AIClientError: OpenAI API error 429: Rate limit reached";
 const failedEverywhere: SignalSearchHealth = {
@@ -183,7 +183,7 @@ describe("SignalRadarPage", () => {
     expect(screen.getByText(/Почему интересно · 91/)).toBeInTheDocument();
   });
 
-  it("админ видит плашку: поиск не ответил во всех темах, причина — текст сервера", async () => {
+  it("админ видит плашку: поиск не ответил во всех темах, причина в тексте сервера", async () => {
     vi.mocked(getSignalSearchHealth).mockResolvedValue({ search_health: failedEverywhere });
 
     renderRadar(true);
@@ -196,7 +196,7 @@ describe("SignalRadarPage", () => {
     expect(screen.getByRole("status")).toHaveClass("archiveNotice");
   });
 
-  it("админ видит плашку и при частичном сбое, а без текста ошибки — без скобок", async () => {
+  it("админ видит плашку и при частичном сбое, а без текста ошибки без скобок", async () => {
     vi.mocked(getSignalSearchHealth).mockResolvedValue({
       search_health: { ...failedEverywhere, status: "ok", failed: 1, signals: 4, first_error: null },
     });

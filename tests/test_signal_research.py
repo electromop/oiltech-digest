@@ -1,4 +1,4 @@
-"""Поиск радара («режим ChatGPT»): находки темы — один вызов модели со встроенным поиском OpenAI. Поиск только
+"""Поиск радара («режим ChatGPT»): находки темы: один вызов модели со встроенным поиском OpenAI. Поиск только
 находит: по смыслу не отсеивает ничего, остаются технические проверки (#131)."""
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def test_material_without_a_link_or_a_title_is_dropped_with_a_reason(event):
 
 
 @pytest.mark.parametrize("event", [
-    # Дата модели вне периода и её нет вовсе: дата — черновые данные, старое событие решает «Отбор» по тексту.
+    # Дата модели вне периода и её нет вовсе: дата модели черновая, старое событие решает «Отбор» по тексту.
     _event(event_date="2025-01-15"),
     _event(event_date=""),
     # «Не технология» по оценке поиска и технология не названа: категорию ставит «Отбор».
@@ -109,8 +109,8 @@ def test_model_failure_is_a_status_not_a_crash():
 
 
 def test_only_a_finding_with_its_publisher_page_goes_on():
-    """Во вход «Отбора» идёт текст издателя: ссылка без страницы — отсев, даже если адрес из найденного поиском;
-    выдуманная ссылка и страница-список — тоже. Сводка модели остаётся в summary_ru рядом с текстом страницы."""
+    """Во вход «Отбора» идёт текст издателя: ссылка без страницы уходит в отсев, даже если адрес из найденного поиском;
+    выдуманная ссылка и страница-список тоже. Сводка модели остаётся в summary_ru рядом с текстом страницы."""
     title = "SLB wins Aramco integrated well construction contracts"
     fetched = {"source_url": "https://a.example/1", "title": title, "summary_ru": "текст страницы",
                "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": True,
@@ -155,7 +155,7 @@ def test_run_searches_with_gpt_and_a_finding_without_its_page_is_a_search_drop(m
     topic = run["topics"][0]
     assert topic["web_search"]["provider"] == "openai_web_search"
     assert topic["web_search"]["research"]["events"] == 1
-    # Страница не открылась, хотя адрес из найденного: «Отбору» нечего дать — находка уходит в технический отсев.
+    # Страница не открылась, хотя адрес из найденного: «Отбору» нечего дать, находка уходит в технический отсев.
     assert topic["candidates"] == []
     [dropped] = topic["filtered_findings"]
     assert (dropped["stage"], dropped["reason"]) == ("search", signal_research.PAGE_NOT_FETCHED)

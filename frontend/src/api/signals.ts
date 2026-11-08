@@ -137,7 +137,7 @@ export function updateSignal(signalId: number, payload: SignalPatch) {
   });
 }
 
-// Здоровье поиска последнего ежедневного прогона — отдаётся только админу (/api/signals/search-health): в скольких
+// Здоровье поиска последнего ежедневного прогона, только админу (/api/signals/search-health): в скольких
 // темах поиск GPT не ответил и первая ошибка (signal_discovery._search_health).
 export type SignalSearchHealth = {
   run_id: number;

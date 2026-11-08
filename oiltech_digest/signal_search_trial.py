@@ -54,7 +54,7 @@ def priced(model: str) -> bool:
 def plan(*, since: date, until: date, per_topic: int | None = None, model: str | None = None,
          reasoning: str | None = None, otbor_model: str | None = None, otbor_reasoning: str | None = None
          ) -> dict[str, Any]:
-    """Что прогон сделает: темы (все, и рынок тоже), период, модели и потолок. Без годных моделей — отказ."""
+    """Что прогон сделает: темы (все, и рынок тоже), период, модели и потолок. Без годных моделей отказ."""
     if until < since:
         raise TrialError(f"период пуст: {since.isoformat()} позже {until.isoformat()}")
     model = (model or config.SIGNAL_RESEARCH_MODEL).strip()

@@ -1,10 +1,10 @@
 """Сбой поиска радара виден админу.
 
-23–27.09 поиск (тогда Brave, 402: исчерпан месячный лимит) не отвечал во всех 13 темах: сигналов 0,
+23-27.09 поиск (тогда Brave, 402: исчерпан месячный лимит) не отвечал во всех 13 темах: сигналов 0,
 а задача и прогон — ok, и пять дней этого никто не заметил. В итог темы шёл только
 web_status, причина терялась.
 
-Теперь итог темы хранит первую ошибку поиска GPT коротко, прогон — здоровье поиска, и это
+Теперь итог темы хранит первую ошибку поиска GPT коротко, прогон хранит здоровье поиска, и это
 одинаково на пути на месте и через воркер NL. Статус ЗАДАЧИ не меняется: его читает
 правило «ежедневный прогон уже ставили в эти сутки». Здоровье отдаётся только админу."""
 
@@ -30,7 +30,7 @@ FIRST_ERROR = f"AIClientError: {RATE_LIMIT}"
     ("web_search", "expected"),
     [
         ({"status": "error", "research": {"status": "error", "error": FIRST_ERROR}}, FIRST_ERROR),
-        # Длинный текст ошибки на экране админа — коротко.
+        # Длинный текст ошибки на экране админа обрезан.
         ({"status": "error", "research": {"status": "error", "error": "AIClientError: " + "x" * 400}},
          ("AIClientError: " + "x" * 400)[:157] + "..."),
         # Поиск не отвечал, а текста нет: статус темы.
@@ -45,7 +45,7 @@ def test_topic_summary_keeps_first_search_error_short(web_search, expected):
 
 
 class _Search:
-    """Подставной поиск GPT: answer(тема) — список событий или исключение."""
+    """Подставной поиск GPT: answer(тема) отдаёт список событий или исключение."""
 
     def __init__(self, answer):
         self.answer = answer
@@ -64,7 +64,7 @@ class _Search:
 def _search_answers(monkeypatch, answer) -> _Search:
     search = _Search(answer)
     monkeypatch.setattr(signal_research, "make_client", lambda offline=False: search)
-    # Повтор поиска после сбоя без паузы: в проде пауза — от обрыва сети на секунду.
+    # Повтор поиска после сбоя без паузы: в проде пауза спасает от обрыва сети на секунду.
     monkeypatch.setattr(signal_research, "RESEARCH_RETRY_PAUSE_SECONDS", 0)
     return search
 

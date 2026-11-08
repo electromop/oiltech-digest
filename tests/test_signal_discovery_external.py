@@ -82,7 +82,7 @@ def _take_database_away(monkeypatch):
 
 
 class _Search:
-    """Подставной поиск GPT: находки темы — новая буровая и уже разобранная ссылка. Промпты запоминает."""
+    """Подставной поиск GPT: находки темы: новая буровая и уже разобранная ссылка. Промпты запоминает."""
 
     EVENTS = [
         {"title": "Operator deploys closed-loop drilling automation on 40 wells", "company": "Operator",
@@ -120,7 +120,7 @@ def test_worker_run_gets_tags_memory_and_reviewed_urls_from_snapshot(monkeypatch
     result = signal_discovery.process_external_payload(payload, heartbeat=lambda: beats.append(1))
 
     json.dumps(result)  # уходит ядру по HTTP
-    # Ключи тематики из снимка тегов попали в промпт поиска, ОС экспертов — нет (граница данных О-7).
+    # Ключи тематики из снимка тегов попали в промпт поиска, ОС экспертов не попала (граница данных О-7).
     [prompt] = search.prompts
     assert "Ключевые слова: бурение, closed-loop drilling" in prompt
     assert "2026 closed-loop drilling automation oil gas" not in prompt
@@ -142,7 +142,8 @@ def test_core_applies_external_result_and_records_generation_run(isolated_db, mo
     )
     finding = {"title": "Operator deploys closed-loop drilling", "theme": DRILLING, "summary": "", "companies": [],
                "maturity": "watch", "score": 0, "signal_key": "k1", "evidence_count": 1,
-               "evidence": [{"source_url": "https://new.example/rig", "title": "Operator deploys closed-loop drilling"}]}
+               "evidence": [{"source_url": "https://new.example/rig",
+                             "title": "Operator deploys closed-loop drilling"}]}
     research = {"status": "ok", "events": 2, "evidence_count": 1, "web_search_calls": 2, "attempts": 1,
                 "fulltext": {"attempted": 2, "fetched": 1, "too_short": 0, "failed": 1, "via": {}, "pdf": 0}}
     result = {
@@ -163,7 +164,7 @@ def test_core_applies_external_result_and_records_generation_run(isolated_db, mo
     summary = signal_discovery.apply_external_result(result, job_id=55)
 
     assert created["background_job_id"] == 55
-    # Находка ждёт «Отбора»; технический отсев поиска — карточкой «Отсеяно» в разделах «Поиск → …».
+    # Находка ждёт «Отбора»; технический отсев поиска лежит карточкой «Отсеяно» в разделах «Поиск → …».
     with repository.get_connection() as conn:
         stored = {key: (selector, stage)
                   for key, selector, stage in conn.execute("SELECT signal_key, selector, filter_stage FROM signals")}
@@ -210,7 +211,8 @@ def test_external_worker_handles_signal_discovery_kind(monkeypatch):
     )
     client = _FakeClient()
 
-    external_worker._handle_job(client, {"id": 1, "kind": "signal_discovery", "payload": {"config": {"offline": False}}})
+    external_worker._handle_job(client, {"id": 1, "kind": "signal_discovery",
+                                         "payload": {"config": {"offline": False}}})
 
     assert client.failed == []  # прежде: Unsupported external job kind: signal_discovery
     assert client.completed == [{"signal_discovery": True, "run": {"topics": []}, "config": {"offline": False}}]

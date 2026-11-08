@@ -2996,7 +2996,8 @@ def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
     )
     client = TestClient(api.app)
 
-    # Прогону радара нужна сборка NL нынешнего контракта: старая прогнала бы прежнюю цепочку (contract.required_contract).
+    # Прогону радара нужна сборка NL нынешнего контракта: старая прогнала бы прежнюю цепочку
+    # (contract.required_contract).
     response = client.post(
         "/api/external-worker/claim",
         headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},

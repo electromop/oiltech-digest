@@ -328,8 +328,8 @@ DEFAULT_RADAR_TOPICS = [*DEFAULT_RADAR_TOPICS, *BUSINESS_RADAR_TOPICS]
 class SignalDiscoveryConfig:
     topic: str | None = None
     days: int = 14
-    # Офлайн — без «Дедупа» прогона (модель дедупа не нужна), задача идёт на ядре РФ. Поиск GPT зовётся и тогда, а с
-    # РФ-адреса OpenAI отвечает 403: проверка радара — только через очередь с --no-offline.
+    # Офлайн: без «Дедупа» прогона (модель дедупа не нужна), задача идёт на ядре РФ. Поиск GPT зовётся и тогда, а с
+    # РФ-адреса OpenAI отвечает 403: проверка радара только через очередь с --no-offline.
     offline: bool = True
     dry_run: bool = True
     background_job_id: int | None = None
@@ -354,10 +354,10 @@ def seed_default_radar_topics() -> int:
 
 
 # Разведка разрезана на три слоя, как остальные ИИ-стадии (см. external_ai):
-#   1. build_discovery_snapshot — ядро читает базу: темы, разобранные ссылки, карточки радара и сигналы ленты для
+#   1. build_discovery_snapshot. Ядро читает базу: темы, разобранные ссылки, карточки радара и сигналы ленты для
 #      «Дедупа», ссылки и сайты сбора, (для воркера) теги и память ОС;
-#   2. run_discovery — ни одного обращения к базе: поиск GPT, докачка страниц, технические проверки, «Дедуп»;
-#   3. apply_discovery — ядро пишет находки, технический отсев поиска и склейки «Дедупа».
+#   2. run_discovery. Ни одного обращения к базе: поиск GPT, докачка страниц, технические проверки, «Дедуп»;
+#   3. apply_discovery. Ядро пишет находки, технический отсев поиска и склейки «Дедупа».
 # Раньше всё шло одной функцией с базой внутри, и маршрут «через внешний воркер»
 # (ca23016) упирался в воркер без базы и без этого вида задач: с 13.09 радар не
 # отработал по расписанию ни разу — 134 запуска, все 403 с РФ-адреса.
@@ -365,7 +365,7 @@ def seed_default_radar_topics() -> int:
 # Теги для прогона без базы. None — читать из repository, как на ядре.
 _TAGS_SNAPSHOT: ContextVar[list[dict[str, Any]] | None] = ContextVar("signal_discovery_tags", default=None)
 # Расход ИИ прогона по стадиям (поиск и «Дедуп»): копится на NL, едет ядру в итоге (run.ai_usage), ядро пишет в
-# ai_processing_runs — экран «Статистика» видит радар отдельно от ленты.
+# ai_processing_runs, и экран «Статистика» видит радар отдельно от ленты.
 _USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("signal_discovery_usage", default=None)
 
 
@@ -395,7 +395,7 @@ def _jsonable(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
-# Сутки радара — по Москве: дата события из будущего отбрасывается по московскому дню.
+# Сутки радара по Москве: дата события из будущего отбрасывается по московскому дню.
 RADAR_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -521,7 +521,7 @@ def _run_discovery_topics(
             fresh = [item for item in evidence if _normalize_url_for_key(str(item.get("source_url") or "")) not in known_urls]
             clusters = _cluster_evidence(fresh)
             research = web_search.get("research") or {}
-            # Что не дошло до находки — технический отсев поиска. Ядро сохранит его карточками «Отсеяно»: эксперт
+            # Технический отсев поиска до находки не доходит. Ядро сохранит его карточками «Отсеяно»: эксперт
             # просматривает всё, а не только найденное.
             filtered_findings = [{"stage": "search", **item}
                                  for item in [*(research.get("dropped") or []), *(research.get("unverified") or [])]]
@@ -563,7 +563,7 @@ def _dedupe_run(
 ) -> dict[str, Any]:
     """Сверить находки прогона между собой, с сохранёнными карточками радара и с сигналами ленты.
 
-    Решение кладётся в находку (duplicate_of) и в existing_merges — пишет их ядро."""
+    Решение кладётся в находку (duplicate_of) и в existing_merges, пишет их ядро."""
     if config.offline:
         return {"skipped": "offline"}
     nodes: list[dict[str, Any]] = []
@@ -629,7 +629,7 @@ def _dedupe_run(
 
 def _finding_dedup_view(signal: dict[str, Any]) -> dict[str, Any]:
     """Что «Дедуп» знает о находке поиска: сигнал несёт только заголовок страницы (#131), а черновые данные модели
-    поиска лежат в её ссылках — русский заголовок, компании и суть. Правилу пар и судье они нужны: без них пара
+    поиска лежат в её ссылках: русский заголовок, компании и суть. Правилу пар и судье они нужны: без них пара
     Halliburton и Keystone прогона 51351 с английскими заголовками сошлась на 0,18 при пороге 0,25, а пара с русской
     статьёй ленты не сошлась бы вовсе (замер 04.11). В сигнал и во вход «Отбора» они не идут."""
     payloads = [item.get("raw_payload") or {} for item in signal.get("evidence") or []]
@@ -714,7 +714,7 @@ def apply_discovery(
         if merged_now:
             merged += 1
         elif not config.dry_run:
-            # Главной карточки нет (удалена, не записана, скрылась, пока шёл прогон) — находку не теряем: она идёт
+            # Главной карточки нет (удалена, не записана, скрылась, пока шёл прогон): находку не теряем, она идёт
             # своей карточкой в «Отбор» и в итог своей темы (пробный прогон ставит «Отбор» по этому списку).
             signal_id = _store_otbor_finding(config, candidate)
             candidate["signal"]["id"] = signal_id
@@ -756,9 +756,9 @@ def _key_owners(config: SignalDiscoveryConfig, run: dict[str, Any]) -> dict[str,
 
 
 def _reconcile_with_owner(candidate: dict[str, Any], owner: dict[str, Any] | None) -> None:
-    """Находка с ключом уже сохранённой карточки — это она же, найденная снова.
+    """Находка с ключом уже сохранённой карточки: это она же, найденная снова.
 
-    Скрытая дублем — повтор идёт в её главную: иначе запись ушла бы в скрытую строку, и
+    Скрытая дублем: повтор идёт в её главную, иначе запись ушла бы в скрытую строку, и
     сигнал пропал бы с экрана. Разобранная человеком остаётся собой: судья «Дедупа» не
     переспорит разбор, и её ссылка не уедет в чужую карточку. Видимая неразобранная, которую
     судья счёл дублем другой, скрывается вместе с ним."""
@@ -774,10 +774,10 @@ def _reconcile_with_owner(candidate: dict[str, Any], owner: dict[str, Any] | Non
 
 
 def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any]) -> int | None:
-    """Находка поиска (#131) — сигнал радара с меткой пути «Отбора»: пока решения нет, его не видно нигде, и решит
-    его «Отбор» (шаг планировщика). Найденная снова (тот же ключ) только отмечается: решённое «Отбором» или прежними
-    правилами второй раз не решается и не оплачивается. Все ссылки уже у видимых карточек — отмечается карточка,
-    которая их держит."""
+    """Находка поиска (#131) становится сигналом радара с меткой пути «Отбора»: пока решения нет, его не видно нигде,
+    и решит его «Отбор» (шаг планировщика). Найденная снова (тот же ключ) только отмечается: решённое «Отбором» или
+    прежними правилами второй раз не решается и не оплачивается. Все ссылки уже у видимых карточек: отмечается
+    карточка, которая их держит."""
     if config.dry_run:
         return None
     if config.trial:
@@ -902,7 +902,7 @@ def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
 
 
 def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) -> int:
-    """Технический отсев поиска — карточками «Отсеяно» (разделы «Поиск → …»).
+    """Технический отсев поиска пишется карточками «Отсеяно» (разделы «Поиск → …»).
 
     Ключ — по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
     найденное снова и прошедшее проверки получит свой ключ находки и пойдёт в «Отбор». Ссылку,
@@ -917,7 +917,7 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
         if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
-            # Склеенная отсеянная — событие уже найдено снова: повтор отсева её не оживляет и не
+            # Склеенная отсеянная: событие уже найдено снова, повтор отсева её не оживляет и не
             # уводит ссылку от забравшей.
             continue
         if url and _links_held_elsewhere([url], key):
@@ -927,7 +927,7 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             continue
         if url and any(owner["signal_key"] != key for owner in repository.rejected_evidence_owners([url]).values()):
             # Ссылка у забракованной судьёй или ревью прежней цепочки (история): событие разобрано
-            # дальше, а повторный отсев — не новое отсеянное. Запись забрала бы у неё ссылку и
+            # дальше, а повторный отсев не новое отсеянное. Запись забрала бы у неё ссылку и
             # оставила в «Отсеянных» пустую копию с лучшей причиной (17.10).
             continue
         signal_id = repository.upsert_signal({
@@ -966,7 +966,7 @@ def _finding_log(item: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
-    """Карточка, которой уже принадлежат ВСЕ ссылки находки, — или None.
+    """Карточка, которой уже принадлежат ВСЕ ссылки находки, или None.
 
     Своя карточка (тот же ключ) не в счёт: это обычное обновление. Если ссылки у
     нескольких карточек — берём ту, у которой их больше."""
@@ -1020,7 +1020,7 @@ def _merge_duplicate(
     held = repository.signal_evidence_urls(target_id)
     for item in signal.get("evidence") or []:
         repository.upsert_signal_evidence(target_id, item)
-    # Главная — и сигнал ленты (04.11): в её «Ходе решения» видно, откуда у неё ссылка поиска. Только когда ссылка
+    # Главной бывает и сигнал ленты (04.11): в её «Ходе решения» видно, откуда у неё ссылка поиска. Только когда ссылка
     # прибавилась: та же находка следующего прогона строку не повторяет.
     new_urls = repository.signal_evidence_urls(target_id) - held
     added = [item for item in signal.get("evidence") or [] if item.get("source_url") in new_urls]
@@ -1080,7 +1080,7 @@ def _payload_number(payload: dict[str, Any], key: str, default: Any, cast: Calla
 
 
 def config_from_payload(payload: dict[str, Any], *, background_job_id: int | None = None) -> SignalDiscoveryConfig:
-    """Параметры задачи из payload — те же умолчания, что у локального обработчика. Ключи прежней цепочки (limit,
+    """Параметры задачи из payload: те же умолчания, что у локального обработчика. Ключи прежней цепочки (limit,
     web_only, search_mode, otbor и т. п.) в задаче, поставленной до 08.11, просто не читаются."""
     return SignalDiscoveryConfig(
         topic=str(payload["topic"]) if payload.get("topic") else None,
@@ -1106,9 +1106,9 @@ class SearchSetupError(ValueError):
 
 def research_settings(*, offline: bool = False, days: int | None = None) -> dict[str, Any]:
     """Настройки поиска GPT для задачи прогона радара (#138): решение ядра в момент постановки, их и исполнит NL.
-    Офлайн-прогону — ничего: он идёт на ядре и берёт настройки ядра в момент выдачи (config_from_payload). Модель без
-    умолчания и отката: не задана, снимается 11.12.2026 (gpt-5, gpt-5-mini, gpt-5-nano) или нет уровня рассуждения —
-    отказ с причиной."""
+    Офлайн-прогону ничего не нужно: он идёт на ядре и берёт настройки ядра в момент выдачи (config_from_payload).
+    Модель без умолчания и отката: не задана, снимается 11.12.2026 (gpt-5, gpt-5-mini, gpt-5-nano) или нет уровня
+    рассуждения: отказ с причиной."""
     if offline:
         return {}
     settings = {
@@ -1168,7 +1168,7 @@ def process_external_payload(payload: dict[str, Any], heartbeat: Callable[[], No
 def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool = False) -> dict[str, Any]:
     """Ядро, при завершении задачи: записать находки и вернуть компактный итог.
 
-    Полный результат (находки с текстами страниц) в result_json задачи не кладём: находки — в signals и
+    Полный результат (находки с текстами страниц) в result_json задачи не кладём: находки пишутся в signals и
     signal_evidence, в задаче остаются счётчики. Пробный ли это прогон (#138), решает задача ядра (trial), а не конфиг,
     который вернул воркер."""
     allowed = {item.name for item in fields(SignalDiscoveryConfig)}
@@ -1194,7 +1194,7 @@ def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool = 
             "topic": row["topic"],
             "web_status": web.get("status"),
             "web_error": row.get("web_error"),
-            # Чем искали и что вернул поиск, сколько страниц докачано и чем — проверка прогона (ранбук).
+            # Чем искали, что вернул поиск, сколько страниц докачано и чем: по этому проверяют прогон.
             "provider": web.get("provider"),
             "research": _research_summary(web.get("research")),
             "total_evidence": row.get("total_evidence"),
@@ -1229,7 +1229,7 @@ _SEARCH_ANSWERED = frozenset({"ok", "empty"})
 
 def _search_error_summary(web_search: dict[str, Any] | None) -> str | None:
     """Сбой поиска темы коротко. Поиск GPT кладёт его в research.error (403 ключа без web_search, обрыв сети, не
-    задана модель), а status у темы — просто «error»."""
+    задана модель), а status у темы просто «error»."""
     if not web_search:
         return None
     research_error = str((web_search.get("research") or {}).get("error") or "").strip()
@@ -1242,7 +1242,7 @@ def _search_error_summary(web_search: dict[str, Any] | None) -> str | None:
 
 
 def _research_summary(research: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Итог поиска GPT по теме — коротко, для итога задачи: счётчики, не события."""
+    """Итог поиска GPT по теме коротко, для итога задачи: счётчики, не события."""
     if not research:
         return None
     summary = {
@@ -1268,8 +1268,8 @@ def _search_failed(web_search: dict[str, Any] | None) -> bool:
 
 
 def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Здоровье поиска прогона: в скольких темах искали, во скольких поиск не ответил и первая ошибка — по ним экран
-    пишет админу. Без тем — None."""
+    """Здоровье поиска прогона: в скольких темах искали, во скольких поиск не ответил и первая ошибка: по ним экран
+    пишет админу. Без тем None."""
     searched = [row for row in topic_results if row.get("web_search")]
     if not searched:
         return None
@@ -1284,7 +1284,7 @@ def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None
 def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> None:
     """Записать прогон в signal_generation_runs — одинаково на пути на месте и через воркер.
 
-    Поиск не ответил ни в одной теме — прогон failed с понятной причиной: находок нет ни у одной
+    Поиск не ответил ни в одной теме: прогон failed с понятной причиной, находок нет ни у одной
     темы. Статус ЗАДАЧИ остаётся ok: его читает правило «ежедневный уже ставили в эти сутки»
     (background_jobs.enqueue_daily_signal_discovery). Статус прогона читают правило «раз в N
     суток» (failed не держит следующий прогон, решение владельца 04.11) и выгрузка для обучения
@@ -1307,7 +1307,7 @@ def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> N
 
 
 def _radar_client():
-    """Клиент модели для «Дедупа» радара: свой таймаут — модель с рассуждением думает дольше ленты."""
+    """Клиент модели для «Дедупа» радара: свой таймаут, модель с рассуждением думает дольше ленты."""
     client = make_client(False)
     if hasattr(client, "timeout"):
         client.timeout = app_config.SIGNAL_AI_TIMEOUT_SECONDS
@@ -1354,7 +1354,7 @@ def _radar_topics() -> list[dict]:
 def _selected_topics(topic: str | None) -> list[dict]:
     rows = _radar_topics()
     if not topic:
-        # Поиск широкий (#138): все темы, и рынок тоже — что брать, решает «Отбор».
+        # Поиск широкий (#138): все темы, и рынок тоже; что брать, решает «Отбор».
         return rows or DEFAULT_RADAR_TOPICS
     topic_l = topic.lower()
     selected = [row for row in rows if topic_l in str(row.get("name") or "").lower()]
@@ -1404,7 +1404,7 @@ def _topic_web_evidence(
     covered: list[str] | None = None,
 ) -> dict[str, Any]:
     """Находки темы: поиск GPT только находит (signal_research, #131), текст страницы хранится до предела входа
-    «Отбора» (TEXT_LIMIT, как у статьи сбора). Широкий поиск (#138): ссылка из статей сбора (collected — ключи
+    «Отбора» (TEXT_LIMIT, как у статьи сбора). Широкий поиск (#138): ссылка из статей сбора (collected: ключи
     normalize.url_key) отбрасывается до докачки страницы, сайты, которые парсер собирает целиком (covered), поиск
     получает как «уже есть, ищи дальше»."""
     heartbeat()
@@ -1424,7 +1424,7 @@ def _topic_web_evidence(
                                               heartbeat=heartbeat, feedback=feedback,
                                               model=config.research_model, reasoning=config.research_reasoning)
     heartbeat()
-    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — «Отбору». Срока на тему нет: находка без
+    # Докачка проверяет, живая ли ссылка и о том ли она; текст страницы идёт «Отбору». Срока на тему нет: находка без
     # страницы во вход агента не идёт, и срезать её по времени значило бы потерять её молча (признак продвижения
     # подаётся перед каждой страницей, аренда держится). По той же причине после запроса идёт добор (PDF, ядро РФ,
     # браузер; порядок цикла владельца 04.11), до дедупа прогона.
@@ -1619,9 +1619,9 @@ def _iso(value: Any) -> Any:
 def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None = None) -> dict[str, Any]:
     """Открыть страницу находки и достать текст издателя вместо сводки модели поиска.
 
-    Страница — условие находки: во вход «Отбора» идёт только текст издателя. Поэтому после запроса — добор (поручение
-    владельца 04.11): PDF, ядро РФ и браузер (publisher_page.read); итог несёт fetcher — чем открыта страница. Таймаут
-    одной попытки — SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS. Вынесено в отдельную функцию: тесты подменяют её
+    Страница нужна находке: во вход «Отбора» идёт только текст издателя. Поэтому после запроса идёт добор (поручение
+    владельца 04.11): PDF, ядро РФ и браузер (publisher_page.read); итог несёт fetcher, чем открыта страница. Таймаут
+    одной попытки: SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS. Вынесено в отдельную функцию: тесты подменяют её
     целиком, не трогая сеть."""
     return publisher_page.read(url, fallback_title,
                                timeout=timeout or app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS,
@@ -1635,12 +1635,12 @@ def _enrich_web_evidence_with_full_text(
     heartbeat: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Докачать страницу каждой находки: текст издателя до TEXT_LIMIT знаков (предел входа «Отбора»). В счётчиках
-    via — сколько страниц открыли ядро РФ и браузер, pdf — сколько прочитано из PDF; в находке — full_text_fetcher (и
+    via: сколько страниц открыли ядро РФ и браузер, pdf: сколько прочитано из PDF; в находке: full_text_fetcher (и
     full_text_pdf).
 
-    Любая ошибка страницы — пометка у находки (full_text_fetched = False), а не падение темы: 21.09 пустое тело (200)
-    роняло lxml ParserError сквозь весь прогон. Находку без страницы отсеет проверка поиска
-    (signal_research.verify_research_evidence). Перед каждой страницей — heartbeat: срока на тему нет, аренда держится
+    Любая ошибка страницы ставит пометку у находки (full_text_fetched = False), а не роняет тему: 21.09 пустое тело
+    (200) роняло lxml ParserError сквозь весь прогон. Находку без страницы отсеет проверка поиска
+    (signal_research.verify_research_evidence). Перед каждой страницей heartbeat: срока на тему нет, аренда держится
     признаком продвижения."""
     beat = heartbeat or (lambda: None)
     stats: dict[str, Any] = {"attempted": 0, "fetched": 0, "too_short": 0, "failed": 0,
@@ -1718,7 +1718,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _dedupe_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Одна ссылка — одна находка: другое написание адреса (схема, www, хвост, метки) — та же ссылка. Без ссылки
+    """Одна ссылка, одна находка: другое написание адреса (схема, www, хвост, метки) даёт ту же ссылку. Без ссылки
     находки нет: поиск отбрасывает такую до проверок (signal_research.NO_LINK_OR_TITLE)."""
     seen: set[str] = set()
     result = []
@@ -1732,9 +1732,9 @@ def _dedupe_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _cluster_evidence(evidence: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Находка поиска — своя группа из одной ссылки: модель поиска уже разложила материалы по событиям, а склейка
-    по словам смешала бы разные события одной компании (сигнал 71). События сводит «Дедуп» прогона. Порядок — по силе
-    источника (первоисточник выше пересказа), при равенстве — как вернул поиск."""
+    """Находка поиска идёт своей группой из одной ссылки: модель поиска уже разложила материалы по событиям, а склейка
+    по словам смешала бы разные события одной компании (сигнал 71). События сводит «Дедуп» прогона. Порядок по силе
+    источника (первоисточник выше пересказа), при равенстве как вернул поиск."""
     return [[item] for item in sorted(evidence, key=lambda item: float(item.get("strength") or 0), reverse=True)]
 
 
@@ -1755,10 +1755,11 @@ def _enforce_glossary(text: str, context: dict[str, Any], topic: str | None = No
 
 
 def _signal_key(evidence: list[dict[str, Any]]) -> str:
-    """Ключ находки — по её ссылке: та же ссылка в следующем прогоне — та же находка, найденная снова, и решённое
-    «Отбором» второй раз не решается. Формула прежняя («url:» и адрес без схемы, www и хвоста): ключи находок, заведённых
-    до 08.11, совпадают."""
-    urls = sorted({_normalize_url_for_key(str(item.get("source_url") or "")) for item in evidence if item.get("source_url")})
+    """Ключ находки по её ссылке: та же ссылка в следующем прогоне даёт ту же находку, найденную снова, и решённое
+    «Отбором» второй раз не решается. Формула прежняя («url:» и адрес без схемы, www и хвоста): ключи находок,
+    заведённых до 08.11, совпадают."""
+    urls = sorted({_normalize_url_for_key(str(item.get("source_url") or ""))
+                   for item in evidence if item.get("source_url")})
     return hashlib.sha256(f"url:{urls[0] if urls else ''}".encode("utf-8")).hexdigest()[:24]
 
 

@@ -77,7 +77,7 @@ def test_evidence_titles_count_too():
 
 
 def _run(monkeypatch, topics, page):
-    """Прогон радара без базы: поиск темы приносит одну страницу, дальше — путь находки до «Отбора»."""
+    """Прогон радара без базы: поиск темы приносит одну страницу, дальше идёт путь находки до «Отбора»."""
     monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda topic, topic_name, config, **kwargs: {
         "status": "ok", "provider": "openai_web_search", "research": {}, "evidence": [page]})
     config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True)
@@ -85,8 +85,8 @@ def _run(monkeypatch, topics, page):
 
 
 def test_finding_of_a_search_topic_gets_the_theme_of_its_content(monkeypatch):
-    """Находку про дроны и ИИ принёс поиск темы бурения: тема находки — по ключам тематик, а не тема поиска (тему из
-    13 потом ставит «Карточка», #132)."""
+    """Находку про дроны и ИИ принёс поиск темы бурения: тема находки ставится по ключам тематик, а не тема поиска
+    (тему из 13 потом ставит «Карточка», #132)."""
     page = {"source_url": "https://example.com/drones", "title": "AI drone fleet expands with machine learning",
             "extracted_fact": "Operator expands drone fleet with machine learning analytics.", "strength": 0.9}
 

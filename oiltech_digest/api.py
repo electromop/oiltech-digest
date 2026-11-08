@@ -2333,10 +2333,10 @@ def signal_memory(
 
 @app.get("/api/signals/search-health")
 def signal_search_health(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Здоровье поиска последнего ежедневного прогона радара — только админу: в скольких темах поиск GPT не ответил
+    """Здоровье поиска последнего ежедневного прогона радара, только админу: в скольких темах поиск GPT не ответил
     и первая ошибка.
 
-    23–27.09 поиск (тогда Brave) не отвечал во всех темах, задача оставалась ok, и пять дней этого никто
+    23-27.09 поиск (тогда Brave) не отвечал во всех темах, задача оставалась ok, и пять дней этого никто
     не видел. Обычный пользователь сюда не ходит (403), его экран не меняется."""
     run = repository.latest_signal_generation_run(
         payload_subset={"schedule": background_jobs.DAILY_SIGNAL_DISCOVERY_MARKER}

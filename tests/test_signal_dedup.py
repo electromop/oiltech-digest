@@ -119,7 +119,7 @@ def test_no_pairs_no_client():
 
 def _candidate(title, companies, *, key, url):
     """Находка поиска, как её отдаёт воркер (_finding_candidate): в сигнале заголовок страницы и ссылка, черновые
-    данные модели поиска (русский заголовок, компания) — в ссылке, их видит «Дедуп»."""
+    данные модели поиска (русский заголовок, компания) лежат в ссылке, их видит «Дедуп»."""
     return _otbor_finding(key, url, title, title, ", ".join(companies))["signal"]
 
 
@@ -153,7 +153,7 @@ def test_worker_marks_repeats_of_existing_and_in_run_duplicates(monkeypatch):
     json.dumps(run)  # уходит ядру по HTTP
     geo, market = run["topics"]
     assert geo["candidates"][0]["duplicate_of"] == {"signal_id": 18}  # повтор одобренного
-    assert "duplicate_of" not in geo["candidates"][1]  # главная Татнефти — найдена первой
+    assert "duplicate_of" not in geo["candidates"][1]  # главная Татнефти найдена первой
     assert market["candidates"][0]["duplicate_of"] == {"signal_key": geo["candidates"][1]["signal"]["signal_key"]}
     assert run["dedup"]["duplicates_new"] == 2 and run["dedup"]["existing_merges"] == []
 
@@ -188,7 +188,7 @@ def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(isolat
     result = _apply(run)
 
     owners = repository.signal_key_owners(["t1", "t2", "z1"])
-    assert set(owners) == {"t1"}  # новой карточки у дублей нет: главная — находка для «Отбора»
+    assert set(owners) == {"t1"}  # новой карточки у дублей нет: главная стала находкой для «Отбора»
     assert _urls(owners["t1"]["id"]) == {"https://a.example/2", "https://b.example/3"}
     assert "https://a.example/1" in _urls(zena)
     assert repository.resolve_signal_merge_root(repeat_card) == deal
@@ -203,7 +203,7 @@ def test_core_keeps_signal_when_main_card_is_gone(isolated_db):
 
     result = _apply(run)
 
-    # Главной нет: находка — своей карточкой, её решит «Отбор».
+    # Главной нет: находка идёт своей карточкой, её решит «Отбор».
     assert set(repository.signal_key_owners(["z1"])) == {"z1"} and result["all_signals"] == 1
 
 

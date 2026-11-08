@@ -305,7 +305,7 @@ SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").
 # больше: замер прогона 51351 — 135 пар ленты на 24 находки; судья gpt-6-luna — $0,00011 за пару.
 SIGNAL_DEDUP_MAX_PAIRS = int(os.environ.get("SIGNAL_DEDUP_MAX_PAIRS", "1000"))
 # Карточка, чьё событие (дата судьи прежней цепочки или «Карточки») старше этого срока, на экран не выходит.
-# Хранится — срок можно поменять без пересчёта. 0 — не скрывать по возрасту.
+# Хранится: срок можно поменять без пересчёта. 0: не скрывать по возрасту.
 SIGNAL_RADAR_MAX_EVENT_AGE_DAYS = int(os.environ.get("SIGNAL_RADAR_MAX_EVENT_AGE_DAYS", "180"))
 # «Дедуп» радара (signal_dedup.py) — модель явной настройкой без отката на модель ленты (спека #128, история 48):
 # пусто — прогон радара падает с понятной причиной до поиска, а не судит пары снимаемой 11.12.2026 gpt-5-mini.
@@ -313,7 +313,7 @@ SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip()
 SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Таймаут вызовов модели «Дедупа» радара: модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
-# Сколько вызовов судьи пар «Дедупа» идут одновременно: до 1000 пар за прогон по одному шли бы часами. 1 — по одному.
+# Сколько вызовов судьи пар «Дедупа» идут одновременно: до 1000 пар за прогон по одному шли бы часами. 1: по одному.
 SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY", "4")))
 # Модель поиска GPT (#138, спека #128) — явная настройка ядра, без умолчания и без отката: едет в задаче прогона
 # радара вместе с уровнем, потолком на тему и периодом, свои строки поиска NL не читает. Прежнее умолчание gpt-5

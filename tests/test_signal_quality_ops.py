@@ -1,4 +1,4 @@
-"""Качество радара — выкат и эксплуатация: SQL до выката, архив из CLI, прогон из CLI с настройками поиска ядра,
+"""Качество радара, выкат и эксплуатация: SQL до выката, архив из CLI, прогон из CLI с настройками поиска ядра,
 своя модель «Дедупа», расход радара на экране «Статистика»."""
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def test_cli_queues_a_radar_run_with_the_core_search_settings(monkeypatch):
 
     cli.main(["enqueue-signal-discovery", "--topic", "Бурение", "--days", "3", "--no-offline", "--dry-run"])
 
-    # Модель, уровень, потолок и период поиска — решение ядра в момент постановки (#138), NL своих не читает.
+    # Модель, уровень, потолок и период поиска решает ядро в момент постановки (#138), NL своих не читает.
     assert queued == {"topic": "Бурение", "days": 3, "offline": False, "dry_run": True,
                       "research_model": config.SIGNAL_RESEARCH_MODEL, "research_reasoning": "medium",
                       "research_limit": config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC,
@@ -160,7 +160,7 @@ def test_run_collects_ai_usage_by_stage(monkeypatch):
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
 
-    # Поиск — вызов с его поисками, «Дедуп» — пара двух находок одного события.
+    # Поиск: вызов с его поисками; «Дедуп»: пара двух находок одного события.
     usage = {row["stage"]: row for row in run["ai_usage"]}
     assert usage == {
         "radar_research": {"stage": "radar_research", "model": "gpt-5-test", "calls": 1, "input_tokens": 17000,

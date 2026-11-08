@@ -109,7 +109,7 @@ _PLACEHOLDER_COMPANY = re.compile(r"не указ|упомин|источник|
 
 def wait_beating(pool: ThreadPoolExecutor, futures: Iterable[Future], beat: Callable[[], None]) -> None:
     """Ждать вызовы пула судьи пар, подавая признак продвижения аренды NL из основного
-    потока — не из рабочих.
+    потока, а не из рабочих.
 
     beat бросает StopRequested или LeaseLost — тогда ещё не начатые вызовы снимаются: выход
     из `with` ждёт пул целиком (shutdown(wait=True)) и иначе оплатил бы всю очередь для

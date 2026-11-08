@@ -95,7 +95,7 @@ def test_finding_whose_link_belongs_to_another_card_does_not_create_an_empty_car
 
 
 def test_finding_with_the_key_of_a_stored_card_is_only_marked_found_again(isolated_db):
-    # Та же ссылка — тот же ключ: решённое второй раз не решается, ссылки карточки не меняются.
+    # Та же ссылка даёт тот же ключ: решённое второй раз не решается, ссылки карточки не меняются.
     owner = repository.upsert_signal(_row("owner", "SLB: цифровые инструменты"))
     repository.upsert_signal_evidence(owner, {"source_url": URL, "title": "t"})
 

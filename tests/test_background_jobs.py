@@ -173,7 +173,7 @@ def test_enqueue_daily_signal_discovery_creates_an_ai_job_with_the_core_search_s
     assert captured["queue_name"] == "ai"
     assert captured["capability"] == "openai"
     assert captured["max_attempts"] == 1
-    # Модель, уровень, потолок и период поиска GPT — решение ядра в момент постановки (#138).
+    # Модель, уровень, потолок и период поиска GPT решает ядро в момент постановки (#138).
     assert captured["payload"] == {
         "topic": None, "days": 3, "offline": False, "dry_run": False, "trigger": "scheduler_daily",
         "schedule": "daily_signal_discovery", "research_model": background_jobs.config.SIGNAL_RESEARCH_MODEL,

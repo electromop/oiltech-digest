@@ -266,7 +266,7 @@ function scoreTone(signal: Signal): string {
 }
 
 // Плашка только для админа: 23–27.09 поиск не отвечал ни в одной теме, задача была «ok»,
-// и пять дней этого никто не видел. После прогона без сбоев плашки нет. Причина — короткий
+// и пять дней этого никто не видел. После прогона без сбоев плашки нет. Причина: короткий
 // текст сервера (первая ошибка поиска GPT).
 function searchHealthNotice(health: SignalSearchHealth | null): string {
   if (!health || !health.topics || !health.failed) return "";

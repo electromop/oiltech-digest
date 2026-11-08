@@ -1,9 +1,9 @@
-"""Качество радара — замечания Виктора 29.09 и правила показа.
+"""Качество радара: замечания Виктора 29.09 и правила показа.
 
 «75% — это бизнес-сигналы», «оценки завышены», «в одной карточке могут быть разные темы»,
 «нашёл очень старый сигнал». До 08.11 категорию, дату события, смешанные события и связь с
 нефтесервисом ставил судья прежней цепочки; его поля в базе остались, и правила показа их читают
-(история). Отсеянное — карточкой «Отсеяно»: технический отсев поиска и брак судьи прежней цепочки.
+(история). Отсеянное лежит карточкой «Отсеяно»: технический отсев поиска и брак судьи прежней цепочки.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def test_unknown_or_future_event_date_is_none(value):
 
 
 def test_every_topic_is_searched_the_market_too_and_an_explicit_topic_picks_one(monkeypatch):
-    # Поиск широкий (#138): тема рынка ищется, что брать — решает «Отбор».
+    # Поиск широкий (#138): тема рынка ищется, что брать, решает «Отбор».
     monkeypatch.setattr(signal_discovery, "_radar_topics", lambda: [{"name": DRILLING}, {"name": MARKET}])
 
     assert [row["name"] for row in signal_discovery._selected_topics(None)] == [DRILLING, MARKET]
@@ -337,7 +337,7 @@ def _filtered():
 
 
 def _judge_rejected(key, title, urls, *, stage="judge", reason="обзор без события"):
-    """Брак судьи или ревью пачки прежней цепочки (до 08.11) — карточка «Отсеяно» в базе как история: её ссылки
+    """Брак судьи или ревью пачки прежней цепочки (до 08.11): карточка «Отсеяно» в базе как история, её ссылки
     держит она, а не повторный отсев поиска (этапы идут только вперёд, 17.10)."""
     signal_id = repository.upsert_signal({"signal_key": key, "title": title, "title_ru": title, "theme": DRILLING,
                                           "maturity": "reject", "score": 0, "filter_stage": stage,
@@ -361,7 +361,8 @@ def test_judge_and_batch_rejects_of_the_old_chain_stay_filtered_with_their_reaso
 
 def test_search_drops_are_kept_with_reason(isolated_db):
     _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
-        {"stage": "search", "title": "ProPetro: контракт на 230 МВт", "reason": "страница не открылась, текста издателя нет",
+        {"stage": "search", "title": "ProPetro: контракт на 230 МВт",
+         "reason": "страница не открылась, текста издателя нет",
          "url": "https://example.com/propetro", "summary": "контракт", "event_date": "2026-09-20"},
         {"stage": "search", "title": "Событие с битой ссылкой", "reason": "нет ссылки или заголовка", "url": ""},
     ]}])
@@ -380,7 +381,7 @@ def test_filtered_card_does_not_hold_its_link_and_stays_out_of_dedup(isolated_db
     assert repository.visible_evidence_owners(["https://example.com/x"]) == {}
     assert repository.list_signals_for_dedup() == []
 
-    # Найдено снова и принято — ссылка переходит к принятой карточке.
+    # Найдено снова и принято: ссылка переходит к принятой карточке.
     accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
                                          "signal_category": "technology"})
     repository.upsert_signal_evidence(accepted, {"source_url": "https://example.com/x", "title": "x"})
@@ -496,7 +497,7 @@ def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_du
 def test_link_rejected_by_the_old_chain_then_dropped_by_the_search_stays_with_the_rejected_card(
         isolated_db, stage, reason):
     # 17.10: судья или ревью пачки забраковали u, потом поиск отсеял ту же u. Повтор забирал ссылку себе, и пустой
-    # в «Отсеянных» оставалась забракованная — с лучшей причиной. Этапы идут только вперёд, и с поиском GPT тоже.
+    # в «Отсеянных» оставалась забракованная, с лучшей причиной. Этапы идут только вперёд, и с поиском GPT тоже.
     url = "https://example.com/u"
     rejected = _judge_rejected("judge-u", "Событие", [url], stage=stage,
                                reason=reason.split(": ", 1)[1])
@@ -517,10 +518,10 @@ def _owner_stages():
 def test_any_order_of_drops_and_accepts_over_old_rejects_leaves_no_empty_copy_and_no_ring(isolated_db):
     # Доказательство «этапы идут только вперёд» (17.10) на нынешнем пути: брак судьи и ревью прежней цепочки лежит в
     # базе историей, а тридцать шагов отсева поиска и приёма в случайном порядке идут над скользящим окном из трёх
-    # ссылок — принятая держит свои ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в
+    # ссылок: принятая держит свои ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в
     # «Отсеянных» нет пустой копии, ссылка забракованной не ушла к отсеянной поиском, главная любого дубля не склеена
-    # (группа в один шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из обоих списков), ссылки
-    # принятого — у видимых карточек.
+    # (группа в один шаг, кольца нет), ни одна ссылка не у дубля (событие не пропадает из обоих списков), ссылки
+    # принятого лежат у видимых карточек.
     rng = random.Random(1017)
     urls = [f"https://example.com/{n}" for n in range(12)]
     _judge_rejected("old-judge", "Событие", urls[1:3])
@@ -591,7 +592,8 @@ def test_overrated_counts_as_approval(isolated_db):
 def test_stored_finding_and_search_drop_carry_their_decision_log(isolated_db):
     finding = {"signal": {"title": "SLB внедрила MPD на Ямале", "theme": DRILLING, "summary": "", "companies": [],
                           "maturity": "watch", "score": 0, "signal_key": "ok", "evidence_count": 1,
-                          "evidence": [{"source_url": "https://slb.example/mpd", "title": "SLB внедрила MPD на Ямале"}]}}
+                          "evidence": [{"source_url": "https://slb.example/mpd",
+                                        "title": "SLB внедрила MPD на Ямале"}]}}
 
     _apply_run([{"topic": DRILLING, "candidates": [finding], "filtered_findings": [
         {"stage": "search", "title": "Контракт ProPetro", "reason": "страница не открылась, текста издателя нет",
