@@ -119,6 +119,18 @@ def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
     return {"enqueued": True, "job": job, "lookback_hours": lookback_hours}
 
 
+# Задачи агента источников. Пока агент выключен в коде (config.SOURCE_AGENT_DISABLED), ядро их не ставит и не
+# исполняет: поставленная раньше или мимо enqueue (команды CLI пишут задачу в базу сами) падает с причиной без повтора.
+SOURCE_AGENT_KINDS = frozenset({"source_discovery_plan", "source_discovery_loop", "discover_source_candidates"})
+
+
+def source_agent_refusal(kind: str) -> str | None:
+    """Причина отказа, если задача принадлежит выключенному агенту источников; иначе None."""
+    if kind in SOURCE_AGENT_KINDS and config.SOURCE_AGENT_DISABLED:
+        return config.SOURCE_AGENT_DISABLED_MESSAGE
+    return None
+
+
 def enqueue(
     kind: str,
     payload: dict[str, Any] | None = None,
@@ -132,6 +144,9 @@ def enqueue(
     """Create a persistent job and submit it to the local executor."""
     if kind not in _HANDLERS:
         raise ValueError(f"Unknown background job kind: {kind}")
+    refusal = source_agent_refusal(kind)
+    if refusal:
+        raise ValueError(refusal)
     job = repository.create_background_job(
         kind,
         payload or {},
@@ -245,6 +260,11 @@ def _execute(job: dict[str, Any], *, mark_running: bool) -> None:
     handler = _HANDLERS.get(job["kind"])
     if handler is None:
         repository.fail_background_job(job_id, f"Unknown background job kind: {job['kind']}")
+        return
+    refusal = source_agent_refusal(job["kind"])
+    if refusal:
+        # Без retry_delay_seconds задача падает окончательно, а не встаёт в очередь снова.
+        repository.fail_background_job(job_id, refusal)
         return
 
     try:

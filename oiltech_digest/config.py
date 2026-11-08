@@ -257,6 +257,13 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 
 # --- Source discovery ---
+# Агент источников выключен в коде (решение владельца 08.11: «Он нам не нужен»; код не удалять). Флаг .env
+# SOURCE_DISCOVERY_ENABLED его больше не включает: планировщик не ставит шаги агента (scripts/docker-scheduler.sh),
+# ядро не ставит и не исполняет его задачи (background_jobs.SOURCE_AGENT_KINDS), команды и эндпоинты запуска
+# отказывают. Чтение истории (кандидаты, память, прогоны) остаётся. Вернуть агента: False здесь, строка флага в
+# планировщике и выкат.
+SOURCE_AGENT_DISABLED = True
+SOURCE_AGENT_DISABLED_MESSAGE = "агент источников выключен (решение владельца 08.11)"
 # По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
 # Поддержанные провайдеры: none / brave / serpapi.
 SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
