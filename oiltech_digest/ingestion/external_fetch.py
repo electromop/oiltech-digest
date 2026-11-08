@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import logging
 from typing import Any
 
 from oiltech_digest import config
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import relevance_filter
+from oiltech_digest.ingestion import dates, relevance_filter, verdicts
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 logger = logging.getLogger(__name__)
@@ -59,8 +59,16 @@ def _process_source(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
 
 def apply_scrape_result(result: dict[str, Any]) -> dict[str, Any]:
     source_id = int(result["source_id"])
-    inserted = duplicates = 0
+    # Дата начала сбора (06.11) и на ядре: сборка NL без неё пришлёт архив ленты нового источника целиком, а ядро его
+    # не вставит. Окно свежести прогона воркер применил сам, здесь только граница источника; счётчик свой
+    # (skipped_before_start), чтобы не путать со skipped_old воркера.
+    cutoff = verdicts.old_cutoff(repository.get_source(source_id) or {}, None)
+    inserted = duplicates = before_start = 0
     for article in result.get("articles") or []:
+        published = dates.as_utc(article.get("published_at"))
+        if cutoff is not None and published is not None and published < cutoff:
+            before_start += 1
+            continue
         if repository.insert_article({**article, "source_id": source_id}):
             inserted += 1
         else:
@@ -72,7 +80,7 @@ def apply_scrape_result(result: dict[str, Any]) -> dict[str, Any]:
         last_seen_published_at=result.get("last_seen_published_at"),
         last_listing_hash=result.get("last_listing_hash"),
     )
-    return {"inserted": inserted, "duplicates": duplicates, "source_id": source_id}
+    return {"inserted": inserted, "duplicates": duplicates, "skipped_before_start": before_start, "source_id": source_id}
 
 
 def _process_request(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
@@ -165,9 +173,7 @@ def _with_listing_report(result: dict[str, Any], listing: str, candidates: int) 
 
 def _articles_from_candidates(source: dict[str, Any], candidates: list, payload: dict[str, Any], article_fetcher,
                               listing_hash_fn, heartbeat=None) -> dict[str, Any]:
-    cutoff = None
-    if payload.get("max_age_days") is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=int(payload["max_age_days"]))
+    cutoff = verdicts.old_cutoff(source, payload.get("max_age_days"))
     # Базы у воркера нет, и раньше он качал КАЖДУЮ статью листинга на каждом цикле:
     # ядро отбрасывало знакомые только при вставке. Список известных адресов даёт
     # ядро в payload — данные параметром, а не чтение базы (правило §11.4).

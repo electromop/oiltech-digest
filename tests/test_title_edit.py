@@ -14,7 +14,7 @@ import pytest
 
 from oiltech_digest import api, feed_window
 from oiltech_digest.db import connection
-from oiltech_digest.processing import external_ai
+from oiltech_digest.processing import external_ai, pipeline
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 
@@ -162,3 +162,68 @@ def test_jobs_edit_the_title_on_the_worker_and_the_core_writes_it(isolated_db, m
     capsys.readouterr()
     _cli("enqueue-title-edit")
     assert "N=0" in capsys.readouterr().out
+
+
+class _FixedEdit:
+    """Модель правки, которая отвечает заданным заголовком."""
+
+    def __init__(self, edited: str):
+        self.edited = edited
+
+    def complete_json(self, instructions, user_input, schema, **kwargs):
+        assert schema["name"] == "article_title_edit"
+        return AIResponse(data={"title_ru": self.edited}, model="fake", input_tokens=1, output_tokens=1)
+
+
+@pytest.mark.parametrize(("title", "text", "edited", "taken"), [
+    # 06.11, ФИПС: правка просклоняла несклоняемую фамилию («мастер-класс Олега Ена» стало «Олег Ен провёл»).
+    pytest.param(
+        "Мастер-класс Олега Ена «Детальная технологическая экспертиза ИТ-патентов в области медицины» на Ярмарке "
+        "разработок", "Руководитель проектного офиса ФИПС Олег Ена провёл мастер-класс для разработчиков.",
+        "Олег Ен провёл мастер-класс по экспертизе ИТ-патентов в медицине на Ярмарке разработок", False,
+        id="surname-cut"),
+    # Сокращение, которого нет ни в заголовке, ни в тексте (правило инструкции: не заменять аббревиатурой).
+    pytest.param(
+        "На российских АЭС стартовала опытная эксплуатация отечественной системы прогнозирования состояния "
+        "оборудования", "Система прогнозирования введена в опытную эксплуатацию на станциях концерна.",
+        "На АЭС РФ начали опытную эксплуатацию отечественной системы прогноза состояния техники", False,
+        id="new-abbreviation"),
+    # Падеж названий менять можно: основа слова есть во входе (правки с прода, верные).
+    pytest.param(
+        "Учёные нашли способ очистить территорию Ставропольского края от накопленных нефтезагрязнений",
+        "Метод очистки почвы испытан на полигоне.",
+        "Учёные нашли способ очистить Ставропольский край от накопленных нефтезагрязнений", True,
+        id="region-case"),
+    pytest.param(
+        "«Газпром» прокладывает газопровод «Белогорск — Хабаровск»", "Сварено 120 км газопровода.",
+        "«Газпром» прокладывает газопровод от Белогорска до Хабаровска", True, id="city-case"),
+    # Короткое название тоже склоняется: у слова до четырёх букв основа без последней буквы.
+    pytest.param(
+        "Нефтеперерабатывающий завод в Ухте начнёт выпуск нового топлива для северных районов страны — Нефтегаз",
+        "Завод модернизировал установку.", "Завод в Ухте начнёт выпуск нового топлива для северных районов",
+        True, id="short-name-case"),
+    pytest.param(
+        "Завод в Ухте начнёт выпуск нового топлива для северных районов страны и арктических проектов — Нефтегаз",
+        "Завод модернизировал установку.", "Завод Ухты начнёт выпуск нового топлива для северных районов",
+        True, id="short-name-new-case"),
+    # Термин словаря, который инструкция велит ставить буквально, модель видела во входе (блок domain_glossary).
+    pytest.param(
+        "«Новатэк» отгрузил первую партию с проекта Arctic LNG 2 потребителям в странах Азии — Нефть и капитал",
+        "Компания отгрузила груз с проекта Arctic LNG 2.",
+        "«Новатэк» отгрузил первую партию СПГ с проекта Arctic LNG 2", True, id="glossary-term"),
+    # Первое слово не проверяется: там с заглавной и обычное слово в новой форме (правка с прода, верная).
+    pytest.param(
+        "Учёные создали систему онлайн-контроля датчиков, сигнализирующих о цунами, — РИА Новости",
+        "Система следит за состоянием датчиков.",
+        "Создана система онлайн-контроля датчиков, сигнализирующих о цунами", True, id="first-word"),
+])
+def test_edit_with_a_name_the_model_did_not_see_is_dropped(title, text, edited, taken):
+    """Правка с именем или названием, которого нет во входе модели, не берётся: остаётся заголовок издателя, как у
+    правки с чужим числом. Короткое слово (до трёх букв) должно стоять во входе как есть, длинному хватает основы."""
+    article = {"title": title, "raw_text": text, "source_name": "Источник"}
+    assert not pipeline.title_follows_rules(title), "заголовок должен идти на правку"
+
+    result, response = pipeline.title_ru_for_article(article, _FixedEdit(edited), edit_russian=True)
+
+    assert result == (edited if taken else title)
+    assert response is not None, "расход правки учитывается и при отказе"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import hashlib
 import logging
 import re
@@ -101,9 +101,7 @@ def candidate_steps(
     #   3) break по known_streak>=3 — обрывал, пряча новые статьи в хвосте списка.
     # Теперь проходим всех кандидатов: знакомые (уже в БД) пропускаем без фетча,
     # новые — добавляем. listing_hash по-прежнему пишем — для диагностики.
-    cutoff = None
-    if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    cutoff = verdicts.old_cutoff(source, max_age_days)
 
     for candidate in candidates:
         seen = {"url": candidate.url, "title": candidate.title, "published_at": candidate.published_at}

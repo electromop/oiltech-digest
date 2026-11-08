@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import logging
 import re
@@ -106,9 +106,7 @@ def post_steps(source: dict, posts: list[TelegramPost], max_age_days: int | None
     (`source-probe`) печатает вердикты. Последний пост прошлого сбора останавливает
     просмотр: он и всё, что ниже, — KNOWN, сбор их не смотрит.
     """
-    cutoff = None
-    if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    cutoff = verdicts.old_cutoff(source, max_age_days)
 
     last_seen_url = source.get("last_seen_article_url") or ""
     last_seen_published = source.get("last_seen_published_at")

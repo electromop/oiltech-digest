@@ -462,8 +462,9 @@ def _title_call(article: dict, client, instructions: str, schema: dict) -> AIRes
 def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -> tuple[str | None, AIResponse | None]:
     """Вернуть (title_ru, ai_response). Иностранный заголовок переводим через AI. Русский не переводим
     (ai_response=None); с edit_russian — у принятой публикации — правим по правилам эксперта, если он
-    им не отвечает (title_follows_rules). Правка с числом, которого нет в том, что видела модель (заголовок и
-    текст, как в _title_prompt), не берётся: остаётся заголовок издателя. Пустой заголовок → (None, None)."""
+    им не отвечает (title_follows_rules). Правка не берётся, остаётся заголовок издателя, если в ней число, которого
+    нет в заголовке и тексте публикации, или имя, которого нет во входе модели (_title_prompt: заголовок, источник,
+    начало текста, термины словаря). Пустой заголовок → (None, None)."""
     title = (article.get("title") or "").strip()
     if not title:
         return None, None
@@ -472,8 +473,13 @@ def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -
             return title[:200], None
         response = edit_title_article(article, client)
         edited = (response.data.get("title_ru") or "").strip()
-        known = _numbers(f"{title} {article.get('raw_text') or article.get('summary') or ''}")
-        return (edited if edited and _numbers(edited) <= known else title)[:200], response
+        names = _new_names(edited, _title_prompt(article))
+        if names:
+            logger.info("правка заголовка статьи %s не взята, имён нет во входе модели %s: %s",
+                        article.get("id"), names, edited)
+        taken = (edited and not names
+                 and _numbers(edited) <= _numbers(f"{title} {article.get('raw_text') or article.get('summary') or ''}"))
+        return (edited if taken else title)[:200], response
     response = translate_article(article, client)
     translated = (response.data.get("title_ru") or title).strip()
     return (translated or title)[:200], response
@@ -497,6 +503,32 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
 def _numbers(text: str) -> set[str]:
     return {value.replace(",", ".") for value in _NUMBER.findall(text)}
+
+
+# Слово из букв любого алфавита; дефис делит слово («ИТ-патентов»: «ИТ» и «патентов»), цифры сверяет _numbers.
+_WORD = re.compile(r"[^\W\d_]+")
+
+
+def _new_names(edited: str, seen: str) -> list[str]:
+    """Слова правки с заглавной буквы, которых модель не видела: имя или название, которого во входе нет (06.11, ФИПС:
+    «мастер-класс Олега Ена» стало «Олег Ен провёл»). Падеж менять можно: слову хватает общей основы с каким-нибудь
+    словом входа, у слова до четырёх букв это все буквы, кроме последней («Ухта» → «Ухте»), у длинного все, кроме двух
+    последних, но не меньше четырёх («Ставропольского» → «Ставропольский»). Слово из двух букв должно стоять во входе
+    как есть: так ловятся «Ен» и сокращение «РФ», которого в публикации нет.
+
+    Первое слово не проверяется: с заглавной там и обычное слово в новой форме («Создана», «Началась»), на правках прода
+    06.11 его проверка отбросила бы только верные правки. Цена: искажённое имя первым словом и усечённое длинное имя
+    («Гарсиа» → «Гарси») код не видит."""
+    known = {word.casefold() for word in _WORD.findall(seen)}
+    found = []
+    for index, word in enumerate(_WORD.findall(edited)):
+        folded = word.casefold()
+        if index == 0 or not word[:1].isupper() or folded in known:
+            continue
+        stem = folded[:len(folded) - 1 if len(folded) <= 4 else max(4, len(folded) - 2)]
+        if len(folded) <= 2 or not any(other.startswith(stem) for other in known):
+            found.append(word)
+    return found
 
 
 def title_follows_rules(title: str, source_name: str | None = None) -> bool:
