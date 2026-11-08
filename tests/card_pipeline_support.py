@@ -5,7 +5,6 @@
 test_otbor_return.py (возврат отклонённого человеком).
 """
 
-from datetime import datetime, timezone
 
 import pytest
 from psycopg.types.json import Json
@@ -15,7 +14,7 @@ from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from oiltech_digest.scoring_profiles import SCORING_PRESETS
-from tests.otbor_support import answer, article, decide
+from tests.otbor_support import PUBLISHED, answer, article, decide
 from tests.signal_card_support import FakeModel, run_worker, tag
 from tests.signal_card_support import answer as card_answer
 
@@ -25,7 +24,6 @@ MARKET = "Рынок нефтесервиса"
 DIGITAL = "Автоматизация, цифровизация"
 # Тематики заказчика с ключами: по ним ядро считает темы-кандидаты.
 THEMES = {DRILLING: ["бурение", "скважин"], MARKET: ["контракт", "сделка"], DIGITAL: ["цифровой", "робот"]}
-PUBLISHED = datetime(2026, 10, 20, 9, tzinfo=timezone.utc)
 
 
 @pytest.fixture()
