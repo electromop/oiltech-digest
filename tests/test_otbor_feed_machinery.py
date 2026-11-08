@@ -12,7 +12,7 @@ from oiltech_digest.processing import external_ai, fulltext_recompute
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, OtborModel, answer, api_send, article, decide, reject, showcase
-from tests.otbor_support import contour, window_of_published  # noqa: F401 — фикстуры
+from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
 from tests.signal_card_support import DRILLING, admin, api_get, run_worker, tag, user  # noqa: F401 — фикстуры
 
 # Лента статей и отметка «в дайджест» смотрят окно открытых месяцев: оно на день статей (tests/otbor_support.py).

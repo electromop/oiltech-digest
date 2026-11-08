@@ -16,18 +16,13 @@ from oiltech_digest.processing.openai_client import AIClientError
 from tests.card_pipeline_support import (MARKET, SCORES_MODEL, card_answer, even, fill_cards,  # noqa: F401
                                          pipeline, process_feed, run_scores, scores)
 from tests.otbor_support import MODEL, OtborModel, answer, api_send, article, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
+from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
 from tests.signal_card_support import FakeModel, admin, api_get, run_worker, user  # noqa: F401 — фикстуры
 
 SINCE = (date.today() - timedelta(days=14)).isoformat()
-# Окно ленты на день проверки: открыты октябрь и ноябрь (в тестах смена месяца 5-го, conftest). Статьи сбора тестов
-# опубликованы в октябре (otbor_support.article): без заморозки окна тесты зависели бы от сегодняшней даты.
-CHECK_DAY = datetime(2026, 11, 3, 12, tzinfo=feed_window.MSK)
-
-
-@pytest.fixture(autouse=True)
-def check_day(monkeypatch):
-    monkeypatch.setattr(feed_window, "_now", lambda: CHECK_DAY)
+# Окно ленты на день статей сбора тестов (otbor_support.window_of_published): без заморозки тесты зависели бы от
+# сегодняшней даты.
+pytestmark = pytest.mark.usefixtures("window_of_published")
 
 
 @pytest.fixture()

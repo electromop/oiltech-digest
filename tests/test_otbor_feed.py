@@ -13,7 +13,7 @@ from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, answer, api_request, api_send, article, decide, reject, showcase
-from tests.otbor_support import contour, window_of_published  # noqa: F401 — фикстуры
+from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
 from tests.signal_card_support import (DRILLING, FakeModel, admin, api_get, radar_finding, run_worker, tag,  # noqa: F401
                                        user)
 from tests.signal_card_support import answer as card_answer
