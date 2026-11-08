@@ -883,8 +883,9 @@ CARD_SET_BY_HUMAN = "human"
 # Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): с 08.11 так вставляется каждая
 # новая статья (флаг и гейт сняты); пустой путь у статьи, вставленной до включения «Отбора».
 ARTICLE_SELECTOR_OTBOR = "otbor"
-# То же у сигнала (signals.selector, #131): находка поиска или материал коллеги, заведённые при включённом флаге. Пока
-# решения нет, сигнал не виден нигде (правила показа и «Карточка» его не берут).
+# То же у сигнала (signals.selector, #131): с 08.11 так заводится каждая находка поиска и каждый материал коллеги
+# (флаг снят); пустой путь у заведённых до включения «Отбора». Пока решения нет, сигнал не виден нигде (правила показа
+# и «Карточка» его не берут).
 SIGNAL_SELECTOR_OTBOR = "otbor"
 # Находка пробного прогона широкого поиска (#138, signal_search_trial): её не видят витрины, разделы отклонённого,
 # шаги конвейера (они берут только NULL или «otbor») и снимок дедупа радара; «Отбор» решает её в тени проверки #134,
@@ -1966,6 +1967,15 @@ _FEED_SIGNAL_UNSCORED_SQL = ("(fs.score_band IS NULL AND (fs.otbor_decision IS N
                              " OR fs.otbor_failure IS NOT NULL OR fs.filter_stage = 'search'))")
 
 
+def feed_signal_order_sql(alias: str) -> str:
+    """Порядок, по которому у статьи берётся её сигнал ленты (строка `alias` таблицы signals с origin = 'feed'): не
+    дубль раньше дубля, затем ранний. Сигнал у статьи один (ключ feed:<статья>), порядок держит выбор однозначным.
+    Ставится в ORDER BY перед LIMIT 1 или вслед за ключом DISTINCT ON. Одно правило у темы и балла читателей
+    (publication_joins), разбивки балла /api/articles и полей материала PDF (issue_material_fields): у письма, PDF и
+    экрана «Дайджест» один балл."""
+    return f"{alias}.merged_into_signal_id NULLS FIRST, {alias}.id"
+
+
 def publication_joins(article: str = "a") -> str:
     """Тема и балл публикации ленты для её читателей: выпуска, письма и DOCX, /api/articles, «Статистики», аналитики.
 
@@ -1991,7 +2001,7 @@ def publication_joins(article: str = "a") -> str:
              x.scores_recipe->>'filled_at' AS filled_at
       FROM signals x
       WHERE x.origin_article_id = {article}.id AND x.origin = '{SIGNAL_ORIGIN_FEED}'
-      ORDER BY x.merged_into_signal_id NULLS FIRST, x.id
+      ORDER BY {feed_signal_order_sql('x')}
       LIMIT 1
     ) fs ON TRUE
     LEFT JOIN LATERAL (
@@ -2151,8 +2161,8 @@ def _otbor_shown_sql(category: str) -> str:
     )
 
 
-# Сигнал без решения «Отбора» живёт по прежним правилам, если «Отбор» его не решает: находку и материал, заведённые
-# при включённом флаге (#131), пока решения нет, не показывает ни витрина, ни «До „Отбора“» — только раздел сбоя.
+# Сигнал без решения «Отбора» живёт по прежним правилам, если «Отбор» его не решает: находку и материал на пути
+# «Отбора» (#131, с 08.11 все новые), пока решения нет, не показывает ни витрина, ни «До „Отбора“», только раздел сбоя.
 _BEFORE_OTBOR_SQL = "s.otbor_decision IS NULL AND s.selector IS NULL"
 # Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
 # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
@@ -3103,16 +3113,6 @@ def unmerge_signal(signal_id: int) -> bool:
         return row is not None
 
 
-def merge_signal_agent_memory_facts(memory_id: int, patch: dict) -> bool:
-    with get_connection() as conn:
-        cur = conn.execute(
-            "UPDATE signal_agent_memory SET facts_json = facts_json || %s::jsonb, updated_at = now() WHERE id = %s",
-            (Json(_jsonable(patch)), memory_id),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-
-
 def get_signal_theme(signal_id: int) -> str | None:
     with get_connection() as conn:
         row = conn.execute("SELECT theme FROM signals WHERE id = %s", (signal_id,)).fetchone()
@@ -3178,21 +3178,6 @@ def judge_learns_from(signal_id: int) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT origin, signal_category FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
     return row is None or (row[0] == SIGNAL_ORIGIN_RADAR and row[1] != "business")
-
-
-def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-            UPDATE signal_agent_memory
-            SET status = %s,
-                updated_at = now()
-            WHERE id = %s
-            """,
-            (status, memory_id),
-        )
-        conn.commit()
-        return cur.rowcount > 0
 
 
 def collected_url_keys_since(*, since: date | datetime) -> list[str]:
@@ -4985,7 +4970,7 @@ def get_articles_missing_image(limit: int = 200) -> list[dict]:
     каждой статьёй (медленный, с ретраями), а картинка нужна только тому, что
     показывается. Замер 24.07: из 4675 статей без картинки 2085 (45%) были скрыты
     (pending_deletion) или отклонены гейтом — почти половина запросов уходила
-    впустую. relevant IS NULL оставляем: статья ещё не гейчена и может стать видимой."""
+    впустую. Условие то же, что у ленты (feed_window.selected_sql): ждущую «Отбора» статью выборка не берёт."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -5297,7 +5282,7 @@ def feed_archive_months(window: FeedWindow) -> list[dict]:
 
 
 def monthly_platform_stats(months: int = 6) -> list[dict]:
-    """Месячная воронка платформы: собрано → прошло гейт → обработано → скрыто.
+    """Месячная воронка платформы: собрано → принято («Отбором», до него гейтом) → обработано → скрыто.
 
     Глобальная (не пер-юзерная) метрика: это результат работы САМОЙ платформы,
     одинаковый для всех. Пер-юзерная активность считается отдельно —
@@ -6079,16 +6064,14 @@ def article_ids_needing_title_ru() -> list[int]:
 
 
 def get_articles_needing_summary(limit: int = 20) -> list[dict]:
-    """Статьи, которым нужна AI-суть: ещё не обработанные + релевантные без сути (повтор после сбоя).
+    """Статьи, которым нужна AI-суть: отобранные в ленту без сути, в том числе принятые после сбоя записи (повтор).
 
-    ОТКЛОНЁННЫЕ ГЕЙТОМ (relevant IS FALSE) ИСКЛЮЧЕНЫ, и это принципиально. На проде гейт
-    релевантности идёт ПЕРВЫМ и отклонённой статье суть НЕ пишется (external_ai.process_payload:
-    `if not relevant: continue`). Без этого фильтра такая статья вечно подходила под
-    `summary IS NULL` и возвращалась в обработку КАЖДЫЙ цикл: гейт режет ~78%, поэтому бюджет
-    цикла (AI_PROCESS_LIMIT) съедали повторные отказы одних и тех же статей, свежие вытеснялись
-    из топа (ORDER BY published_at DESC), а дорогой гейт (gpt-5.5) жёгся заново на том же наборе.
-    `IS NOT FALSE` (а не `IS NULL`) — чтобы релевантная статья без сути (сбой записи) всё-таки
-    попала на повтор. Идиома совпадает с list_articles и digest_candidates.
+    ОТКЛОНЁННЫЕ ИСКЛЮЧЕНЫ, и это принципиально: отклонённой статье («Отбором», до него гейтом) суть
+    НЕ пишется, и без фильтра она вечно подходила бы под `summary IS NULL` и возвращалась в обработку
+    КАЖДЫЙ цикл. Так было при гейте (снят 08.11): он резал ~78%, бюджет цикла (AI_PROCESS_LIMIT) съедали
+    повторные отказы одних и тех же статей, свежие вытеснялись из топа (ORDER BY published_at DESC), а
+    дорогой гейт (gpt-5.5) жёгся заново на том же наборе. Ждущую «Отбора» статью выборка тоже не берёт.
+    Условие отбора то же, что у ленты (feed_window.selected_sql).
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -7121,12 +7104,14 @@ def ai_cost_report() -> list[dict]:
 
 
 def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[dict]:
-    """Cost of processing one article through AI stages.
+    """Расход ИИ на одну статью ленты по её стадиям: «Отбор», суть и перевод заголовка. Гейт, тег и балл статьи сняты
+    08.11, их строки прошлых статей в отчёт не входят.
 
-    complete_only=True returns articles that have successful summary, tagging and
-    scoring runs, which is the cleanest estimate for one full processing cycle.
+    complete_only=True: только статьи с удачными «Отбором» и сутью, то есть прошедшие весь путь статьи. «Карточка» и
+    баллы идут на сигнал статьи (стадии signal_card и signal_scores) и в этот отчёт не входят.
     """
-    stages_filter = "HAVING COUNT(DISTINCT r.stage) = 3" if complete_only else ""
+    stages_filter = ("HAVING bool_or(r.stage = 'otbor' AND r.status = 'ok')"
+                     " AND bool_or(r.stage = 'summary' AND r.status = 'ok')") if complete_only else ""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -7143,7 +7128,7 @@ def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[
                 ROUND(SUM(r.cost_usd) FILTER (WHERE r.status = 'ok')::numeric, 6) AS cost_usd
             FROM ai_processing_runs r
             JOIN articles a ON a.id = r.article_id
-            WHERE r.stage IN ('summary', 'tagging', 'scoring')
+            WHERE r.stage IN ('otbor', 'summary', 'translation')
             GROUP BY a.id, a.title, a.language
             {stages_filter}
             ORDER BY cost_usd DESC NULLS LAST, a.id DESC
@@ -7461,7 +7446,7 @@ def issue_material_fields(article_ids: Sequence[int],
                 SELECT DISTINCT ON (s.origin_article_id) s.origin_article_id, {_ISSUE_MATERIAL_COLUMNS}
                 FROM signals s
                 WHERE s.origin_article_id = ANY(%s) AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-                ORDER BY s.origin_article_id, s.merged_into_signal_id NULLS FIRST, s.id
+                ORDER BY s.origin_article_id, {feed_signal_order_sql('s')}
                 """,
                 (list(article_ids),),
             )

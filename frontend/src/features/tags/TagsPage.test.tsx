@@ -70,7 +70,7 @@ describe("экран «Теги»", () => {
     expect(screen.getByRole("button", { name: "+ Добавить подтег" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Удалить «долото»" }));
-    await user.type(screen.getByLabelText(/Ключевые слова RU — по ним ищем/), "турбобур{Enter}");
+    await user.type(screen.getByLabelText(/Ключевые слова RU: по ним ищем/), "турбобур{Enter}");
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
     await waitFor(() => {

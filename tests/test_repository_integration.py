@@ -398,13 +398,13 @@ def test_repository_cleanup_removes_only_expired_and_old_terminal_records(isolat
 def test_needing_summary_skips_rejected_articles(isolated_db):
     """Отклонённые гейтом статьи НЕ возвращаются в AI-обработку.
 
-    На проде (внешний путь) гейт релевантности идёт ПЕРВЫМ, и отклонённой статье суть
-    НЕ пишется (external_ai.process_payload: `if not relevant: continue`). Раз выборка
+    На проде (внешний путь) гейт релевантности шёл ПЕРВЫМ (снят 08.11), и отклонённой статье суть
+    НЕ писалась (external_ai.process_payload: `if not relevant: continue`). Раз выборка
     в обработку шла по `WHERE c.summary IS NULL` без фильтра по relevant, такая статья
     возвращалась в очередь КАЖДЫЙ цикл — навсегда.
 
     Последствия (баг «ИИ не работает» + утечка денег из аудита 09.07):
-    - гейт режет ~78%, значит бюджет цикла (AI_PROCESS_LIMIT) съедали ПОВТОРНЫЕ отказы
+    - гейт резал ~78%, значит бюджет цикла (AI_PROCESS_LIMIT) съедали ПОВТОРНЫЕ отказы
       одних и тех же статей, а свежие вытеснялись из топа (ORDER BY published_at DESC);
     - каждый цикл заново жёг дорогой гейт (gpt-5.5) на уже отклонённых статьях.
     """
@@ -458,3 +458,34 @@ def test_needing_summary_skips_rejected_articles(isolated_db):
     assert done_id not in ids
     # ГЛАВНОЕ: отклонённую гейтом НЕ переспрашиваем — иначе она жрёт бюджет цикла вечно.
     assert rejected_id not in ids
+
+
+def test_article_cost_report_counts_the_current_article_path(isolated_db):
+    """Полный путь статьи с 08.11: «Отбор» и суть (перевод заголовка по необходимости). Статья прежней цепочки с
+    тегом и баллом без «Отбора» в полный цикл не входит, а стадии тега и балла в расход статьи не идут."""
+    now = datetime.now(timezone.utc)
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category) "
+            "VALUES ('World Oil', 'News', 'https://example.com', TRUE, 'request', 'международные') RETURNING id"
+        ).fetchone()[0]
+        ids = [conn.execute(
+            "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+            "VALUES (%s, %s, %s, %s, %s, 'text', 'en') RETURNING id",
+            (source_id, f"Article {slug}", f"https://example.com/{slug}", now, now),
+        ).fetchone()[0] for slug in ("otbor", "old")]
+        conn.commit()
+    current, old = ids
+    for article_id, stage, cost in ((current, "otbor", 0.002), (current, "summary", 0.003),
+                                    (current, "translation", 0.001), (old, "summary", 0.003),
+                                    (old, "tagging", 0.001), (old, "scoring", 0.004)):
+        repository.insert_ai_run({"article_id": article_id, "stage": stage, "provider": "openai", "model": "m",
+                                  "language": "en", "input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                                  "cost_usd": cost, "status": "ok", "error_message": None})
+
+    complete = repository.ai_article_cost_report(limit=10)
+    partial = {row["article_id"]: row for row in repository.ai_article_cost_report(limit=10, complete_only=False)}
+
+    assert [row["article_id"] for row in complete] == [current]
+    assert float(complete[0]["cost_usd"]) == 0.006 and complete[0]["stages"] == 3
+    assert float(partial[old]["cost_usd"]) == 0.003 and partial[old]["stages"] == 1

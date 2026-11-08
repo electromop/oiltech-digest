@@ -55,13 +55,14 @@ def _tried_sql(key: str) -> str:
 
 _TRIED_SQL = _tried_sql("article_ids")
 _TRIED_SIGNALS_SQL = _tried_sql("signal_ids")
-# Статья, которую решает «Отбор»: вставлена при включённом флаге, и гейт её не решал (флаг выключали — её решил он).
+# Статья, которую решает «Отбор»: вставлена на его пути (с 08.11 каждая новая), и гейт её не решал (решённую гейтом,
+# пока флаг до 08.11 выключали, «Отбор» не берёт).
 _OTBOR_ARTICLE_SQL = (
     f"a.selector = '{ARTICLE_SELECTOR_OTBOR}'"
     " AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)"
 )
-# Сигнал, который решает «Отбор» (#131): находка поиска или материал коллеги, заведённые при включённом флаге. Дубль
-# не в счёт: его ссылки — у главной карточки. Архив (материал удалили на платформе) — тоже.
+# Сигнал, который решает «Отбор» (#131): находка поиска или материал коллеги на его пути (с 08.11 все новые). Дубль
+# не в счёт: его ссылки у главной карточки. Архив (материал удалили на платформе) тоже.
 _OTBOR_SIGNAL_SQL = (f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
                      " AND s.archived_at IS NULL")
 # Задачи «Отбора» у находки или материала: сколько их было и идёт ли одна сейчас — строка на сигнал (LEFT JOIN по s.id).
@@ -101,7 +102,7 @@ _SIGNAL_DECIDED_IN_DIGEST_SQL = f"(s.otbor_decision IS NOT NULL AND {marks.signa
 
 
 def new_article_ids(*, days: int, limit: int, attempts: int) -> list[int]:
-    """Статьи для шага планировщика: их решает «Отбор» (вставлены при включённом флаге), собраны за `days` дней,
+    """Статьи для шага планировщика: их решает «Отбор» (вставлены на его пути), собраны за `days` дней,
     решения нет ни у «Отбора», ни у гейта, ответ не был «не по правилам», не в задаче агента, которая ещё идёт,
     и попыток меньше `attempts`. Перепечатка не в счёт: её публикация — у сигнала главной."""
     with connection.get_connection() as conn:
@@ -128,7 +129,7 @@ def new_article_ids(*, days: int, limit: int, attempts: int) -> list[int]:
 
 def new_signal_ids(*, days: int, limit: int, attempts: int) -> list[int]:
     """Находки и материалы для шага планировщика (#131) — то же правило, что у статей (new_article_ids): заведены
-    при включённом флаге за `days` дней, решения нет, ответ не был «не по правилам», не в идущей задаче агента,
+    на пути «Отбора» за `days` дней, решения нет, ответ не был «не по правилам», не в идущей задаче агента,
     попыток меньше `attempts`."""
     with connection.get_connection() as conn:
         rows = conn.execute(

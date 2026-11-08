@@ -258,6 +258,6 @@ curl http://127.0.0.1:8000/api/health
 - unit-тесты зеленые;
 - Docker Compose собирается;
 - `init-db`, `seed-*`, `discover-rss`, `parse`, `fetch-full-text` работают;
-- `process` дает summary/relevance/tag/score без системных ошибок;
+- `process` дает summary и translate (суть и русский заголовок) без системных ошибок;
 - UI открывается и читает реальные данные;
 - `digest-content` и `digest-email` успешно генерируются.

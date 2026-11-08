@@ -750,7 +750,7 @@ def list_articles(
         clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
         params.append(date_to)
     # Базовая видимость — одно условие с её счётчиками, архивом и сборщиком выпуска
-    # (отсев гейтом, помеченное на удаление, архивный источник, перепечатка): иначе цифры
+    # (отсев «Отбором» и гейтом до него, помеченное на удаление, архивный источник, перепечатка): иначе цифры
     # над лентой расходятся с ней самой (23.09: 2 205 против 1 934). См. feed_window.visible_sql.
     clauses.append(feed_window.visible_sql())
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
@@ -2363,8 +2363,9 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
         research = signal_discovery.research_settings(offline=payload.offline, days=payload.days)
     except signal_discovery.SearchSetupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # Не-offline прогон радара зовёт OpenAI, поэтому маршрут берём у политики:
-    # прямой вызов с РФ-адреса возвращает 403 unsupported_country_region_territory.
+    # Поиск GPT зовёт любой прогон радара, а прямой вызов OpenAI с РФ-адреса получает 403
+    # unsupported_country_region_territory. Маршрут прогона не офлайн берём у политики; офлайн идёт в default на ядре
+    # РФ, и поиск там получает 403 (проверка радара только с --no-offline).
     decision = network_policy.route_ai_processing()
     job = background_jobs.enqueue(
         "signal_discovery",
@@ -3385,14 +3386,15 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
-    # Сигнал ленты ищется так же, как в publication_joins и у полей материала PDF (issue_material_fields).
+    # Сигнал ленты статьи по общему правилу (repository.feed_signal_order_sql), как в publication_joins и у полей
+    # материала PDF (issue_material_fields).
     cur.execute(
         f"""
         SELECT DISTINCT ON (x.origin_article_id) x.origin_article_id AS article_id, x.score_band, x.otbor_decision,
                x.otbor_failure, x.filter_stage, x.score_profile, x.score_items_json, x.criteria_snapshot
         FROM signals x
         WHERE x.origin_article_id = ANY(%s) AND x.origin = '{repository.SIGNAL_ORIGIN_FEED}'
-        ORDER BY x.origin_article_id, x.merged_into_signal_id NULLS FIRST, x.id
+        ORDER BY x.origin_article_id, {repository.feed_signal_order_sql('x')}
         """,
         (article_ids,),
     )

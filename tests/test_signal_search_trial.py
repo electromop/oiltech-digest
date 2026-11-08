@@ -124,7 +124,7 @@ def test_trial_run_passes_findings_through_otbor_and_changes_no_showcase_section
         {DEAL: answer(), TECH: reject("oil_gas_no_link")},
         cited=[DEAL_URL, TECH_URL, KNOWN_URL, COLLECTED_URL])
 
-    # Широкий промпт за октябрь при выключенном флаге «Отбора» на ядре не нужен: прогон его везёт сам.
+    # Широкий промпт за октябрь прогон везёт сам.
     [call] = search.calls
     assert call["schema"] == "radar_topic_research_broad" and "Период: с 2026-10-01 по 2026-10-31" in call["input"]
     # «Отбор» решил обе новые находки: та, что уже на платформе, и ссылка сбора в него не идут.

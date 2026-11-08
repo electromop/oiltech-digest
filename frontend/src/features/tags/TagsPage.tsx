@@ -258,7 +258,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                         </label>
                       </div>
                       <KeywordChips
-                        label="Ключевые слова RU — по ним ищем и подбираем тему"
+                        label="Ключевые слова RU: по ним ищем и подбираем тему"
                         values={parent.keywords_json}
                         onChange={(values) => updateTag(parentIndex, "keywords_json", values)}
                         placeholder="ГРП, гидроразрыв, проппант"
@@ -270,7 +270,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                         placeholder="hydraulic fracturing, proppant"
                       />
                       <KeywordChips
-                        label="Стоп-слова — отсев при сборе, если нет ключевых слов"
+                        label="Стоп-слова: отсев при сборе, если нет ключевых слов"
                         tone="stop"
                         values={parent.negative_keywords_json}
                         onChange={(values) => updateTag(parentIndex, "negative_keywords_json", values)}

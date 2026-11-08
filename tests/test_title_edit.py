@@ -78,7 +78,7 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
         isolated_db, monkeypatch, capsys):
     _freeze(monkeypatch)
     _article(OFF_RULES)
-    # Отметка «в дайджест» — выбор человека, даже если гейт статью ещё не судил.
+    # Отметка «в дайджест»: выбор человека, даже если гейт статью не судил.
     _article("«Росатом» завершил оснащение АЭС «Руппур» (Бангладеш) системами управления", relevant=None, digest=True)
     _article("«Роснефть» совершенствует технологии ремонта скважин")  # по правилам
     _article("Halliburton wins a contract — Reuters", title_ru="Halliburton выиграла контракт")  # иноязычный

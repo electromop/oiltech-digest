@@ -134,7 +134,7 @@ def enqueue(trial: dict[str, Any]) -> dict[str, Any]:
 
 def after_search(job_id: int, applied: dict[str, Any], trial: dict[str, Any]) -> dict[str, Any]:
     """Ядро, когда находки пробного прогона записаны: задачи «Отбора» в тени проверки #134 (shadow) пачками по
-    OTBOR_BATCH, по полосе пересчётов. Флаг «Отбора» не нужен: решения в витрины не идут."""
+    OTBOR_BATCH, по полосе пересчётов. Решения в витрины не идут."""
     from oiltech_digest import network_policy
 
     ids = sorted({int(value) for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []})
