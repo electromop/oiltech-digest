@@ -20,6 +20,24 @@ describe("обзор статистики", () => {
     expect(screen.queryByText("Источников дали релевантное")).not.toBeInTheDocument();
   });
 
+  it("пороги «сильного сигнала» и «топа» подписаны теми, по которым считал сервер", () => {
+    // С 08.11 это ступени балла сигнала (SIGNAL_SCORE_BANDS, на проде 74/61/40); сервер до 08.11 порогов не отдавал.
+    const bands = { ...analyticsFixture, score_thresholds: { strong: 61, top: 74 } };
+    render(<AnalyticsOverview data={bands} months={bands.months} month="2026-09" />);
+    expect(screen.getByText("Сильные сигналы · балл ≥61")).toBeInTheDocument();
+    expect(screen.getByText(/из них .* с баллом ≥74/)).toBeInTheDocument();
+    expect(screen.getByText("Сильный сигнал — балл ≥61")).toBeInTheDocument();
+    expect(screen.getByText("Топ — балл ≥74")).toBeInTheDocument();
+    expect(screen.getAllByText("Балл 61–73").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/≥60|≥70/)).not.toBeInTheDocument();
+  });
+
+  it("сервер без порогов: прежние 60 и 70", () => {
+    render(<AnalyticsOverview data={analyticsFixture} months={analyticsFixture.months} month="2026-09" />);
+    expect(screen.getByText("Сильные сигналы · балл ≥60")).toBeInTheDocument();
+    expect(screen.getAllByText("Балл 60–69").length).toBeGreaterThan(0);
+  });
+
   it("стоимость — только если сервер её отдал (администратор)", () => {
     const { ai_cost: _cost, ai_cost_previous_same_period: _prev, ...userView } = analyticsFixture;
     render(<AnalyticsOverview data={userView} months={userView.months} month="2026-08" />);

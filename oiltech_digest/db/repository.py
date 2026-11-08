@@ -2148,16 +2148,60 @@ def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = No
     return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until)
 
 
+# Балла у сигнала нет (экран пишет «без баллов», а не 0): то же правило, что signal_scoring.unscored у витрин
+# (/api/signals), менять вместе.
+_FEED_SIGNAL_UNSCORED_SQL = ("(fs.score_band IS NULL AND (fs.otbor_decision IS NOT NULL"
+                             " OR fs.otbor_failure IS NOT NULL OR fs.filter_stage = 'search'))")
+
+
+def publication_joins(article: str = "a") -> str:
+    """Тема и балл публикации ленты для её читателей: выпуска, письма и DOCX, /api/articles, «Статистики», аналитики.
+
+    Тег и балл статьи снимаются вместе со старой цепочкой (решение владельца 08.11), поэтому тему и балл читатели берут
+    у сигнала ленты статьи: тему ставит «Карточка», балл её второй вызов, у решённой гейтом до «Отбора» мост скопировал
+    туда тег и балл статьи. Статья без сигнала ленты (собрана до 01.08.2026 или сигнал не заведён; на проде 08.11 в
+    окне с 11.10 таких 23 из 2 709) живёт по прежним тегу и баллу статьи. Сигнал ищется так же, как поля материала PDF
+    (issue_material_fields): у письма и PDF один балл.
+
+    Приносит в запрос статьи `article` алиасы: sc, at, t, parent (прежние балл и тег статьи, история), fs (её сигнал
+    ленты) и pub (что читать): tag_name и parent_tag_name (тема для показа: у сигнала его тема, у статьи без сигнала
+    «родитель / тег»), theme (корневая тема), total_score (NULL: балла нет), score_band (ступень второго вызова),
+    scored_at (когда балл готов). LIMIT держит поиск сигнала по индексу на каждую статью: без него планировщик вправе
+    соединить выборку со всей таблицей сигналов. Лишние соединения тегов планировщик выбрасывает сам (ключи
+    уникальны)."""
+    return f"""
+    LEFT JOIN article_scores sc ON sc.article_id = {article}.id
+    LEFT JOIN article_tags at ON at.article_id = {article}.id
+    LEFT JOIN tags t ON t.id = at.tag_id
+    LEFT JOIN tags parent ON parent.id = t.parent_id
+    LEFT JOIN LATERAL (
+      SELECT x.id, x.theme, x.score, x.score_band, x.otbor_decision, x.otbor_failure, x.filter_stage,
+             x.scores_recipe->>'filled_at' AS filled_at
+      FROM signals x
+      WHERE x.origin_article_id = {article}.id AND x.origin = '{SIGNAL_ORIGIN_FEED}'
+      ORDER BY x.merged_into_signal_id NULLS FIRST, x.id
+      LIMIT 1
+    ) fs ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT CASE WHEN fs.id IS NULL THEN t.name ELSE fs.theme END AS tag_name,
+             CASE WHEN fs.id IS NULL THEN parent.name END AS parent_tag_name,
+             COALESCE(fs.theme, parent.name, t.name) AS theme,
+             CASE WHEN fs.id IS NULL THEN sc.total_score WHEN {_FEED_SIGNAL_UNSCORED_SQL} THEN NULL
+                  ELSE fs.score END AS total_score,
+             fs.score_band,
+             -- Балл второго вызова готов, когда записан его рецепт; балл, который мост скопировал со статьи, и балл
+             -- статьи без сигнала готовы, когда оценили статью.
+             CASE WHEN fs.id IS NULL THEN sc.created_at WHEN {_FEED_SIGNAL_UNSCORED_SQL} THEN NULL
+                  ELSE COALESCE(fs.filled_at::timestamptz, sc.created_at) END AS scored_at
+    ) pub ON TRUE
+    """
+
+
 def _article_corrections_lateral(issue_window: FeedWindow) -> str:
-    """LEFT JOIN LATERAL fs и corr: правки заголовка и сути статьи `a` в выпуске, у её сигнала ленты (#162, ADR 0006):
-    правка с экрана «Дайджест» ложится на сигнал, и выпуск показывает тот же текст, что бизнес-лента. Сигнал ленты у
-    статьи один (порядок как у issue_material_fields); закрытый выпуск берёт правки до закрытия месяца статьи."""
-    return (
-        "LEFT JOIN LATERAL (SELECT fs.id FROM signals fs WHERE fs.origin_article_id = a.id"
-        f" AND fs.origin = '{SIGNAL_ORIGIN_FEED}'"
-        " ORDER BY fs.merged_into_signal_id NULLS FIRST, fs.id LIMIT 1) fs ON TRUE"
-        + _signal_corrections_lateral("fs", issue_window, month_sql=period_month_sql("a"))
-    )
+    """LEFT JOIN LATERAL corr: правки заголовка и сути статьи `a` в выпуске, у её сигнала ленты fs (#162, ADR 0006; fs
+    приносит publication_joins): правка с экрана «Дайджест» ложится на сигнал, и выпуск показывает тот же текст, что
+    бизнес-лента. Закрытый выпуск берёт правки до закрытия месяца статьи."""
+    return _signal_corrections_lateral("fs", issue_window, month_sql=period_month_sql("a"))
 
 
 def apply_signal_corrections(row: dict) -> dict:
@@ -5284,6 +5328,7 @@ def dashboard_stats(window: FeedWindow | None = None) -> dict:
     и над лентой из 1 934 статей висело 2 205 «сигналов».
     ``avg_score`` — среднее только по оценённым. ``selected_for_digest`` и статусы — по
     общим отметкам (#111). ``window`` — окно месяца; без окна — вся база (замеры, benchmarks).
+    Тема и балл берутся у публикации ленты (publication_joins): у сигнала ленты, у статьи без него у самой статьи.
     """
     win = window.sql("a") if window is not None else "TRUE"
     with get_connection() as conn:
@@ -5296,19 +5341,19 @@ def dashboard_stats(window: FeedWindow | None = None) -> dict:
             SELECT {marks.article_status_sql()} AS status,
                    COUNT(*) AS cnt,
                    COUNT(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS with_summary,
-                   -- Обработано: есть суть, проверена релевантность и есть тег или оценка.
+                   -- Обработано: есть суть, проверена релевантность и у публикации есть тема или балл (тема у
+                   -- сигнала ленты обязательна, у статьи без сигнала это тег или балл статьи, как раньше).
                    COUNT(*) FILTER (
                      WHERE COALESCE(c.summary, '') <> ''
                        AND {feed_window.relevance_sql('a', 'c')} IS NOT NULL
-                       AND (sc.article_id IS NOT NULL
-                            OR EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id))
+                       AND (pub.theme IS NOT NULL OR pub.total_score IS NOT NULL)
                    ) AS processed,
-                   SUM(sc.total_score) AS score_sum,
-                   COUNT(sc.total_score) AS scored
+                   SUM(pub.total_score) AS score_sum,
+                   COUNT(pub.total_score) AS scored
               FROM articles a
               JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
-              LEFT JOIN article_scores sc ON sc.article_id = a.id
+              {publication_joins('a')}
               {marks.article_mark_join()}
              WHERE {visible_sql()}
                AND {win}
@@ -5447,6 +5492,8 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
     monthly_user_activity(), у неё свой скоуп по владельцу.
     Месяц берём по collected_at (когда МЫ собрали), а не по published_at:
     иначе старые статьи из архивных лент искажают динамику текущей работы.
+    Балл берётся у публикации ленты (publication_joins): «оценено», средний балл и «годных» считают и статьи «Отбора»,
+    у которых балла статьи нет. Порог «годных» прежний, 60: так его подписывает экран «Статистика».
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -5458,12 +5505,12 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
                    count(*) FILTER (WHERE rel.relevant IS FALSE) AS rejected,
                    count(*) FILTER (WHERE a.pending_deletion) AS hidden,
                    count(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS summarized,
-                   count(*) FILTER (WHERE sc.total_score IS NOT NULL) AS scored,
-                   round(avg(sc.total_score)) AS avg_score,
-                   count(*) FILTER (WHERE sc.total_score >= 60) AS digest_ready
+                   count(*) FILTER (WHERE pub.total_score IS NOT NULL) AS scored,
+                   round(avg(pub.total_score)) AS avg_score,
+                   count(*) FILTER (WHERE pub.total_score >= 60) AS digest_ready
             FROM articles a
             LEFT JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
+            {publication_joins('a')}
             LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
             WHERE a.collected_at >= date_trunc('month', now()) - make_interval(months => %s)
             GROUP BY 1
@@ -7697,10 +7744,15 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
 
     ``month`` опционален: пусто/None — фильтр периода снимается, возвращаются все
     выбранные (превью совпадает с экспортом). Будущие публикации всегда исключены.
+
+    Тема и балл статьи берутся у её публикации ленты (publication_joins): у статьи с сигналом ленты его тема и балл, у
+    статьи без сигнала прежние тег и балл. По ним порог, фильтр по теме, поиск и порядок; score_band: ступень второго
+    вызова «Карточки» для подписи балла (processing.digest).
     """
     params: dict = {"min_score": min_score, "limit": limit}
     month_clause = ""
     max_score_clause = ""
+    signal_max_score_clause = ""
     search_clause = ""
     tag_clause = ""
     if month:
@@ -7709,23 +7761,24 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         month_clause = f"AND {period_month_sql('a')} = %(month)s"
         params["month"] = month
     if max_score is not None:
-        max_score_clause = "AND COALESCE(sc.total_score, 0) <= %(max_score)s"
+        max_score_clause = "AND COALESCE(pub.total_score, 0) <= %(max_score)s"
+        signal_max_score_clause = "AND sig.score <= %(max_score)s"
         params["max_score"] = max_score
     if search:
         search_clause = """
               AND (
                    COALESCE(c.title_ru, a.title) ILIKE %(search)s
                 OR COALESCE(c.summary, '') ILIKE %(search)s
-                OR COALESCE(t.name, '') ILIKE %(search)s
-                OR COALESCE(parent.name, '') ILIKE %(search)s
+                OR COALESCE(pub.tag_name, '') ILIKE %(search)s
+                OR COALESCE(pub.parent_tag_name, '') ILIKE %(search)s
               )
         """
         params["search"] = f"%{search}%"
     if top_tag:
         tag_clause = """
               AND (
-                   t.name = %(top_tag)s
-                OR parent.name = %(top_tag)s
+                   pub.tag_name = %(top_tag)s
+                OR pub.parent_tag_name = %(top_tag)s
               )
         """
         params["top_tag"] = top_tag
@@ -7739,23 +7792,20 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                    a.language, a.image_url,
                    s.name AS source_name,
                    COALESCE(corr.corrected_thesis, c.summary) AS summary, TRUE AS selected_for_digest,
-                   sc.total_score, sc.score_label,
-                   t.name AS tag_name, parent.name AS parent_tag_name
+                   pub.total_score, pub.score_band,
+                   pub.tag_name, pub.parent_tag_name
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            LEFT JOIN tags t ON t.id = at.tag_id
-            LEFT JOIN tags parent ON parent.id = t.parent_id
+            {publication_joins('a')}
             {_article_corrections_lateral(issue_window)}
             WHERE {_issue_article_sql(marks.article_marked_sql('a.id', 'digest'))}
-              AND COALESCE(sc.total_score, 0) >= %(min_score)s
+              AND COALESCE(pub.total_score, 0) >= %(min_score)s
               {max_score_clause}
               {month_clause}
               {search_clause}
               {tag_clause}
-            ORDER BY sc.total_score DESC NULLS LAST,
+            ORDER BY pub.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
             LIMIT %(limit)s
             """,
@@ -7826,7 +7876,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             {_signal_corrections_lateral("sig", issue_window)}
             WHERE {_issue_signal_sql(marks.signal_marked_sql('sig.id', 'digest'))}
               AND sig.score >= %(min_score)s
-              {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}
+              {signal_max_score_clause}
               {signal_month_clause}
               {signal_search_clause}
               {signal_tag_clause}
@@ -7982,6 +8032,7 @@ def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = N
     `month` («ГГГГ-ММ») — только статьи этого месяца, тем же выражением, что у сборщика
     (digest_candidates) и окна ленты. Проверка месяца стоит на сохранении черновика (с 29.09),
     а черновик, сохранённый до неё через «Все месяцы», хранит и статьи других месяцев (ревью #84).
+    Тема и балл берутся у публикации ленты, как у сборщика (publication_joins).
     """
     if not article_ids:
         return []
@@ -7999,15 +8050,12 @@ def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = N
                    a.language, a.image_url,
                    s.name AS source_name,
                    COALESCE(corr.corrected_thesis, c.summary) AS summary,
-                   sc.total_score, sc.score_label,
-                   t.name AS tag_name, parent.name AS parent_tag_name
+                   pub.total_score, pub.score_band,
+                   pub.tag_name, pub.parent_tag_name
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            LEFT JOIN tags t ON t.id = at.tag_id
-            LEFT JOIN tags parent ON parent.id = t.parent_id
+            {publication_joins('a')}
             {_article_corrections_lateral(feed_window.current())}
             WHERE a.id = ANY(%s)
               -- Членство и видимость — те же, что у сборщика (_issue_article_sql): выгрузка = то,

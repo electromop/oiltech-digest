@@ -12,16 +12,21 @@ import styles from "./Statistics.module.css";
 
 type Props = { data: MonthlyAnalytics; months: AnalyticsMonth[]; month: string };
 
-const FUNNEL: { key: keyof AnalyticsMonth; label: string }[] = [
-  { key: "collected", label: "Собрано из источников" },
-  { key: "relevant", label: "Релевантно — прошло отсев шума" },
-  { key: "summarized", label: "Суть и перевод готовы" },
-  { key: "strong", label: "Сильный сигнал — балл ≥60" },
-  { key: "top", label: "Топ — балл ≥70" },
-  { key: "digest_selected", label: "Отобрано в дайджест" },
-];
+// Пороги «сильного» и «топа» приходят с сервера (ступени балла сигнала); сервер без них (до 08.11) считал по 60 и 70.
+function funnel(strongFrom: number, topFrom: number): { key: keyof AnalyticsMonth; label: string }[] {
+  return [
+    { key: "collected", label: "Собрано из источников" },
+    { key: "relevant", label: "Релевантно — прошло отсев шума" },
+    { key: "summarized", label: "Суть и перевод готовы" },
+    { key: "strong", label: `Сильный сигнал — балл ≥${strongFrom}` },
+    { key: "top", label: `Топ — балл ≥${topFrom}` },
+    { key: "digest_selected", label: "Отобрано в дайджест" },
+  ];
+}
 
 export function AnalyticsOverview({ data, months, month }: Props) {
+  const strongFrom = data.score_thresholds?.strong ?? 60;
+  const topFrom = data.score_thresholds?.top ?? 70;
   const row = months.find((m) => m.month === month) ?? months[months.length - 1];
   const base = comparisonBase(data, row.month);
   const complete = months.filter((m) => m.complete);
@@ -53,7 +58,7 @@ export function AnalyticsOverview({ data, months, month }: Props) {
       <section className={styles.hero}>
         <p className={styles.heroLine}>
           <b>{period}:</b> из {formatInt(row.collected)} собранных материалов {formatInt(row.relevant)} релевантных
-          ({formatShare(share(row.relevant, row.collected))}) и <b>{formatInt(row.strong)} сильных сигналов</b> с баллом ≥60 —
+          ({formatShare(share(row.relevant, row.collected))}) и <b>{formatInt(row.strong)} сильных сигналов</b> с баллом ≥{strongFrom} —
           это {formatShare(share(row.strong, row.collected))} потока. Остальное платформа отсеяла как шум или оценила ниже порога.
         </p>
         <p className={styles.heroNote}>
@@ -69,8 +74,8 @@ export function AnalyticsOverview({ data, months, month }: Props) {
         <StatTile label="Релевантных" value={formatInt(row.relevant)}
           sub={`${formatShare(share(row.relevant, row.collected))} потока прошло отсев шума`}
           change={delta(row.relevant, base?.row.relevant ?? null, true)} base={base?.label} spark={spark("relevant")} />
-        <StatTile label="Сильные сигналы · балл ≥60" value={formatInt(row.strong)}
-          sub={`из них ${formatInt(row.top)} с баллом ≥70`}
+        <StatTile label={`Сильные сигналы · балл ≥${strongFrom}`} value={formatInt(row.strong)}
+          sub={`из них ${formatInt(row.top)} с баллом ≥${topFrom}`}
           change={delta(row.strong, base?.row.strong ?? null, true)} base={base?.label} spark={spark("strong")} />
         <StatTile label="Время до сигнала" value={formatHours(row.speed_p50_hours)}
           sub={`медиана от публикации до балла · 90% — до ${formatHours(row.speed_p90_hours)}`}
@@ -95,7 +100,7 @@ export function AnalyticsOverview({ data, months, month }: Props) {
             color="var(--viz-s1)"
             format={formatInt}
             max={row.collected}
-            rows={FUNNEL.map((stage) => {
+            rows={funnel(strongFrom, topFrom).map((stage) => {
               const value = Number(row[stage.key] ?? 0);
               return { key: String(stage.key), label: stage.label, value, note: formatShare(share(value, row.collected)) };
             })}
@@ -127,8 +132,8 @@ export function AnalyticsOverview({ data, months, month }: Props) {
             categories={categories}
             format={formatInt}
             series={[
-              { key: "strong", label: "Балл 60–69", color: "var(--viz-tier-light)", values: months.map((m) => m.strong - m.top) },
-              { key: "top", label: "Балл ≥70", color: "var(--viz-tier-dark)", values: months.map((m) => m.top) },
+              { key: "strong", label: `Балл ${strongFrom}–${topFrom - 1}`, color: "var(--viz-tier-light)", values: months.map((m) => m.strong - m.top) },
+              { key: "top", label: `Балл ≥${topFrom}`, color: "var(--viz-tier-dark)", values: months.map((m) => m.top) },
             ]}
           />
         </div>

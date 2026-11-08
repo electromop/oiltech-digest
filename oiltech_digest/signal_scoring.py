@@ -9,11 +9,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
 from oiltech_digest import config, event_dates
-from oiltech_digest.processing.pipeline import SCORE_AI_WEIGHT, SCORE_KEYWORD_WEIGHT
+from oiltech_digest.processing.pipeline import SCORE_AI_WEIGHT, SCORE_KEYWORD_WEIGHT, score_label
 
 STRONG, USEFUL, WATCH, WEAK = "strong", "useful", "watch", "weak"
 BAND_ORDER = (STRONG, USEFUL, WATCH, WEAK)
@@ -128,3 +129,21 @@ def band(score: float | None) -> str | None:
         return None
     strong, useful, watch = config.SIGNAL_SCORE_BANDS
     return STRONG if score >= strong else USEFUL if score >= useful else WATCH if score >= watch else WEAK
+
+
+def unscored(signal: Mapping[str, Any]) -> bool:
+    """Балла у сигнала нет: после «Отбора» без ступени (второй вызов не прошёл или он «другое»), при сбое «Отбора» и у
+    отсеянного поиском. Их не оценивали ни «Карточка», ни судья, и «0» с подписью «Низкая» солгали бы. То же правило в
+    SQL у темы и балла публикации ленты (repository.publication_joins): менять вместе."""
+    return signal.get("score_band") is None and (signal.get("otbor_decision") is not None
+                                                 or signal.get("otbor_failure") is not None
+                                                 or signal.get("filter_stage") == "search")
+
+
+def label(score: float | None, band_code: str | None) -> str | None:
+    """Словесная оценка балла, одна у витрин (/api/signals), ленты статей и выпуска: у балла второго вызова «Карточки»
+    его ступень (сильный, полезный, наблюдать, слабый), у прежнего балла (скопированного мостом со статьи, судьи радара,
+    статьи без сигнала) пороги ленты 80/65/40 (pipeline.score_label); балла нет (None), нет и оценки."""
+    if band_code in BAND_LABELS:
+        return BAND_LABELS[band_code].capitalize()
+    return None if score is None else score_label(float(score))

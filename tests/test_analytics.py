@@ -43,7 +43,10 @@ def _article(source_id, url, collected_sql, *, language="ru", relevant=True, sco
     return article_id
 
 
-def test_monthly_analytics_funnel_same_period_themes_and_sources(isolated_db):
+def test_monthly_analytics_funnel_same_period_themes_and_sources(isolated_db, monkeypatch):
+    # Ступени балла сигнала как на проде: «сильный сигнал» от 61, «топ» от 74 (статьи здесь без сигнала ленты, их балл
+    # сравнивается с теми же порогами).
+    monkeypatch.setattr(analytics.config, "SIGNAL_SCORE_BANDS", (74, 61, 40))
     src_a = _exec("INSERT INTO sources (name, source_type, url, enabled) VALUES ('A', 'Media', 'https://a.example', TRUE) RETURNING id")[0]
     src_b = _exec("INSERT INTO sources (name, source_type, url, enabled) VALUES ('B', 'Media', 'https://b.example', TRUE) RETURNING id")[0]
     root = _exec("INSERT INTO tags (name, enabled) VALUES ('Бурение', TRUE) RETURNING id")[0]
@@ -79,6 +82,64 @@ def test_monthly_analytics_funnel_same_period_themes_and_sources(isolated_db):
     top = [row["source"] for row in data["top_sources"] if row["month"] == current["month"]]
     assert top[0] == "A"
     assert "ai_cost" not in data
+
+
+# Середина текущего месяца по Москве: и по Москве (аналитика), и по UTC (воронка «Статистики») это один месяц.
+MID_MONTH = ("(date_trunc('month', now() AT TIME ZONE 'Europe/Moscow') + interval '1 day 12 hours')"
+             " AT TIME ZONE 'Europe/Moscow'")
+
+
+def _feed_signal(article_id, *, theme, score=0, band=None, filled_hours_after=None):
+    """Сигнал ленты статьи, принятой «Отбором» (ключ feed:<статья>): тема «Карточки», балл и ступень её второго вызова;
+    рецепт второго вызова (filled_at) записан через filled_hours_after часов после сбора статьи."""
+    recipe = (f"jsonb_build_object('filled_at', ((SELECT collected_at FROM articles WHERE id = %(id)s)"
+              f" + interval '{filled_hours_after} hours')::text)" if filled_hours_after is not None else "NULL")
+    _exec(f"""INSERT INTO signals (signal_key, origin, origin_article_id, signal_category, title, theme, maturity,
+                                   otbor_decision, score, score_band, scores_recipe)
+              VALUES ('feed:' || %(id)s, 'feed', %(id)s, 'business', 't', %(theme)s, 'watch', 'accept', %(score)s,
+                      %(band)s, {recipe})""",
+          {"id": article_id, "theme": theme, "score": score, "band": band})
+    _exec("UPDATE articles SET selector = 'otbor' WHERE id = %s", (article_id,))
+    _exec("UPDATE article_cards SET relevant = NULL WHERE article_id = %s", (article_id,))
+
+
+def test_statistics_read_the_feed_signal_and_strong_and_top_follow_its_bands(isolated_db, monkeypatch):
+    """Решение владельца 08.11: тег и балл статьи снимаются, «Статистика» и аналитика читают тему и балл публикации из
+    сигнала ленты, у статьи без него прежние тег и балл. «Сильный сигнал» и «топ» считаются по ступеням балла сигнала
+    (SIGNAL_SCORE_BANDS 74/61/40 на проде), а не по прежним 60 и 70: «топ» это те же сигналы, что бизнес-лента
+    подписывает «Сильный». Статья «Отбора», которой старая цепочка ещё поставила свой балл, без балла сигнала остаётся
+    без балла."""
+    monkeypatch.setattr(analytics.config, "SIGNAL_SCORE_BANDS", (74, 61, 40))
+    src = _exec("INSERT INTO sources (name, source_type, url, enabled) VALUES ('A', 'Media', 'https://a.example', TRUE) RETURNING id")[0]
+    root = _exec("INSERT INTO tags (name, enabled) VALUES ('Бурение', TRUE) RETURNING id")[0]
+    child = _exec("INSERT INTO tags (name, parent_id, enabled) VALUES ('Долота', %s, TRUE) RETURNING id", (root,))[0]
+    # «Отбор»: своего тега и балла у статьи нет, у сигнала тема «Карточки» и балл второго вызова.
+    strong = _article(src, "https://a.example/strong", MID_MONTH, published_hours_before=4)
+    _feed_signal(strong, theme="Бурение", score=80, band="strong", filled_hours_after=3)
+    useful = _article(src, "https://a.example/useful", MID_MONTH, published_hours_before=4)
+    _feed_signal(useful, theme="Бурение", score=65, band="useful", filled_hours_after=5)
+    # Второй вызов ещё не ответил; балл 90 старой цепочки не в счёт: у публикации балла нет.
+    waiting = _article(src, "https://a.example/waiting", MID_MONTH, score=90, tag_id=child)
+    _feed_signal(waiting, theme="Бурение")
+    # Без сигнала ленты: балл и тег статьи. 70 по прежнему правилу был «топ», по ступеням сигнала он «сильный».
+    _article(src, "https://a.example/fallback-75", MID_MONTH, score=75, tag_id=child, published_hours_before=4)
+    _article(src, "https://a.example/fallback-70", MID_MONTH, score=70)
+
+    data = analytics.monthly_analytics(1)
+    current = data["months"][-1]
+    assert data["score_thresholds"] == {"strong": 61, "top": 74}
+    assert (current["relevant"], current["scored"], current["strong"], current["top"]) == (5, 4, 4, 2)
+    assert current["sources_strong"] == 1
+    # Время до балла: второй вызов (рецепт) 7 и 9 ч, балл статьи без сигнала 6 ч (4 ч до сбора и 2 ч обработки).
+    assert round(current["speed_p50_hours"]) == 7
+    themes = [(row["tag"], row["relevant"], row["strong"]) for row in data["themes"] if row["month"] == current["month"]]
+    assert themes == [("Бурение", 4, 3)]
+
+    [platform] = [row for row in repository.monthly_platform_stats(1) if row["collected"]]
+    # Средний балл (80 + 65 + 75 + 70) / 4 = 72,5; «годных» по прежнему порогу 60.
+    assert (platform["scored"], float(platform["avg_score"]), platform["digest_ready"]) == (4, 73.0, 4)
+    dashboard = repository.dashboard_stats()
+    assert (dashboard["processed_articles"], dashboard["avg_score"]) == (5, 73)
 
 
 def test_analytics_is_admin_only(monkeypatch):
