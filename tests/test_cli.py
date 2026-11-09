@@ -140,8 +140,8 @@ def test_enqueue_external_scrape_enqueues_only_external_sources(monkeypatch, cap
     sources = [
         {"id": 22, "parse_strategy": "playwright", "network_region": "external"},
         {"id": 4, "parse_strategy": "rss", "network_region": "external"},
-        {"id": 50, "parse_strategy": "request", "network_region": "auto"},      # локальный — пропуск
-        {"id": 60, "parse_strategy": "telegram", "network_region": "external"}, # telegram — не трогаем
+        {"id": 50, "parse_strategy": "request", "network_region": "auto"},      # локальный: пропуск
+        {"id": 60, "parse_strategy": "telegram", "network_region": "external"}, # telegram: не трогаем
     ]
     monkeypatch.setattr("oiltech_digest.db.repository.get_enabled_sources", lambda: sources)
     jobs = []
@@ -196,7 +196,7 @@ def test_enqueue_resummarize_marks_jobs_to_write_only_summary_and_translation(mo
 
 
 def test_enqueue_resummarize_refuses_local_pipeline(monkeypatch):
-    """Локальный конвейер пометки only не знает и готовые стадии пропускает — задача прошла бы впустую."""
+    """Локальный конвейер пометки only не знает и готовые стадии пропускает: задача прошла бы впустую."""
     monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
     monkeypatch.setattr("oiltech_digest.processing.mixed_script.resummarize_selection",
                         lambda ids=None: {"summary": [1], "title": [], "source_title": []})
@@ -209,7 +209,7 @@ def test_enqueue_resummarize_refuses_local_pipeline(monkeypatch):
 
 
 def test_scripts_only_json_keeps_every_change_for_rollback(monkeypatch, capsys):
-    """Ревью 27.09: --json обрезал список до --show (30 из 185) — откатить было не по чему."""
+    """Ревью 27.09: --json обрезал список до --show (30 из 185): откатить было не по чему."""
     changes = [{"article_id": index, "field": "summary", "before": "вхoдит", "after": "входит"} for index in range(5)]
     monkeypatch.setattr("oiltech_digest.processing.mixed_script.repair_cards",
                         lambda **kwargs: {"changed_fields": 5, "applied": False, "changes": changes})
@@ -526,7 +526,7 @@ def test_eval_terminology_command_writes_reports(tmp_path, capsys):
 
 
 def test_eval_terminology_takes_every_case_by_default():
-    """#150: случаев больше 100, а золотые примеры идут первыми — предел по умолчанию отрезал бы часть словаря."""
+    """#150: случаев больше 100, а золотые примеры идут первыми: предел по умолчанию отрезал бы часть словаря."""
     assert cli.build_parser().parse_args(["eval-terminology"]).limit is None
 
 
@@ -535,7 +535,7 @@ def test_apply_source_overrides_prints_missing_and_ambiguous_names(monkeypatch, 
 
     Вызов в bootstrap обёрнут в `|| true` (docker-compose) и идёт через необязательный
     run_step (docker-scheduler), поэтому код возврата до глаз не доходит. Если печатать
-    только счётчики, «не найдено=1» теряется среди строк деплоя — и молчащий источник
+    только счётчики, «не найдено=1» теряется среди строк деплоя: и молчащий источник
     выглядит как успешно применённый оверрайд. Имя обязано быть в stdout.
     """
     monkeypatch.setattr(

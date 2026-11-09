@@ -1,4 +1,4 @@
-"""Радар через «Отбор» (#131, спека #128), шов 1 — контур целиком: задача радара → воркер NL с подставными поиском GPT
+"""Радар через «Отбор» (#131, спека #128), шов 1, контур целиком: задача радара → воркер NL с подставными поиском GPT
 и страницами → ядро → шаг «Отбора» → воркер → ядро → «Суть и перевод» → API витрин и разделов отклонённого
 (tests/otbor_radar_support.py). Поиск только находит: решает «Отбор».
 """
@@ -9,9 +9,9 @@ from oiltech_digest.db import repository
 from oiltech_digest.signal_research import LIST_PAGE, PAGE_NOT_FETCHED, UNCONFIRMED_LINK
 from tests.otbor_radar_support import DRAFT_SUMMARY, DRAFT_WHY, PAGE_TEXT, event, page, run_radar, summarize
 from tests.otbor_support import answer, article, decide, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
+from tests.otbor_support import contour  # noqa: F401: фикстура
 from tests.signal_card_support import DRILLING, FakeModel, api_get, run_worker, tag, worker
-from tests.signal_card_support import admin, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import admin, user  # noqa: F401: фикстуры
 
 CONTRACT_URL = "https://adnoc.example/news/hail-ghasha-drilling"
 CONTRACT_TITLE = "ADNOC Drilling awards SLB a contract to drill 40 wells for Hail and Ghasha"
@@ -40,7 +40,7 @@ def test_business_finding_the_old_search_dropped_reaches_otbor_and_gets_a_russia
     model = decide(monkeypatch, {CONTRACT_TITLE: answer()})
 
     [call] = model.calls
-    # Вход «Отбора» у находки — страница издателя целиком (до 6 000 знаков, а не обрывок в 1 500), её адрес и дата
+    # Вход «Отбора» у находки: страница издателя целиком (до 6 000 знаков, а не обрывок в 1 500), её адрес и дата
     # поступления; ни даты события, ни черновых данных модели поиска (тип, компания, суть, «почему важно»).
     assert len(PAGE_TEXT) > 1500 and PAGE_TEXT in call["input"]
     header = call["input"].split("Текст публикации:", 1)[0]
@@ -48,7 +48,7 @@ def test_business_finding_the_old_search_dropped_reaches_otbor_and_gets_a_russia
     assert "Ссылки находки: нет" in header
     for draft in (DRAFT_SUMMARY, DRAFT_WHY, "not_technology", "2024-03-01"):
         assert draft not in call["input"]
-    # Решение «Отбора» — у сигнала радара, витрину выбирает категория: бизнес-находка в бизнес-ленте.
+    # Решение «Отбора», у сигнала радара, витрину выбирает категория: бизнес-находка в бизнес-ленте.
     summary_model = summarize(monkeypatch, {CONTRACT_TITLE: (CONTRACT_RU, "Суть от «Суть и перевод»")})
     card = showcase(user, "business")[CONTRACT_TITLE]
     assert (card["origin"], card["otbor_decision"], card["signal_category"], card["title_ru"], card["summary"]) == (
@@ -63,7 +63,7 @@ def test_business_finding_the_old_search_dropped_reaches_otbor_and_gets_a_russia
 
 def test_accepted_finding_gets_its_russian_title_edited_by_the_rules(user, contour, monkeypatch):
     """Решение владельца 03.11: русский заголовок принятой находки не по правилам эксперта (#150) правит «Суть и
-    перевод», как переводит иноязычный. Заголовок страницы издателя остаётся в title, правленый — в title_ru."""
+    перевод», как переводит иноязычный. Заголовок страницы издателя остаётся в title, правленый: в title_ru."""
     run_radar(monkeypatch, [event(RU_TITLE, RU_URL)], {RU_URL: page(RU_TITLE)})
     decide(monkeypatch, {RU_TITLE: answer()})
 
@@ -115,8 +115,8 @@ def test_mixed_events_is_a_reason_only_for_a_finding_with_several_links(user, ad
                                  "Equinor tests a drilling robot offshore Norway": [mixed, answer(
                                      industry="oil_gas", category="technology")]})
 
-    # «Дедуп» склеил две находки одного события: у главной две ссылки, и «разные события» у неё — решение, а не
-    # конфликт. У находки с одной ссылкой та же причина — конфликт шагов и повтор.
+    # «Дедуп» склеил две находки одного события: у главной две ссылки, и «разные события» у неё: решение, а не
+    # конфликт. У находки с одной ссылкой та же причина: конфликт шагов и повтор.
     calls = {}
     for call in model.calls:
         calls.setdefault(call["input"].splitlines()[0].split(":", 1)[1].strip(), []).append(call)
@@ -154,7 +154,7 @@ def test_mixed_events_never_lands_on_a_finding_with_one_link_even_when_the_model
     decide(monkeypatch, {"Equinor tests a drilling robot offshore Norway": reject(
         "mixed_events", industry="oilfield_services", oilfield_relevance="direct")})
 
-    # Модель дважды ставит невозможную причину: отказ остаётся спорным, но без неё — раздел «Без причины».
+    # Модель дважды ставит невозможную причину: отказ остаётся спорным, но без неё: раздел «Без причины».
     assert _sections(admin)["Equinor tests a drilling robot offshore Norway"].startswith(
         "«Отбор» → Без причины (спорное)")
 
@@ -166,7 +166,7 @@ def test_chinese_headline_is_not_a_list_page(user, admin, contour, monkeypatch):
 
     model = decide(monkeypatch, {title: answer(category="technology")})
 
-    # Иероглиф — слово: короткий по пробелам китайский заголовок новости — не лента и не оглавление.
+    # Иероглиф, слово: короткий по пробелам китайский заголовок новости: не лента и не оглавление.
     assert len(model.calls) == 1 and _sections(admin) == {}
 
 
@@ -197,7 +197,7 @@ def test_summary_by_number_is_not_paid_for_a_finding_otbor_rejected(user, contou
     cli.main(["enqueue-signal-summary", "--ids", str(signal_id)])
     run_worker("external-ai")
 
-    # Дальше «Отбора» идут только принятые — и по названным номерам.
+    # Дальше «Отбора» идут только принятые: и по названным номерам.
     assert model.calls == [] and "пропущены" in capsys.readouterr().out
 
 
@@ -228,7 +228,7 @@ def test_finding_waiting_for_otbor_is_shown_nowhere_and_gets_no_card(user, admin
     assert model.calls == []
 
 
-# --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте, — ссылка его карточки ----------------
+# --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте,: ссылка его карточки ----------------
 
 FEED_TITLE = "ADNOC Drilling заключила с SLB контракт на бурение 40 скважин Hail и Ghasha"
 
@@ -240,18 +240,18 @@ def _last_seen(signal_id):
 
 def test_finding_of_an_event_already_in_the_feed_becomes_a_link_of_its_card_and_skips_otbor(
         user, contour, monkeypatch):
-    # Статья сбора, принятая «Отбором», — видимая карточка бизнес-ленты.
+    # Статья сбора, принятая «Отбором»,: видимая карточка бизнес-ленты.
     article(FEED_TITLE, PAGE_TEXT)
     decide(monkeypatch, {FEED_TITLE: answer()})
     [feed_card] = showcase(user, "business").values()
     seen = _last_seen(feed_card["id"])
 
-    # Поиск нашёл то же событие на сайте оператора: заголовок страницы английский, русский заголовок модели поиска —
+    # Поиск нашёл то же событие на сайте оператора: заголовок страницы английский, русский заголовок модели поиска:
     # как у статьи ленты. Судья «Дедупа» говорит «одно событие».
     run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=True)
     otbor_model = decide(monkeypatch, {})
 
-    # Второй карточки нет, «Отбор» за находку не платится: её ссылка — публикация карточки ленты.
+    # Второй карточки нет, «Отбор» за находку не платится: её ссылка: публикация карточки ленты.
     assert otbor_model.calls == []
     [card] = showcase(user, "business").values()
     assert card["id"] == feed_card["id"]
@@ -268,7 +268,7 @@ def test_finding_of_an_event_already_in_the_feed_becomes_a_link_of_its_card_and_
     [card] = showcase(user, "business").values()
     assert [one["stage"] for one in card["decision_log"]].count("«Дедуп»") == 1
 
-    # Судья следующего прогона ответил «разные» (или вызов сбоил): ссылку держит карточка ленты, находка найдена снова —
+    # Судья следующего прогона ответил «разные» (или вызов сбоил): ссылку держит карточка ленты, находка найдена снова:
     # второй карточки, «Отбора» за неё и переезда ссылки нет.
     run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=False)
     assert decide(monkeypatch, {}).calls == []

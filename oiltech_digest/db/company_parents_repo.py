@@ -1,5 +1,5 @@
 """Список дочерних обществ «дочка → мать» в базе (таблица company_parents): чтение для экрана и фильтра, правка
-с экрана «Дочерние общества». Проверки пары и разбор вставки — company_parents.py, без базы.
+с экрана «Дочерние общества». Проверки пары и разбор вставки: company_parents.py, без базы.
 
 Проверка и запись идут одной транзакцией под блокировкой таблицы (editing): две правки одновременно не дадут
 дочке двух матерей и не замкнут цикл. Чтение блокировку не ждёт.
@@ -20,7 +20,7 @@ _COLUMNS = "id, child_name, parent_name, note, created_by, created_at"
 
 
 def list_rows() -> list[dict[str, Any]]:
-    """Строки списка для экрана: кто добавил — почтой учётки (учётку удалили — пусто). По матери, затем по
+    """Строки списка для экрана: кто добавил: почтой учётки (учётку удалили: пусто). По матери, затем по
     дочке: дочки одной матери рядом."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -43,7 +43,7 @@ def pairs() -> list[tuple[str, str]]:
 
 
 def delete(pair_id: int) -> bool:
-    """Удалить строку списка; False — её нет. Удаление цикла и второй матери не создаёт: проверка не нужна."""
+    """Удалить строку списка; False: её нет. Удаление цикла и второй матери не создаёт: проверка не нужна."""
     with connection.get_connection() as conn:
         deleted = conn.execute("DELETE FROM company_parents WHERE id = %s RETURNING id", (pair_id,)).fetchone()
         conn.commit()
@@ -51,7 +51,7 @@ def delete(pair_id: int) -> bool:
 
 
 class Editing:
-    """Правка списка внутри editing(): пары для проверки и запись — в одной транзакции."""
+    """Правка списка внутри editing(): пары для проверки и запись: в одной транзакции."""
 
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
@@ -76,7 +76,7 @@ class Editing:
 @contextmanager
 def editing() -> Iterator[Editing]:
     """Транзакция правки списка: таблица закрыта для других правок до конца блока (SHARE ROW EXCLUSIVE: чтение
-    идёт, запись ждёт). Блок закончился — запись принята; исключение (в том числе отказ API) — ничего не
+    идёт, запись ждёт). Блок закончился: запись принята; исключение (в том числе отказ API): ничего не
     записано."""
     with connection.get_connection() as conn:
         conn.execute("LOCK TABLE company_parents IN SHARE ROW EXCLUSIVE MODE")

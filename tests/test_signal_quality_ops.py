@@ -85,7 +85,7 @@ def test_dedup_judge_uses_dedup_model(monkeypatch):
     assert recorder.calls[0]["budget"] == 700 + 2000
 
 
-# --- Расход радара — на экран «Статистика» ---------------------------------------------------
+# --- Расход радара: на экран «Статистика» ---------------------------------------------------
 
 
 def test_run_collects_ai_usage_by_stage(monkeypatch):

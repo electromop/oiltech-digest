@@ -134,7 +134,7 @@ def test_enqueue_daily_signal_discovery_skips_existing_daily_job(monkeypatch):
     result = background_jobs.enqueue_daily_signal_discovery()
 
     assert result["enqueued"] is False and result["reason"] == "already_scheduled"
-    assert 0 < result["lookback_hours"] <= 24  # окно — с полуночи по Москве
+    assert 0 < result["lookback_hours"] <= 24  # окно: с полуночи по Москве
     assert called == []
 
 
@@ -491,14 +491,14 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     """Зависшая ЛОКАЛЬНАЯ AI-обработка, уже начавшая жечь OpenAI, не перезапускается.
 
     requeue переиспользует тот же job_id, а get_articles_by_ids не пропускает уже
-    обработанные статьи — повторный прогон означает повторный РЕАЛЬНЫЙ расход.
+    обработанные статьи: повторный прогон означает повторный РЕАЛЬНЫЙ расход.
     Дедуп биллинга по (job_id, article_id, stage) тут не помог бы: он лишь СПРЯТАЛ бы
     второй, реально оплаченный вызов из отчёта о стоимости. Поэтому помечаем failed
-    без авто-ретрая. Внешний контур (external-ai) не затрагиваем — у него свой lease.
+    без авто-ретрая. Внешний контур (external-ai) не затрагиваем: у него свой lease.
 
-    Дискриминатор — ai_started_at, НЕ progress: claim/mark-running форсят progress в 10
+    Дискриминатор, ai_started_at, НЕ progress: claim/mark-running форсят progress в 10
     ещё до тела обработчика, поэтому «до-AI» кейс здесь реалистичен (running, progress=10,
-    ai_started_at IS NULL) — ровно он ломался у прежнего гарда `progress > 0`.
+    ai_started_at IS NULL): ровно он ломался у прежнего гарда `progress > 0`.
     """
     stale_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
@@ -538,9 +538,9 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     # Упала ДО первого вызова модели (ai_started_at IS NULL) → безопасно перезапустить.
     assert repository.get_background_job(int(not_started["id"]))["status"] == "queued"
 
-    # Внешний контур не задет — у него собственная защита (lease/finalize, T2/H1).
+    # Внешний контур не задет: у него собственная защита (lease/finalize, T2/H1).
     # Проверяем именно 'running': прежняя версия теста ждала 'queued', а это состояние
-    # давали ОБА поведения — и «не тронули», и «переочередили». Ассерт был слеп ровно
+    # давали ОБА поведения: и «не тронули», и «переочередили». Ассерт был слеп ровно
     # к тому багу, который потом устроил вечную петлю 1181.
     assert repository.get_background_job(int(external["id"]))["status"] == "running"
 
@@ -567,13 +567,13 @@ def _claimed_external_job(*, max_attempts: int = 3, lease_seconds: int = 600) ->
 def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
     """Регресс на вечную петлю 1181 (24.07).
 
-    Батч 800 статей идёт ~93 минуты — дольше stale_minutes=60. Воркер при этом жив
+    Батч 800 статей идёт ~93 минуты: дольше stale_minutes=60. Воркер при этом жив
     и продлевает lease heartbeat'ом перед каждой статьёй. Уборщик по настенным часам
     возвращал такую задачу в очередь вопреки живому lease: воркер получал 409, бросал
     батч, тут же забирал ту же задачу (она самая старая в очереди) и начинал с первой
     статьи. Ровно раз в час, вечно, каждый круг заново оплачивая OpenAI.
 
-    Настоящий признак жизни внешней задачи — lease, и он здесь свежий. Значит уборщик
+    Настоящий признак жизни внешней задачи: lease, и он здесь свежий. Значит уборщик
     по часам обязан пройти мимо.
     """
     job = _claimed_external_job()
@@ -592,7 +592,7 @@ def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
     assert stored["status"] == "running"
     assert stored["lease_token_hash"] == "hash-live"
 
-    # А по своему собственному сигналу — протухшему lease — она разбирается штатно.
+    # А по своему собственному сигналу, протухшему lease, она разбирается штатно.
     with connection.get_connection() as conn:
         conn.execute(
             "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = %s",
@@ -604,11 +604,11 @@ def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
 
 
 def test_external_job_running_without_lease_is_not_orphaned(isolated_db):
-    """У внешней задачи осталась ОДНА страховка — lease, значит она обязана крыть всё поле.
+    """У внешней задачи осталась ОДНА страховка: lease, значит она обязана крыть всё поле.
 
     `release_external_background_job_finalize` откатывает finalizing→running и рассчитывает,
     что задачу подберёт путь восстановления. Пока уборщик по часам тоже трогал внешние задачи,
-    'running' без lease подобрал бы он. Теперь не подберёт — поэтому «lease IS NULL» обязано
+    'running' без lease подобрал бы он. Теперь не подберёт: поэтому «lease IS NULL» обязано
     считаться потерей, иначе задача зависла бы в 'running' навсегда.
     """
     job = _claimed_external_job()
@@ -659,7 +659,7 @@ def test_lost_external_job_dies_after_max_attempts_instead_of_looping(isolated_d
 
     assert repository.get_background_job(job_id)["attempts"] == 3
 
-    # Третий круг: попытки исчерпаны — задача закрывается, а не возвращается в очередь.
+    # Третий круг: попытки исчерпаны: задача закрывается, а не возвращается в очередь.
     expire_lease()
     outcome = repository.requeue_expired_external_leases()
 
@@ -692,7 +692,7 @@ def test_stale_local_job_dies_after_max_attempts(isolated_db):
 def test_worker_loop_sweep_reaps_expired_external_leases(monkeypatch, isolated_db):
     """T21: реапер lease обязан работать по расписанию, а не только внутри claim.
 
-    Пока воркер занят длинной задачей, за новой он не приходит — значит и протухшие
+    Пока воркер занят длинной задачей, за новой он не приходит: значит и протухшие
     lease никто не разбирает. Умри воркер совсем, задачи висели бы 'running' вечно,
     и интерфейс показывал бы идущую работу, которой нет.
     """

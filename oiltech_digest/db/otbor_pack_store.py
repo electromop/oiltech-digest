@@ -1,10 +1,10 @@
 """Чтение базы для пакета эксперту «Отбора» (#129): кандидаты групп, ссылки находок, факты прежних строк.
 
-Выборку и правила делает otbor_pack, здесь только запросы. Текст издателя и дата ссылки — по правилам пакета
-карточки (signal_card_pack): у находки «режима ChatGPT» дата ссылки — дата события по версии модели поиска, в пакет
+Выборку и правила делает otbor_pack, здесь только запросы. Текст издателя и дата ссылки: по правилам пакета
+карточки (signal_card_pack): у находки «режима ChatGPT» дата ссылки: дата события по версии модели поиска, в пакет
 она не идёт.
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в signal_card_store):
 изоляция тестов держится на подмене этого атрибута.
 """
 
@@ -19,22 +19,22 @@ from oiltech_digest import config, feed_window
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import _judged_sql, radar_origin_sql
 
-# Дата ссылки находки: у статьи корпуса — её, у ссылки поиска «режима ChatGPT» — никакой (это дата события по
-# версии модели поиска), у прочих ссылок — дата издателя.
+# Дата ссылки находки: у статьи корпуса: её, у ссылки поиска «режима ChatGPT»: никакой (это дата события по
+# версии модели поиска), у прочих ссылок: дата издателя.
 LINK_PUBLISHED_SQL = (
     "CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)"
     " WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(search_source)s THEN e.published_at END"
 )
-# Текст ссылки написал издатель: статья корпуса или докачанная страница (без докачки текст находки — сводка модели
-# поиска). Так выбирается главная публикация находки — для пакета и для «сильных сверх пакета» экзамена «Карточки».
+# Текст ссылки написал издатель: статья корпуса или докачанная страница (без докачки текст находки: сводка модели
+# поиска). Так выбирается главная публикация находки: для пакета и для «сильных сверх пакета» экзамена «Карточки».
 PUBLISHER_TEXT_SQL = (
     "(length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s"
     " OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'"
     " AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))"
 )
-# Заголовок ссылки: у статьи корпуса — её, у страницы, которую докачали, и у выдачи обычного поиска — издателя. У
+# Заголовок ссылки: у статьи корпуса: её, у страницы, которую докачали, и у выдачи обычного поиска: издателя. У
 # ссылки «режима ChatGPT» без докачки заголовок написала модель поиска (бывает переводом: «SLB выиграла у Aramco…» у
-# английской страницы, проверка пакета 22.10) — его нет: черновые данные поиска в решения агентов не идут (спека #128).
+# английской страницы, проверка пакета 22.10), его нет: черновые данные поиска в решения агентов не идут (спека #128).
 _LINK_TITLE_SQL = (
     "CASE WHEN a.id IS NULL AND e.raw_payload_json->>'evidence_source' = %(search_source)s"
     " AND e.raw_payload_json->>'full_text_fetched' IS DISTINCT FROM 'true' THEN NULL"
@@ -44,7 +44,7 @@ _LINK_TITLE_SQL = (
 
 def feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
     """Статьи ленты, собранные в окне, о которых гейт уже решил: условие ленты без решения гейта
-    (feed_window.ungated_visible_sql) — отклонённые лента не показывает, а пакету они нужны. Отметки людей выборку
+    (feed_window.ungated_visible_sql): отклонённые лента не показывает, а пакету они нужны. Отметки людей выборку
     не трогают."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -69,9 +69,9 @@ def feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
 
 def radar_candidates(until: str) -> list[dict[str, Any]]:
     """Находки поиска, поступившие до конца окна, с главной публикацией, текст которой написал издатель (статья
-    корпуса или докачанная страница; без докачки текст находки — сводка модели). Вид: брак судьи (judge), брак
+    корпуса или докачанная страница; без докачки текст находки: сводка модели). Вид: брак судьи (judge), брак
     ревью пачки (review), иной этап отсева (other_stage), смешанные ссылки (mixed), событие старше срока на день
-    находки (old) — по дате судьи или человека, не агента карточки, как у правил показа; без вида — не отсеяна."""
+    находки (old): по дате судьи или человека, не агента карточки, как у правил показа; без вида: не отсеяна."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     age = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
@@ -106,7 +106,7 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
 
 
 def evidence_links(signal_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Ссылки находок по силе: у ссылки на статью корпуса заголовок, адрес и издатель — статьи; у ссылки «режима
+    """Ссылки находок по силе: у ссылки на статью корпуса заголовок, адрес и издатель: статьи; у ссылки «режима
     ChatGPT» без докачки заголовка нет (_LINK_TITLE_SQL)."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
@@ -142,7 +142,7 @@ def card_row_facts(article_ids: list[int], signal_ids: list[int]) -> tuple[dict[
 
 
 def judged_categories(signal_ids: list[int]) -> dict[int, str | None]:
-    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки), — контроль
+    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки),: контроль
     категории на экзамене «Отбора» (#133)."""
     with connection.get_connection() as conn:
         rows = conn.execute(f"SELECT s.id, {_judged_sql('s', 'signal_category')} FROM signals s"

@@ -1,11 +1,11 @@
 """Доступ к данным загруженных документов.
 
 Отдельный модуль, а не часть repository.py, по двум причинам: repository.py уже за три
-тысячи строк, и — важнее — документ не должен случайно попасть ни в один запрос по articles.
+тысячи строк, и, важнее, документ не должен случайно попасть ни в один запрос по articles.
 
 ВНИМАНИЕ про тесты: соединение берётся как `connection.get_connection()`, атрибутом модуля,
 а НЕ через `from ... import get_connection`. Изоляция тестов держится на подмене этого
-атрибута; модуль, импортировавший имя напрямую, уходит в боевую схему мимо подмены —
+атрибута; модуль, импортировавший имя напрямую, уходит в боевую схему мимо подмены:
 на этом уже обжигались (source_overrides).
 """
 
@@ -60,7 +60,7 @@ def document_by_hash(owner_user_id: int, content_sha256: str) -> dict | None:
 
 
 def get_document(document_id: int, owner_user_id: int | None = None) -> dict | None:
-    """owner_user_id=None — только для внутренних путей (воркер). Из HTTP всегда передавать
+    """owner_user_id=None: только для внутренних путей (воркер). Из HTTP всегда передавать
     владельца: проверка существования без проверки владельца отдаёт чужой документ."""
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -198,7 +198,7 @@ def get_facts(document_id: int) -> list[dict]:
 
 
 def delete_document(document_id: int, owner_user_id: int) -> str | None:
-    """Возвращает storage_path удалённого документа — файл сносит вызывающий:
+    """Возвращает storage_path удалённого документа, файл сносит вызывающий:
     файловая система транзакцией не покрывается."""
     with _conn() as conn:
         cur = conn.cursor()

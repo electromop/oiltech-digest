@@ -5,7 +5,7 @@ from datetime import date
 from oiltech_digest import config, fx
 
 # Фрагмент настоящего ответа XML_daily.asp (windows-1251, запятая в числе, дата курса
-# в атрибуте — на выходной ЦБ отдаёт последний установленный курс).
+# в атрибуте: на выходной ЦБ отдаёт последний установленный курс).
 CBR_XML = (
     '<?xml version="1.0" encoding="windows-1251"?><ValCurs Date="29.08.2026" name="Foreign Currency Market">'
     '<Valute ID="R01035"><NumCode>826</NumCode><CharCode>GBP</CharCode><Nominal>1</Nominal>'
@@ -37,7 +37,7 @@ def test_past_date_is_cached_forever_and_failure_falls_back_to_assumption(monkey
     today = date(2026, 9, 19)
     assert fx.usd_rub(date(2026, 8, 31), today=today)["rate"] == 85.6007
     assert fx.usd_rub(date(2026, 8, 31), today=today)["rate"] == 85.6007
-    assert calls == [{"date_req": "31/08/2026"}]  # второй раз — из кэша
+    assert calls == [{"date_req": "31/08/2026"}]  # второй раз: из кэша
 
     def down(*args, **kwargs):
         raise OSError("cbr.ru недоступен")

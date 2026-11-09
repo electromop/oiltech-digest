@@ -5,13 +5,13 @@
 жизни; второй пишет в лог и ждёт, не делая ни одного шага.
 
 24.09 08:32 шаг parse не вернулся 20 ч 45 мин: page.content() у листинга JPT ждал без
-срока, шаги идут друг за другом — стоял весь цикл. Под PID 1 контейнера к тому часу было
-около 2250 зомби chrome (по 2 на рендер; 25.09 в 05:31 — 2259) при pids.max 2315. run_step
+срока, шаги идут друг за другом: стоял весь цикл. Под PID 1 контейнера к тому часу было
+около 2250 зомби chrome (по 2 на рендер; 25.09 в 05:31-2259) при pids.max 2315. run_step
 ведёт шаг под сроком (oiltech_digest/step_timeout.py), сервисы с Chromium идут с init.
 
-Процессы настоящие: замок — это сессия базы, срок — сигналы и группы процессов; подделка
+Процессы настоящие: замок это сессия базы, срок: сигналы и группы процессов; подделка
 их не проверит. Каждый тест падает на коде до своей правки, кроме страховки остановки
-(test_container_stop_still_reaches_the_step) — она держит от регресса."""
+(test_container_stop_still_reaches_the_step): она держит от регресса."""
 
 import os
 import random
@@ -36,8 +36,8 @@ STEP = ("import os, sys, time\n"
 
 
 def _wrapper(key: int, marker: Path, *extra: str) -> subprocess.Popen:
-    # Вывод — в файл, а не в pipe: шаг живёт в своей группе процессов, и оставшись сиротой,
-    # он держал бы pipe открытым — чтение вывода висело бы до его конца.
+    # Вывод, в файл, а не в pipe: шаг живёт в своей группе процессов, и оставшись сиротой,
+    # он держал бы pipe открытым: чтение вывода висело бы до его конца.
     out = marker.with_name(f"{marker.name}.{time.monotonic_ns()}.out")
     proc = subprocess.Popen(
         [sys.executable, "-m", "oiltech_digest.cli", "scheduler-lock", "--key", str(key),
@@ -114,7 +114,7 @@ def test_second_scheduler_waits_and_runs_no_steps(tmp_path, key):
         second = _wrapper(key, marker)
         time.sleep(2.0)
         assert len(_steps(marker)) == 1  # второй не сделал ни одного шага
-        assert second.poll() is None  # и не упал — ждёт
+        assert second.poll() is None  # и не упал: ждёт
 
         first.send_signal(signal.SIGTERM)
         first.wait(timeout=15)
@@ -141,7 +141,7 @@ def test_waiting_scheduler_says_who_holds_the_lock(tmp_path, key):
 
 
 def test_steps_stop_when_lock_connection_is_lost(tmp_path, key):
-    """Замок — сессия базы. Порвалась (перезапуск Postgres) — второй экземпляр может его
+    """Замок: сессия базы. Порвалась (перезапуск Postgres): второй экземпляр может его
     взять, поэтому шаги этого процесса обязаны остановиться, а не идти без замка."""
     marker = tmp_path / "steps"
     first = _wrapper(key, marker, "--check-seconds", "0.3")
@@ -186,18 +186,18 @@ def test_scheduler_script_takes_the_lock_before_any_step():
 
 def _app_service(services: dict) -> str:
     """Сервис приложения зовётся по-разному: app у основного стека, agents-app у агентного
-    (общая сеть не даёт делить имя) — до смены идентичности стека в D."""
+    (общая сеть не даёт делить имя): до смены идентичности стека в D."""
     return "app" if "app" in services else "agents-app"
 
 
 def test_bare_compose_up_cannot_start_pipeline_services():
-    """Голый `up -d` 21.09 поднял всё. Конвейер — только по профилю или по имени сервиса."""
+    """Голый `up -d` 21.09 поднял всё. Конвейер: только по профилю или по имени сервиса."""
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("worker", "playwright-worker", "scheduler"):
         assert "pipeline" in (services[name].get("profiles") or []), name
-    # tasks — архивный модуль (сессия B): его голый `up` тоже не поднимает, но другим профилем.
+    # tasks, архивный модуль (сессия B): его голый `up` тоже не поднимает, но другим профилем.
     assert services["tasks"].get("profiles"), "tasks"
-    # Caddy — только у основного стека; у агентного до смены идентичности в D его нет.
+    # Caddy: только у основного стека; у агентного до смены идентичности в D его нет.
     for name in ("db", _app_service(services), *(["caddy"] if "caddy" in services else [])):
         assert not services[name].get("profiles"), name
 
@@ -237,7 +237,7 @@ def _fake_python_env(tmp_path: Path) -> dict[str, str]:
 
 
 def _scheduler(tmp_path: Path, **env: str) -> subprocess.Popen:
-    """docker-scheduler.sh без замка и бутстрапа: первый шаг цикла — maintenance-cleanup."""
+    """docker-scheduler.sh без замка и бутстрапа: первый шаг цикла: maintenance-cleanup."""
     out = tmp_path / "scheduler.out"
     proc = subprocess.Popen(
         ["sh", "scripts/docker-scheduler.sh"],
@@ -257,7 +257,7 @@ def _scheduler(tmp_path: Path, **env: str) -> subprocess.Popen:
             "STEP_KILL_AFTER_SECONDS": "1",
             **env,
         },
-        # Как у scheduler-lock: скрипт — лидер своей группы, остановка бьёт в группу.
+        # Как у scheduler-lock: скрипт: лидер своей группы, остановка бьёт в группу.
         start_new_session=True,
         stdout=out.open("w"),
         stderr=subprocess.STDOUT,
@@ -298,7 +298,7 @@ def test_hung_step_is_cut_and_the_cycle_goes_on(tmp_path):
 
 @pytest.mark.parametrize(("flag", "runs"), [(None, False), ("0", False), ("1", True)])
 def test_signal_card_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag, runs):
-    """Шаг «заполнить карточки» (#96) — за флагом, по умолчанию выключен: флаг включают после
+    """Шаг «заполнить карточки» (#96), за флагом, по умолчанию выключен: флаг включают после
     пересборки NL, иначе старая сборка отказывала бы каждой задаче."""
     monkeypatch.delenv("SIGNAL_CARD_ENABLED", raising=False)
     proc = _scheduler(tmp_path, **({} if flag is None else {"SIGNAL_CARD_ENABLED": flag}))
@@ -343,7 +343,7 @@ def test_failed_step_reports_its_real_exit_code(tmp_path):
 
 def test_bad_step_timeout_does_not_stop_the_steps(tmp_path):
     """Сторож с кривым сроком шаг не запускает: опечатка в STEP_TIMEOUT_SECONDS (1h) без
-    проверки в скрипте остановила бы каждый шаг каждого цикла — тот же простой, что 24.09."""
+    проверки в скрипте остановила бы каждый шаг каждого цикла: тот же простой, что 24.09."""
     proc = _scheduler(tmp_path, HANG_STEP="", STEP_TIMEOUT_SECONDS="1h")
     try:
         assert _wait(lambda: "Cycle finished" in proc.out_path.read_text(), 20), proc.out_path.read_text()
@@ -357,7 +357,7 @@ def test_bad_step_timeout_does_not_stop_the_steps(tmp_path):
 
 def test_container_stop_still_reaches_the_step(tmp_path):
     """scheduler-lock гасит скрипт сигналом всей его группе процессов (singleton._signal_child).
-    coreutils `timeout` без --foreground увёл бы шаг в свою группу — и остановка контейнера
+    coreutils `timeout` без --foreground увёл бы шаг в свою группу: и остановка контейнера
     до шага не дошла бы. Сторож оставляет шаг в группе скрипта."""
     proc = _scheduler(tmp_path, STEP_TIMEOUT_SECONDS="300")
     try:
@@ -407,7 +407,7 @@ def test_zero_deadline_runs_the_step_without_a_ceiling():
 
 def test_services_that_launch_chromium_reap_zombies():
     """25.09 под PID 1 планировщика было 2259 зомби chrome при pids.max 2315 (DefaultTasksMax
-    systemd — 15% от threads-max): каждый рендер оставлял ~2 процесса, которые python под
+    systemd, 15% от threads-max): каждый рендер оставлял ~2 процесса, которые python под
     PID 1 не подбирает. init (tini) подбирает осиротевших, и слоты не кончаются."""
     core = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("scheduler", _app_service(core), "worker", "playwright-worker"):

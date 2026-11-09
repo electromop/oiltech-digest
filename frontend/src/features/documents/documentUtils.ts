@@ -9,7 +9,7 @@ export const DOCUMENT_STATUS_LABELS: Record<string, string> = {
 };
 
 // Состояния, при которых на сервере ещё идёт работа: пока в списке есть хоть одно
-// такое — экран опрашивает список; как только их нет, опрос прекращается.
+// такое: экран опрашивает список; как только их нет, опрос прекращается.
 const PENDING_STATUSES = new Set(["uploaded", "processing"]);
 
 export function isDocumentPending(document: UploadedDocument): boolean {
@@ -39,7 +39,7 @@ export function formatSize(bytes: number | null | undefined): string {
  * Текст ошибки для пользователя.
  *
  * Клиент кладёт в Error.message СЫРОЕ тело ответа, а FastAPI отдаёт {"detail": "..."},
- * поэтому без разбора пользователь читал бы JSON с фигурными скобками. Тело не JSON —
+ * поэтому без разбора пользователь читал бы JSON с фигурными скобками. Тело не JSON:
  * показываем как есть, это честнее выдуманной формулировки.
  */
 export function detailText(error: unknown, fallback: string): string {
@@ -59,7 +59,7 @@ export function detailText(error: unknown, fallback: string): string {
       return detail === undefined || detail === null ? fallback : String(detail);
     }
   } catch {
-    // тело не JSON — вернём как пришло
+    // тело не JSON: вернём как пришло
   }
   return raw;
 }
@@ -76,7 +76,7 @@ export function toText(value: unknown): string {
 }
 
 // Список пунктов из JSON-поля. Сервер обещает список, но карточка не должна зависеть
-// от этого обещания: строка станет списком из одного пункта, мусор — пустым списком.
+// от этого обещания: строка станет списком из одного пункта, мусор: пустым списком.
 export function asList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((item) => toText(item)).filter((item) => item !== "—");
@@ -85,7 +85,7 @@ export function asList(value: unknown): string[] {
   return [];
 }
 
-// Якорь: «страница 14». Единица приходит с документом, номер — с фактом.
+// Якорь: «страница 14». Единица приходит с документом, номер: с фактом.
 export function anchorText(anchor: number | string | null, unit: string | null): string {
   if (anchor === null || anchor === undefined || anchor === "") return "—";
   if (typeof anchor === "number" || /^\d+$/.test(String(anchor))) {

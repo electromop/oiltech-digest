@@ -91,7 +91,7 @@ def test_saving_refuses_a_criterion_of_the_other_profile(isolated_db):
 
 
 def test_same_name_lives_in_both_profiles(isolated_db):
-    """«Технологическая новизна» — критерий профиля Б и старого сида: уникальность — в профиле."""
+    """«Технологическая новизна», критерий профиля Б и старого сида: уникальность: в профиле."""
     with connection.get_connection() as conn:
         _criterion(conn, "Технологическая новизна", 100, profile="business")
         conn.commit()
@@ -116,7 +116,7 @@ def test_duplicate_names_in_a_profile_are_a_readable_refusal(isolated_db):
 
 
 def test_delete_checks_the_sum_of_its_own_profile(isolated_db):
-    """До профилей удаление считало сумму всех активных — с профилем Б она 200, и любое
+    """До профилей удаление считало сумму всех активных: с профилем Б она 200, и любое
     удаление отклонялось бы, а сломать сумму профиля можно было бы из соседнего."""
     seed_default_scoring_criteria()
     with connection.get_connection() as conn:
@@ -143,7 +143,7 @@ def test_seed_on_non_empty_profile_adds_nothing(isolated_db):
 
     На проде профиль business непуст: добавь сид в него свой набор, сумма стала бы 200, и
     оценка встала бы на локальных путях и раздулась бы на NL. Переименованный заказчиком
-    критерий сид тоже не воскрешает: профиль непуст — не трогаем ничего, и выключенное тоже."""
+    критерий сид тоже не воскрешает: профиль непуст: не трогаем ничего, и выключенное тоже."""
     with connection.get_connection() as conn:
         _criterion(conn, "Бизнес-эффект (правка заказчика)", 100, profile="business")
         _criterion(conn, "Потенциальный бизнес-эффект", 25, profile="business", enabled=False, sort_order=2)
@@ -170,8 +170,8 @@ def test_seed_fills_empty_profiles_with_the_customer_sets(isolated_db):
 
 def test_seed_leaves_no_half_profile_when_the_old_name_index_is_still_there(isolated_db):
     """Шаг выката пропущен: сид раньше DROP INDEX idx_scoring_criteria_name. «Технологическая
-    новизна» профиля Б упрётся в строку старого сида — профиль не должен остаться из одного
-    критерия (следующий сид счёл бы его заведённым), а ошибка — назвать шаг."""
+    новизна» профиля Б упрётся в строку старого сида: профиль не должен остаться из одного
+    критерия (следующий сид счёл бы его заведённым), а ошибка: назвать шаг."""
     with connection.get_connection() as conn:
         conn.execute("CREATE UNIQUE INDEX idx_scoring_criteria_name ON scoring_criteria(name)")
         _criterion(conn, "Технологическая новизна", 100, profile="business")
@@ -184,7 +184,7 @@ def test_seed_leaves_no_half_profile_when_the_old_name_index_is_still_there(isol
     assert _rows("business") == [("Технологическая новизна", 100.0, True)]
 
 
-# --- API без параметра профиля — как старый экран ----------------------------------------------
+# --- API без параметра профиля: как старый экран ----------------------------------------------
 
 
 def test_old_screen_without_profile_reads_and_saves_business(isolated_db):
@@ -290,8 +290,8 @@ def test_text_hash_ignores_weight_but_not_what_the_model_and_keywords_see():
 
 
 def test_article_breakdown_shows_the_weight_it_was_scored_with(isolated_db):
-    """Вес в разбивке статьи — из снимка: текущий вес после правки на экране дал бы
-    разбивку, которая не складывается в итог. У балла до профилей снимка нет — вес текущий."""
+    """Вес в разбивке статьи, из снимка: текущий вес после правки на экране дал бы
+    разбивку, которая не складывается в итог. У балла до профилей снимка нет: вес текущий."""
     with connection.get_connection() as conn:
         _criterion(conn, "А", 60, profile="business")
         _criterion(conn, "Б", 40, profile="business", sort_order=2)
@@ -316,7 +316,7 @@ def test_article_breakdown_shows_the_weight_it_was_scored_with(isolated_db):
     assert [item["weight"] for item in breakdown[scored]] == [60.0, 40.0]
     assert [item["weight"] for item in breakdown[legacy]] == [30.0, 70.0]
 
-    # Битый снимок ленту не роняет: вес — текущий.
+    # Битый снимок ленту не роняет: вес: текущий.
     for broken in ('[{"id": %d, "weight": "шестьдесят"}]' % rows[0]["id"], '{"id": 1}'):
         with connection.get_connection() as conn:
             conn.execute("UPDATE article_scores SET criteria_snapshot = %s::jsonb WHERE article_id = %s", (broken, scored))

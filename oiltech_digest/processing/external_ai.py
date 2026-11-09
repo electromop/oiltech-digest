@@ -66,7 +66,7 @@ class LeaseLost(RuntimeError):
     """Core отозвал lease задачи (heartbeat вернул 409).
 
     Принципиально отличается от временного сбоя сети: при 409 задача уже возвращена
-    в очередь и core НИКОГДА не примет её результат. Продолжать обработку — значит
+    в очередь и core НИКОГДА не примет её результат. Продолжать обработку: значит
     платить OpenAI за работу, которая гарантированно будет выброшена.
     Инцидент 24.07: воркер ~80 минут крутил такой цикл (heartbeat 409 → вызов OpenAI
     200 → heartbeat 409 …) со скоростью ~$11/час в мусор, и это не попадало даже
@@ -80,7 +80,7 @@ class StopRequested(LeaseLost):
     Подкласс LeaseLost намеренно: каждый цикл обработчика уже выпускает LeaseLost наружу,
     а прочие сбои heartbeat глотает. Цикл, который про остановку не знает, так всё равно
     прервётся, а не продолжит работу, которую никто не примет. Циклы ИИ-пакетов ловят его
-    раньше LeaseLost и отдают сделанное с пометкой partial — оплаченное не пропадает.
+    раньше LeaseLost и отдают сделанное с пометкой partial: оплаченное не пропадает.
     """
 
 
@@ -103,8 +103,7 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str], *, missing_onl
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access: суть и перевод заголовка принятых статей.
 
-    ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи — это
-    продлевает lease задачи у core. Без него длинный батч на медленной модели
+    ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи это     продлевает lease задачи у core. Без него длинный батч на медленной модели
     истекает по lease (600с) ещё до завершения, и задача бесконечно
     переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
     Ему передаётся итог на этот момент: если следующая статья зависнет на остановке
@@ -115,7 +114,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     балл статьи сняты 08.11 (решает «Отбор», тему и баллы ставит «Карточка»): ядро выдаёт
     задачу только сборке контракта 11 (contract.required_contract).
     """
-    stages = stages_to_write(payload.get("only"))  # граница: битая пометка — до любого вызова модели
+    stages = stages_to_write(payload.get("only"))  # граница: битая пометка: до любого вызова модели
     client = make_client(bool(payload.get("offline", False)))
     result: dict[str, Any] = {
         "external_ai": True,
@@ -123,7 +122,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         "stats": {"processed": 0, "summary": 0, "translated": 0, "errors": 0},
         "articles": [],
     }
-    # Пакет планировщика — ни списка статей, ни пометки only (#53): только недостающие стадии.
+    # Пакет планировщика, ни списка статей, ни пометки only (#53): только недостающие стадии.
     # Статья без перевода получала бы новую суть на каждом проходе. Явный список (перекачка
     # тела, импорт статьи) и only пересчитывают запрошенное целиком, как раньше.
     scheduler_batch = not payload.get("article_ids") and payload.get("only") is None
@@ -140,7 +139,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 # работать дальше = платить за результат, который core не примет.
                 raise
             except TypeError:
-                # Колбэк не принял итог — ошибка кода, а не сети. Проглоченная, она тихо
+                # Колбэк не принял итог: ошибка кода, а не сети. Проглоченная, она тихо
                 # отключила бы и остановку, и отзыв аренды (класс 24.07).
                 raise
             except Exception:  # noqa: BLE001 - heartbeat не должен ломать обработку батча
@@ -159,7 +158,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 result["stats"]["summary"] += 1
 
             if "translation" in todo:
-                # Перевод заголовка — отдельная стадия: иностранный переводится, русский не по правилам эксперта
+                # Перевод заголовка, отдельная стадия: иностранный переводится, русский не по правилам эксперта
                 # правится. Статья здесь принята: отклонённую конвейер сюда не пускает (_stages_left), а явные
                 # списки с пометкой only ставятся по принятым (перегенерация сути, правка заголовков месяца).
                 title_ru, translate_resp = title_ru_for_article(article, client, edit_russian=True)
@@ -211,7 +210,7 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., 
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
                 raise
-            except TypeError:  # колбэк не принял итог — ошибка кода, не сети (см. process_payload)
+            except TypeError:  # колбэк не принял итог: ошибка кода, не сети (см. process_payload)
                 raise
             except Exception:  # noqa: BLE001
                 pass
@@ -234,7 +233,7 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., 
 
 
 def _glossary_contexts(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    """Статьи итога одним запросом — контекст словаря: какие термины в статье есть."""
+    """Статьи итога одним запросом, контекст словаря: какие термины в статье есть."""
     ids = [
         int(item["article_id"])
         for item in result.get("articles") or []
@@ -250,12 +249,12 @@ def _glossary_contexts(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 
 def _core_glossary(text: str, article: dict[str, Any] | None) -> str:
-    """Словарь на ядре — при записи итога внешнего воркера.
+    """Словарь на ядре: при записи итога внешнего воркера.
 
     Воркер уже прогнал текст через словарь, но своей версией кода: NL пересобирает
-    владелец, и между выкатами ядро и воркер расходятся — правка словаря 25.09 («спудил»,
+    владелец, и между выкатами ядро и воркер расходятся: правка словаря 25.09 («спудил»,
     «granularными») без пересборки NL не дошла бы до новых карточек. Повтор безопасен:
-    замены идемпотентны. Сбой — пишем как пришло: оплаченный итог дороже терминологии.
+    замены идемпотентны. Сбой, пишем как пришло: оплаченный итог дороже терминологии.
     """
     if not text or not article:
         return text
@@ -306,11 +305,11 @@ _STAGE_WRITERS = {
 
 
 class InvalidJobPayload(ValueError):
-    """Payload задачи не исполнить ни с какой попытки — выдача воркеру её проваливает."""
+    """Payload задачи не исполнить ни с какой попытки: выдача воркеру её проваливает."""
 
 
 def stages_to_write(only: Any) -> frozenset[str]:
-    """Какие стадии пишет ядро. None — все; иначе непустой список известных стадий.
+    """Какие стадии пишет ядро. None: все; иначе непустой список известных стадий.
 
     Пометку ставят пересчёт после полного текста, перегенерация сути и правка заголовков, но читается
     она из payload_json задачи, это граница: строка «summary» дала бы множество букв (ничего не записать),
@@ -332,7 +331,7 @@ def apply_process_result(
 ) -> dict[str, Any]:
     """Apply an external AI result to the core database.
 
-    job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
+    job_id, id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
     (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт.
 
     only: какие стадии записать (пересчёт после полного текста, перегенерация сути, правка
@@ -352,7 +351,7 @@ def apply_process_result(
             if stage in write:
                 _STAGE_WRITERS[stage](article_id, payload, contexts.get(article_id))
                 stats[stage] += 1
-            # Перевод русского заголовка — копия без модели: такой вызов не оплачен.
+            # Перевод русского заголовка, копия без модели: такой вызов не оплачен.
             if stage != "translation" or payload.get("provider") != "offline" or payload.get("model"):
                 _insert_run(article_id, stage, payload, job_id=job_id)
         if item.get("errors"):
@@ -396,7 +395,7 @@ def _jsonable_dict(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Пары-кандидаты в перепечатки — на зарубежный воркер.
+    """Пары-кандидаты в перепечатки: на зарубежный воркер.
 
     Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403
     unsupported_country_region_territory. Ровно на этом 17.09 стоял радар сигналов,
@@ -409,7 +408,7 @@ def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     pairs = payload.get("pairs") or []
     if not pairs:
-        # Пустой список — это ошибка постановки, а не «нечего делать»: молча вернув
+        # Пустой список это ошибка постановки, а не «нечего делать»: молча вернув
         # пустой пакет, задача завершилась бы «успехом» и скрыла проблему.
         raise ValueError("reprint_review: пустой список pairs")
     packed: list[dict[str, Any]] = []
@@ -444,7 +443,7 @@ def process_reprint_review_payload(payload: dict[str, Any],
     ai_processing_runs (до 03.11 судья в учёт не попадал)."""
     from oiltech_digest.processing.reprints import configured_model, judge_pair
 
-    configured_model()  # без модели — сбой задачи с причиной, а не «разные события» у каждой пары
+    configured_model()  # без модели: сбой задачи с причиной, а не «разные события» у каждой пары
     client = make_client()
     result: dict[str, Any] = {
         "reprint_review": True,
@@ -486,12 +485,12 @@ def process_reprint_review_payload(payload: dict[str, Any],
 
 
 def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
-    """Сторона ядра: записать пометки. Удаления нет намеренно — запись обратима."""
+    """Сторона ядра: записать пометки. Удаления нет намеренно: запись обратима."""
     from oiltech_digest.db import repository
     from oiltech_digest.processing.reprints import resolve_primary as reprints_resolve_primary
 
     if result.get("dry_run"):
-        # Сухой прогон ничего не пишет — это умолчание CLI и главный сценарий
+        # Сухой прогон ничего не пишет это умолчание CLI и главный сценарий
         # показа заказчику перед тем, как что-то схлопывать. Расход тоже, как у радара
         # (signal_discovery.apply_discovery): токены остаются в итоге задачи.
         return {"applied": 0, "dry_run": True}
@@ -505,7 +504,7 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
         try:
             a_id, b_id = int(verdict["a_id"]), int(verdict["b_id"])
         except (KeyError, TypeError, ValueError):
-            # Ответ воркера — недоверенный вход: битую запись пропускаем, а не падаем
+            # Ответ воркера, недоверенный вход: битую запись пропускаем, а не падаем
             # на всей пачке.
             continue
         # Правило выбора главной копии живёт в reprints.resolve_primary и только там.

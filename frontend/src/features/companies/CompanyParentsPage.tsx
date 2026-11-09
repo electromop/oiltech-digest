@@ -82,7 +82,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
     }
   }
 
-  // Подсказки к полям — компании справочника карточки; не загрузились — форма работает и без них.
+  // Подсказки к полям: компании справочника карточки; не загрузились: форма работает и без них.
   async function loadCompanies() {
     try {
       setCompanies((await getSignalDictionaries()).companies ?? []);
@@ -122,7 +122,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
       showToast("Связь добавлена");
       await reload();
     } catch (error) {
-      // Отказ проверки (у дочки уже есть мать, цикл) — под формой: его надо прочитать, тост исчезнет.
+      // Отказ проверки (у дочки уже есть мать, цикл), под формой: его надо прочитать, тост исчезнет.
       if (error instanceof ApiError && error.status === 400) setRefusal(error.message);
       else handleError(error, "Не удалось добавить связь");
     } finally {

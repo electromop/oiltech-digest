@@ -7,9 +7,9 @@ import { DigestPage } from "./DigestPage";
 // Какой выпуск открыт по умолчанию (решение владельца 29.09: сентябрьский выпуск собирают
 // сами пользователи). Раньше экран открывался на «Все месяцы»: превью и выгрузка брали
 // отметки за всё время, включая архив, а «Сохранить draft» клал черновик в месяц по часам
-// браузера (UTC) — 1–4 октября это октябрь, хотя собирается сентябрьский выпуск.
-// С пересмотра 23-24.10 выбора выпуска на экране нет: собирается выпуск первого открытого месяца окна, прошлые —
-// только во вкладке «Архив выпусков» и только на просмотр; предпросмотр — сразу PDF.
+// браузера (UTC): 1-4 октября это октябрь, хотя собирается сентябрьский выпуск.
+// С пересмотра 23-24.10 выбора выпуска на экране нет: собирается выпуск первого открытого месяца окна, прошлые:
+// только во вкладке «Архив выпусков» и только на просмотр; предпросмотр: сразу PDF.
 
 const baseArticle: Article = {
   id: 0,
@@ -101,7 +101,7 @@ describe("экран выпуска: какой месяц открыт по у�
 
     expect(await screen.findByText(/Выпуск за сентябрь 2026/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Выпуск" })).not.toBeInTheDocument();
-    // Пока очередь не собрана, статья видна в «Отмечено, но не в выпуске» — ждём её в самой очереди.
+    // Пока очередь не собрана, статья видна в «Отмечено, но не в выпуске»: ждём её в самой очереди.
     await waitFor(() => expect(screen.getByText("Сентябрьская статья").closest("li")).not.toBeNull());
     expect(screen.queryByText("Октябрьская статья")).not.toBeInTheDocument();
     await waitFor(() => expect(requested()).toContain("/api/monthly-digests/2026-09"));
@@ -146,7 +146,7 @@ describe("экран выпуска: какой месяц открыт по у�
 
     await user.click(await screen.findByRole("button", { name: /Архив выпусков/ }));
 
-    // Выпуски с отметками, новые сверху; месяц без выбранного — не выпуск.
+    // Выпуски с отметками, новые сверху; месяц без выбранного: не выпуск.
     const rows = within(screen.getByRole("table")).getAllByRole("rowheader").map((cell) => cell.textContent);
     expect(rows).toEqual(["сентябрь 2026", "август 2026"]);
 
@@ -161,7 +161,7 @@ describe("экран выпуска: какой месяц открыт по у�
     expect(screen.queryByRole("button", { name: "Из дайджеста" })).not.toBeInTheDocument();
     await waitFor(() => expect(requested().some((url) => url.startsWith("/api/articles") && url.includes("month=2026-09"))).toBe(true));
 
-    // Назад — к списку выпусков; «Сборка выпуска» — снова текущий выпуск.
+    // Назад: к списку выпусков; «Сборка выпуска»: снова текущий выпуск.
     await user.click(screen.getByRole("button", { name: "← Все выпуски" }));
     expect(screen.getByRole("table")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Сборка выпуска" }));
@@ -179,7 +179,7 @@ describe("экран выпуска: какой месяц открыт по у�
     ];
     render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
-    // Пока очередь не собрана, материалы видны в «Отмечено, но не в выпуске» — ждём их в самой очереди.
+    // Пока очередь не собрана, материалы видны в «Отмечено, но не в выпуске»: ждём их в самой очереди.
     await waitFor(() => expect(screen.getByText("Вторая сентябрьская").closest("li")).not.toBeNull());
     const first = screen.getByText("Сентябрьская статья").closest("li") as HTMLElement;
     const second = screen.getByText("Вторая сентябрьская").closest("li") as HTMLElement;
@@ -199,7 +199,7 @@ describe("экран выпуска: какой месяц открыт по у�
     const user = userEvent.setup();
     render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
-    // Отдельного блока нет (решение владельца 24.10): одна очередь, сигнал — после статьи, различает плашка.
+    // Отдельного блока нет (решение владельца 24.10): одна очередь, сигнал: после статьи, различает плашка.
     expect(screen.queryByRole("region", { name: "Сигналы радара в выпуске" })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Цифровой двойник скважины").closest("li")).not.toBeNull());
     const rows = screen.getAllByRole("listitem").filter((row) => row.classList.contains("digestPickRow"));
@@ -286,7 +286,7 @@ describe("экран выпуска: какой месяц открыт по у�
 
       const frame = await screen.findByTitle("Предпросмотр выпуска в PDF");
       await waitFor(() => expect(frame).toHaveAttribute("src", "blob:pdf-1#navpanes=0&view=FitH"));
-      // Один PDF на открытие — за выпуск по умолчанию, а не сначала «за все месяцы».
+      // Один PDF на открытие: за выпуск по умолчанию, а не сначала «за все месяцы».
       expect(pdfRequests()).toHaveLength(1);
       expect(pdfRequests()[0]).toContain("month=2026-09");
 

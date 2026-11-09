@@ -51,7 +51,7 @@ def test_fetch_returns_content_on_success(monkeypatch):
 
 
 def test_final_url_of_reports_where_redirects_led_for_that_url_only(monkeypatch):
-    """Конечный адрес после переадресаций — чтобы отличить статью от главной, на которую
+    """Конечный адрес после переадресаций: чтобы отличить статью от главной, на которую
     сайт увёл со статьи (Сколково Energy). Только для того же запрошенного адреса: чужой
     или неудачный запрос не должен подсказать «конечный адрес» следующему."""
     http_client._host_cooldown_until.clear()
@@ -233,7 +233,7 @@ def test_page_level_error_does_not_close_whole_host(monkeypatch):
 
 
 def test_probe_failure_does_not_blacklist_host(monkeypatch):
-    """Диагностика источника ходит с одной попыткой — закрывать по ней нельзя."""
+    """Диагностика источника ходит с одной попыткой: закрывать по ней нельзя."""
     http_client._host_cooldown_until.clear()
     http_client._host_next_allowed.clear()
 

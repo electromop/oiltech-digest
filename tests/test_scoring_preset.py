@@ -1,7 +1,7 @@
 """Смена набора критериев профиля командой apply-scoring-preset (решение владельца 29.09).
 
-Сид непустой профиль не трогает — набор на проде меняется только этой командой и явно:
-по умолчанию сухой прогон «до / после», с --apply — одной транзакцией. Критерии не удаляются:
+Сид непустой профиль не трогает, набор на проде меняется только этой командой и явно:
+по умолчанию сухой прогон «до / после», с --apply: одной транзакцией. Критерии не удаляются:
 на них ссылаются подпункты старых баллов.
 """
 
@@ -31,7 +31,7 @@ def _cli(*argv: str) -> None:
 
 
 def _rows(profile: str) -> list[tuple]:
-    """Строки профиля целиком, с updated_at: «ничего не записано» — значит, не тронута ни одна."""
+    """Строки профиля целиком, с updated_at: «ничего не записано»: значит, не тронута ни одна."""
     with connection.get_connection() as conn:
         return conn.execute(
             "SELECT id, name, description, weight::float, enabled, sort_order, keywords_json, updated_at "
@@ -50,7 +50,7 @@ def _active(profile: str) -> list[tuple[str, float]]:
 
 def _business_before_the_decision() -> dict[str, int]:
     """Профиль business со своим набором (сумма 100) и выключенными старыми критериями, набор
-    радара — от сида; статья, оценённая нынешним набором business."""
+    радара: от сида; статья, оценённая нынешним набором business."""
     with connection.get_connection() as conn:
         ids = {}
         for order, (name, weight, enabled) in enumerate((
@@ -72,7 +72,7 @@ def _business_before_the_decision() -> dict[str, int]:
             (source_id,),
         ).fetchone()[0]
         conn.commit()
-    seed_default_scoring_criteria()   # business непуст — сид заводит только радар
+    seed_default_scoring_criteria()   # business непуст: сид заводит только радар
     # Балл статьи из истории (балл статьи снят 08.11): подпункты по своим критериям, как их записала прежняя оценка.
     with connection.get_connection() as conn:
         score_id = conn.execute(
@@ -120,7 +120,7 @@ def test_apply_leaves_exactly_the_preset_active_and_keeps_old_scores_whole(isola
     assert all(not rows[f"Свой {n}"][4] for n in range(1, 6)), "прежний набор выключен"
     assert len(rows) == 7 + 4, "ничего не удалено: 7 прежних строк и 4 новых"
     assert _rows("tech_radar") == tech
-    # Подпункты старого балла ссылаются на прежние критерии — разбивка статьи цела.
+    # Подпункты старого балла ссылаются на прежние критерии: разбивка статьи цела.
     with connection.get_connection() as conn:
         breakdown = api._score_items_by_article(conn, [ids["article"]])[ids["article"]]
     assert [item["name"] for item in breakdown] == [f"Свой {n}" for n in range(1, 6)]
@@ -149,9 +149,9 @@ def test_radar_profile_seeded_with_the_same_preset_is_already_applied(isolated_d
 
 
 def test_stale_scoring_tab_cannot_revert_the_applied_set(isolated_db):
-    """Экран «Скоринг» открыт до apply-scoring-preset, «Сохранить» — после (ревью PR #82). Прежний
+    """Экран «Скоринг» открыт до apply-scoring-preset, «Сохранить»: после (ревью PR #82). Прежний
     UPDATE по id включал выключенные командой критерии обратно, а «выключить лишнее» гасило набор
-    заказчика: ответ 200 и молчаливый откат. Теперь — отказ «список устарел», ничего не записано."""
+    заказчика: ответ 200 и молчаливый откат. Теперь: отказ «список устарел», ничего не записано."""
     _business_before_the_decision()
     with connection.get_connection() as conn:
         user_id = conn.execute("INSERT INTO users (email, password_salt, password_hash, role) "

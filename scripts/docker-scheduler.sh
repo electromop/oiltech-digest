@@ -1,7 +1,7 @@
 #!/bin/sh
 set -u
 
-# Ровно один планировщик (ADR 0001, п. 4): весь процесс — и циклы, и паузы — идёт под
+# Ровно один планировщик (ADR 0001, п. 4): весь процесс: и циклы, и паузы: идёт под
 # advisory lock в Postgres. 21.09 второй планировщик, поднятый лишним `compose up`, 8,5 ч
 # дублировал сбор и ИИ. Второй экземпляр пишет в лог, у кого замок, и ждёт, не делая ни
 # одного шага. Обёртка заодно передаёт SIGTERM шагам: shell под PID 1 его игнорировал.
@@ -13,10 +13,10 @@ log() {
   printf '%s %s\n' "$(date -Iseconds)" "$*"
 }
 
-# Шаг идёт под сроком (oiltech_digest/step_timeout.py): дольше STEP_TIMEOUT_SECONDS —
-# SIGTERM, через STEP_KILL_AFTER_SECONDS — SIGKILL, код 124, и цикл идёт дальше. 24.09
-# parse не вернулся 20 ч 45 мин — стоял весь цикл. Код шага берётся до всякого `if`:
-# `code="$?"` после `if …; fi` давал 0 (так по POSIX выходит `if` без ветки) — лог писал
+# Шаг идёт под сроком (oiltech_digest/step_timeout.py): дольше STEP_TIMEOUT_SECONDS:
+# SIGTERM, через STEP_KILL_AFTER_SECONDS: SIGKILL, код 124, и цикл идёт дальше. 24.09
+# parse не вернулся 20 ч 45 мин: стоял весь цикл. Код шага берётся до всякого `if`:
+# `code="$?"` после `if …; fi` давал 0 (так по POSIX выходит `if` без ветки): лог писал
 # «exit=0», а run_required_step не останавливал скрипт никогда.
 run_step() {
   name="$1"
@@ -42,12 +42,12 @@ run_required_step() {
 }
 
 CYCLE_INTERVAL_SECONDS="${CYCLE_INTERVAL_SECONDS:-21600}"
-# Потолок шага. Норма на проде (сентябрь): parse 620–744 с, discover-rss ~400 с, прочие
-# до 130 с — час даёт запас впятеро. 0 — без потолка.
+# Потолок шага. Норма на проде (сентябрь): parse 620-744 с, discover-rss ~400 с, прочие
+# до 130 с: час даёт запас впятеро. 0: без потолка.
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-3600}"
 STEP_KILL_AFTER_SECONDS="${STEP_KILL_AFTER_SECONDS:-30}"
-# Целые секунды. Сторож с кривым сроком шаг не запускает — опечатка (1h, -5) остановила бы
-# каждый шаг, как 24.09. Поэтому кривое значение — строкой в лог и значение по умолчанию.
+# Целые секунды. Сторож с кривым сроком шаг не запускает: опечатка (1h, -5) остановила бы
+# каждый шаг, как 24.09. Поэтому кривое значение: строкой в лог и значение по умолчанию.
 case "$STEP_TIMEOUT_SECONDS" in
   '' | *[!0-9]*)
     log "STEP_TIMEOUT_SECONDS=«${STEP_TIMEOUT_SECONDS}» — не целое число секунд, беру 3600"
@@ -77,10 +77,10 @@ SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-0}"
 STREAMING_PIPELINE="${STREAMING_PIPELINE:-0}"
 STREAM_POLL_INTERVAL="${STREAM_POLL_INTERVAL:-10}"
 STREAM_PROCESS_BATCH="${STREAM_PROCESS_BATCH:-20}"
-# FULLTEXT_RETRY_TOO_SHORT=1 — повторять попытку для статей со статусом too_short
-# (полезно после добавления trafilatura — запустить один раз вручную).
+# FULLTEXT_RETRY_TOO_SHORT=1: повторять попытку для статей со статусом too_short
+# (полезно после добавления trafilatura: запустить один раз вручную).
 FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
-# FETCH_EXTERNAL_ENABLED=1 — источники network_region='external' (западные WAF/таймаут
+# FETCH_EXTERNAL_ENABLED=1: источники network_region='external' (западные WAF/таймаут
 # с РФ-сервера) фетчатся через зарубежный воркер. Шаг enqueue-external-scrape ставит
 # их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
 FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
@@ -90,14 +90,14 @@ EXTERNAL_REFETCH_LIMIT="${EXTERNAL_REFETCH_LIMIT:-100}"
 # Окно намеренно шире периода запуска: уже помеченные пары правило не выдаёт
 # повторно, поэтому перекрытие почти ничего не стоит, а пропуск дубля стоит того,
 # что заказчик снова видит четыре карточки одной новости.
-# Раз в REPRINTS_INTERVAL_HOURS часов по времени прошлого прогона в базе (0 — выключено).
+# Раз в REPRINTS_INTERVAL_HOURS часов по времени прошлого прогона в базе (0: выключено).
 REPRINTS_INTERVAL_HOURS="${REPRINTS_INTERVAL_HOURS:-12}"
 REPRINTS_DAYS="${REPRINTS_DAYS:-7}"
 REPRINTS_LIMIT="${REPRINTS_LIMIT:-200}"
 # Прогон радара ставит только суточный шаг (enqueue-daily-signal-discovery): периодический шаг прежней цепочки снят 08.11.
 SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
-# Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
-# включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.
+# Агент «Карточка сигнала» (#96): новые сигналы: в задачи агента на NL. По умолчанию выключен:
+# включать после пересборки NL (контракт 2): старая сборка такие задачи отказывает.
 SIGNAL_CARD_ENABLED="${SIGNAL_CARD_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
@@ -149,7 +149,7 @@ while true; do
 
     if [ "$AI_PROCESS_LIMIT" -gt 0 ]; then
       if [ "${AI_EXECUTION_REGION:-ru}" = "external" ]; then
-        # Внешний контур: РФ-core не зовёт OpenAI сам, а ставит задачу в external-ai —
+        # Внешний контур: РФ-core не зовёт OpenAI сам, а ставит задачу в external-ai:
         # её заберёт зарубежный worker.
         run_step "enqueue-process" python -m oiltech_digest.cli enqueue-process --limit "$AI_PROCESS_LIMIT"
       elif [ "$AI_OFFLINE" = "1" ]; then
@@ -169,7 +169,7 @@ while true; do
   run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
 
   if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then
-    # Западные источники (network_region='external') фетчим через зарубежный воркер —
+    # Западные источники (network_region='external') фетчим через зарубежный воркер:
     # с РФ-сервера к ним нет доступа. Задачи разберёт NL external-worker.
     run_step "enqueue-external-scrape" python -m oiltech_digest.cli enqueue-external-scrape
     # Обрывки у тех же источников: лента даёт анонс, а локальная дозагрузка их не
@@ -178,8 +178,8 @@ while true; do
       --limit "$EXTERNAL_REFETCH_LIMIT"
   fi
 
-  # Срок — от прошлого прогона с записью в базе, а не «каждый 24-й цикл»: счётчик
-  # обнулялся при каждом перезапуске, а цикл идёт ~41 мин, а не 30 — «дважды в сутки»
+  # Срок, от прошлого прогона с записью в базе, а не «каждый 24-й цикл»: счётчик
+  # обнулялся при каждом перезапуске, а цикл идёт ~41 мин, а не 30: «дважды в сутки»
   # на деле выходило раз в 16,5 ч и сдвигалось каждым выкатом (19.09). Повтор при
   # перезапуске исключает та же проверка по базе.
   if [ "$REPRINTS_INTERVAL_HOURS" != "0" ]; then
@@ -203,7 +203,7 @@ while true; do
     run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
   fi
 
-  # Сторож полос: застой внешней очереди или очередь без живого воркера — «FAIL
+  # Сторож полос: застой внешней очереди или очередь без живого воркера: «FAIL
   # check-lanes» и строки ТРЕВОГА в логе (цикл не прерывается).
   run_step "check-lanes" python -m oiltech_digest.cli check-lanes
 

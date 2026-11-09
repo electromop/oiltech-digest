@@ -1,7 +1,7 @@
 import { ApiError, apiFetch } from "./client";
 
 // Строка списка дочерних обществ «дочка → мать» (экран «Дочерние общества», решение владельца 20.10).
-// Кто добавил — почта учётки; учётку удалили — пусто.
+// Кто добавил: почта учётки; учётку удалили: пусто.
 export type CompanyParent = {
   id: number;
   child_name: string;
@@ -12,7 +12,7 @@ export type CompanyParent = {
   created_at: string | null;
 };
 
-// Строка вставки списком после разбора: номер строки в тексте и ошибка (null — строка в порядке).
+// Строка вставки списком после разбора: номер строки в тексте и ошибка (null: строка в порядке).
 export type CompanyParentLine = {
   line: number;
   child_name: string;

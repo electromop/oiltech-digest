@@ -1,10 +1,10 @@
-"""Вызовы экзамена «Карточки» (#133): «Суть и перевод», основной вызов и второй вызов — входом и проверкой ядра.
+"""Вызовы экзамена «Карточки» (#133): «Суть и перевод», основной вызов и второй вызов: входом и проверкой ядра.
 
 Вход каждого вызова строится кодом ядра (signal_card.payload_signal, signal_scores.context и payload_item), ответ
 проверяется им же (signal_card.card_values, signal_scores.score_values): мерится то, что дошло бы до сигнала. Суть и
 ответы основного вызова лежат рядом с манифестом по отпечатку входа (модель, инструкция и вход): все модели второго
 вызова получают одни и те же,
-повторный запуск их не оплачивает; ответ без карточки в файл не идёт. Технический сбой — одна повторная попытка, обе
+повторный запуск их не оплачивает; ответ без карточки в файл не идёт. Технический сбой: одна повторная попытка, обе
 оплачены; расход считается по этапам.
 """
 
@@ -32,7 +32,7 @@ class ExamError(ValueError):
 
 
 class Inputs:
-    """Вход вызовов и проверка ответов кодом ядра — без вызовов модели: теги, критерии, справочники карточки."""
+    """Вход вызовов и проверка ответов кодом ядра, без вызовов модели: теги, критерии, справочники карточки."""
 
     def __init__(self, exam: dict[str, Any]):
         control = exam["scores_control"]
@@ -47,13 +47,13 @@ class Inputs:
                 "publisher_type": row["publisher_type"], "category": row["category"]}
 
     def card_values(self, row: dict[str, Any], card: dict[str, Any]) -> dict[str, Any] | None:
-        """Значения карточки, как их записало бы ядро (signal_card.card_values); None — карточки нет."""
+        """Значения карточки, как их записало бы ядро (signal_card.card_values); None: карточки нет."""
         publication = signal_card._publication(self.card_row(row))
         return signal_card.card_values(card, publication, self.dictionaries, self.themes)[0]
 
     def context(self, row: dict[str, Any], summary: str, card: dict[str, Any] | None) -> dict[str, Any] | None:
         """Сигнал во входе второго вызова: поля «Отбора» эксперта, дата события и зрелость основного вызова того же
-        прогона. Карточки нет — баллов нет, как на ядре."""
+        прогона. Карточки нет: баллов нет, как на ядре."""
         values = self.card_values(row, card) if card else None
         return None if values is None else self.context_from(row, summary, values)
 
@@ -70,13 +70,13 @@ class Inputs:
 
     def scores_values(self, row: dict[str, Any], summary: str, card: dict[str, Any],
                       answer: dict[str, Any]) -> dict[str, Any] | None:
-        """Баллы сигнала, как их записало бы ядро (signal_scores.score_values); None — карточки или баллов нет."""
+        """Баллы сигнала, как их записало бы ядро (signal_scores.score_values); None: карточки или баллов нет."""
         item = self.context(row, summary, card)
         return signal_scores.score_values(answer, item, self.criteria[row["profile"]])[0] if item else None
 
 
 def summary_input(row: dict[str, Any]) -> dict[str, Any]:
-    """Публикация во входе «Сути и перевода» — как у сигнала после «Отбора» (signal_summary._item): поля «Отбора»
+    """Публикация во входе «Сути и перевода»: как у сигнала после «Отбора» (signal_summary._item): поля «Отбора»
     кодами."""
     return {"title": (row["title"] or "")[:500], "source_name": row["publisher"] or "", "url": row["url"] or "",
             "language": row["language"] or "", "published_at": row["published"] or "", "summary": None,
@@ -96,7 +96,7 @@ class Calls:
     # --- «Суть и перевод» ---
 
     def summaries(self, rows: list[dict[str, Any]]) -> dict[str, str]:
-        """Суть — один раз на строку; сбой — одна повторная попытка, без сути экзамен не идёт (вход был бы не тот)."""
+        """Суть: один раз на строку; сбой: одна повторная попытка, без сути экзамен не идёт (вход был бы не тот)."""
         path = self.inputs.folder / SUMMARIES_NAME
         stored = _read(path)
         fingerprints = self._summary_fingerprints(rows)
@@ -141,7 +141,7 @@ class Calls:
     # --- Основной вызов ---
 
     def cards(self, rows: list[dict[str, Any]], runs: int) -> dict[str, list[dict]]:
-        """Ответы основного вызова по прогонам; сбой — одна повторная попытка. В файл идёт только ответ с карточкой."""
+        """Ответы основного вызова по прогонам; сбой: одна повторная попытка. В файл идёт только ответ с карточкой."""
         path = self.inputs.folder / CARDS_NAME
         stored = _read(path)
         by_run = stored.setdefault(self.card_model, {})
@@ -176,7 +176,7 @@ class Calls:
 
     def _card_requests(self, rows: list[dict[str, Any]]
                        ) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, int]]:
-        """Вход основного вызова по строкам — кодом ядра (signal_card.payload_signal), его отпечаток и длина."""
+        """Вход основного вызова по строкам: кодом ядра (signal_card.payload_signal), его отпечаток и длина."""
         signals = {row["id"]: signal_card.payload_signal(self.inputs.card_row(row), self.inputs.tags) for row in rows}
         requests = {number: signal_card.request(item, self.inputs.dictionaries, self.inputs.themes)
                     for number, item in signals.items()}
@@ -189,7 +189,7 @@ class Calls:
     def scores(self, model: str, rows: list[dict[str, Any]], summaries: dict[str, str],
                cards: dict[str, list[dict[str, Any]]], runs: int) -> list[dict[str, Any]]:
         """Ответы второго вызова: строка на (прогон, строку). Без карточки основного вызова того же прогона баллов нет;
-        технический сбой — одна повторная попытка, обе оплачены."""
+        технический сбой: одна повторная попытка, обе оплачены."""
         payload = {"model": model, "reasoning": config.SIGNAL_SCORES_REASONING, **self._profiles()}
         answers: list[dict[str, Any]] = []
         for run in range(1, runs + 1):
@@ -218,7 +218,7 @@ class Calls:
         return answers
 
     def scores_chars(self, rows: list[dict[str, Any]], summaries: dict[str, str]) -> int:
-        """Длина запросов второго вызова на прогон в знаках; дату и зрелость даст основной вызов — без них."""
+        """Длина запросов второго вызова на прогон в знаках; дату и зрелость даст основной вызов: без них."""
         profiles = self._profiles()["profiles"]
         blank = {"event_date": None, "event_date_source": None, "event_date_precision": None,
                  "technology_maturity": None}
@@ -235,7 +235,7 @@ class Calls:
     # --- Общее ---
 
     def _chunks(self, rows: list[dict[str, Any]], call: Callable[[list[dict[str, Any]]], list[dict[str, Any]]]):
-        """Ответы воркера по порядку строк: с workers > 1 строки делятся на куски, куски идут параллельно — у каждого
+        """Ответы воркера по порядку строк: с workers > 1 строки делятся на куски, куски идут параллельно: у каждого
         свой вызов воркера и свой клиент модели."""
         if not rows:
             return []
@@ -282,7 +282,7 @@ def _missing(rows: list[dict[str, Any]], stored: dict[str, Any],
 
 
 def _fingerprint(*parts: Any) -> str:
-    """Отпечаток входа вызова: другой вход — другой ответ, файл рядом с манифестом его не отдаёт."""
+    """Отпечаток входа вызова: другой вход: другой ответ, файл рядом с манифестом его не отдаёт."""
     blob = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
 

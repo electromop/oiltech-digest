@@ -1,6 +1,6 @@
-"""Материалы коллег через «Отбор» (#131, спека #128), шов 1 — контур целиком: материал от бота → ядро (сигнал третьего
+"""Материалы коллег через «Отбор» (#131, спека #128), шов 1, контур целиком: материал от бота → ядро (сигнал третьего
 происхождения) → шаг «Отбора» → воркер NL на подставной модели → ядро → «Суть и перевод» → «Карточка» → витрина;
-итог «Отбора» — автору через настоящий клиент бота против тестового ядра (tests/otbor_support.py,
+итог «Отбора»: автору через настоящий клиент бота против тестового ядра (tests/otbor_support.py,
 tests/otbor_radar_support.py).
 """
 
@@ -17,8 +17,8 @@ from oiltech_digest.processing.digest import render_digest_export_html
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.otbor_radar_support import event, page, run_radar, summarize
 from tests.otbor_support import answer, api_request, api_send, decide, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import FakeModel, _Core, admin, api_get, run_worker, user  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import FakeModel, _Core, admin, api_get, run_worker, user  # noqa: F401: фикстуры
 from tests.signal_card_support import answer as card_answer
 
 TITLE = "Татнефть выбрала подрядчика по ГРП на 2027 год"
@@ -42,7 +42,7 @@ def _docx(text):
 
 
 def _send(material, file=None):
-    """Материал от бота NL — как его шлёт бот (multipart с токеном воркера); строка материала."""
+    """Материал от бота NL: как его шлёт бот (multipart с токеном воркера); строка материала."""
     response = TestClient(api.app).post(
         "/api/external-worker/materials", headers=WORKER, files={"file": file} if file else None,
         data={"material": json.dumps(material, ensure_ascii=False), "worker_id": "nl-tg-bot-1"})
@@ -62,7 +62,7 @@ def _accumulated(monkeypatch, material):
 
 
 class _Telegram:
-    """Подставной Telegram бота: отправленные сообщения; ошибка следующей отправки — fail."""
+    """Подставной Telegram бота: отправленные сообщения; ошибка следующей отправки: fail."""
 
     def __init__(self, fail=None):
         self.sent, self.fail = [], fail
@@ -106,11 +106,11 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
 
     model = decide(monkeypatch, {TITLE: answer(category="business")})
 
-    # Вход «Отбора» у файла — описание автора и текст файла; ссылок и издателя у материала нет.
+    # Вход «Отбора» у файла: описание автора и текст файла; ссылок и издателя у материала нет.
     [call] = model.calls
     assert DESCRIPTION in call["input"] and FILE_TEXT in call["input"]
     assert "Ссылки находки: нет" in call["input"] and "Источник: не указан" in call["input"]
-    # «Суть и перевод» заполняет только недостающее: суть — описание автора, заголовок русский — без вызова модели.
+    # «Суть и перевод» заполняет только недостающее: суть: описание автора, заголовок русский: без вызова модели.
     summary_model = summarize(monkeypatch, {TITLE: (TITLE, "суть модели")})
     assert summary_model.calls == []
     card_model = _card(monkeypatch, {TITLE: card_answer(companies=[{"name": "Татнефть",
@@ -120,7 +120,7 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     card = showcase(user, "business")[TITLE]
     assert (card["origin"], card["otbor_decision"], card["title_ru"], card["summary"]) == (
         "material", "accept", TITLE, DESCRIPTION)
-    # Поля автора не перезаписаны: участники — его компании, его оценка — блок ОС с его именем.
+    # Поля автора не перезаписаны: участники: его компании, его оценка: блок ОС с его именем.
     assert [one["name"] for one in card["participants_json"]] == ["Татнефть", "ТаграС"]
     assert [(block["author"], block["verdict"], block["comment"]) for block in card["feedback_blocks"]] == [
         ("Иван Иванов", "strong_signal", "Конкурент взял объём")]
@@ -130,7 +130,7 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     assert TITLE not in showcase(user, "business", feedback="without")
     assert colleague_materials.get_material(material["id"])["signal_id"] == card["id"]
 
-    # Итог — автору: бот отвечает на карточку материала в группе, с упоминанием автора; второй раз не шлёт.
+    # Итог, автору: бот отвечает на карточку материала в группе, с упоминанием автора; второй раз не шлёт.
     telegram = _Telegram()
     assert _bot(telegram).notify() == 1
     [message] = telegram.sent
@@ -141,8 +141,8 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
 
 
 def test_author_title_is_not_edited_even_off_the_rules(user, contour, monkeypatch):
-    """Заголовок материала — значение человека: «Суть и перевод» не правит его и тогда, когда он не по правилам
-    эксперта (решение владельца 03.11: правка — у статей и находок)."""
+    """Заголовок материала, значение человека: «Суть и перевод» не правит его и тогда, когда он не по правилам
+    эксперта (решение владельца 03.11: правка: у статей и находок)."""
     title = "Татнефть выбрала подрядчика по ГРП на 2027 год — итоги тендера"
     _send(_material(title=title))
     decide(monkeypatch, {title: answer()})
@@ -154,7 +154,7 @@ def test_author_title_is_not_edited_even_off_the_rules(user, contour, monkeypatc
 
 
 def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour, monkeypatch):
-    # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет, а русский
+    # Ответ воркера, недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет, а русский
     # заголовок автора пишет как есть (решение владельца 03.11: заголовок материала не правится).
     _send(_material())
     decide(monkeypatch, {TITLE: answer()})
@@ -193,7 +193,7 @@ def test_material_answered_off_rules_tells_the_author_there_is_no_decision(user,
 
     telegram = _Telegram()
     _bot(telegram).notify()
-    # Материал из лички — ответ в личку, без упоминания и с заглавной буквы.
+    # Материал из лички: ответ в личку, без упоминания и с заглавной буквы.
     [message] = telegram.sent
     assert message["chat_id"] == 9001 and message["text"].startswith("По материалу №")
     assert "решения нет: ответ не по правилам" in message["text"]
@@ -203,7 +203,7 @@ def test_technical_failure_reaches_the_author_only_once_the_tries_are_over(user,
     monkeypatch.setattr(api.config, "OTBOR_ATTEMPTS", 2)
     _send(_material())
 
-    # Первый сбой — «Отбор» повторит: это ещё не итог, автору писать рано.
+    # Первый сбой, «Отбор» повторит: это ещё не итог, автору писать рано.
     decide(monkeypatch, {TITLE: AIClientError("timeout")})
     telegram = _Telegram()
     assert _bot(telegram).notify() == 0
@@ -231,7 +231,7 @@ def test_link_material_whose_address_a_radar_card_holds_is_its_own_signal(user, 
 
     decide(monkeypatch, {TITLE: answer()})
 
-    # Прикрепления к существующему сигналу нет: ссылка осталась у карточки радара, материал — свой сигнал в витрине.
+    # Прикрепления к существующему сигналу нет: ссылка осталась у карточки радара, материал: свой сигнал в витрине.
     cards = showcase(user, "business")
     assert {TITLE, "Радар уже нашёл это событие"} <= set(cards)
     assert cards[TITLE]["id"] == colleague_materials.get_material(material["id"])["signal_id"]
@@ -330,7 +330,7 @@ def test_edit_of_a_material_on_the_platform_reaches_its_signal(user, admin, cont
         "title": NEW_TITLE, "description": NEW_DESCRIPTION, "companies": ["Татнефть", "Газпром нефть"],
         "verdict": "watch_later", "verdict_comment": "Ждём объёмы", "url": "https://news.example/tender-2"})
 
-    # Карточка в витрине — с правкой: заголовок (и русский), суть, участники, оценка автора и ссылка.
+    # Карточка в витрине, с правкой: заголовок (и русский), суть, участники, оценка автора и ссылка.
     card = showcase(user, "business")[NEW_TITLE]
     assert (card["title"], card["title_ru"], card["summary"]) == (NEW_TITLE, NEW_TITLE, NEW_DESCRIPTION)
     assert [one["name"] for one in card["participants_json"]] == ["Татнефть", "Газпром нефть"]

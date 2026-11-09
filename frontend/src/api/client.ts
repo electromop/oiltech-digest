@@ -9,7 +9,7 @@ export class ApiError extends Error {
 
 // FastAPI отвечает на отказ телом {"detail": "текст"}. Показываем человеку текст, а не
 // JSON-строку: отказы окна месяца («архив открыт только для просмотра») и прочие 4xx
-// написаны для людей. Не строковый detail (список ошибок 422) и не-JSON — как есть.
+// написаны для людей. Не строковый detail (список ошибок 422) и не-JSON: как есть.
 export function readableErrorMessage(text: string): string {
   try {
     const parsed: unknown = JSON.parse(text);
@@ -17,14 +17,14 @@ export function readableErrorMessage(text: string): string {
       return (parsed as { detail: string }).detail;
     }
   } catch {
-    // не JSON — отдаём как есть
+    // не JSON: отдаём как есть
   }
   return text;
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers ?? {});
-  // FormData — ИСКЛЮЧЕНИЕ: Content-Type у многочастного тела содержит boundary, который
+  // FormData, ИСКЛЮЧЕНИЕ: Content-Type у многочастного тела содержит boundary, который
   // знает только браузер. Подставив здесь application/json (или даже голый
   // multipart/form-data без boundary), мы получим на сервере неразбираемое тело.
   const isMultipart = typeof FormData !== "undefined" && init.body instanceof FormData;

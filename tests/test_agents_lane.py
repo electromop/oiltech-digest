@@ -24,7 +24,7 @@ NOW = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
 
 
 def test_daily_radar_lands_in_agents_lane(isolated_db, monkeypatch):
-    """Ежедневный радар ставит сам код радара: маршрут ИИ (external-ai) — и попадает к
+    """Ежедневный радар ставит сам код радара: маршрут ИИ (external-ai): и попадает к
     воркеру агентов, а не в очередь потока дня."""
     monkeypatch.setattr(network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(network_policy.config, "AI_EXECUTION_REGION", "external")
@@ -51,10 +51,10 @@ def test_agents_lane_takes_only_agent_jobs(isolated_db):
     # Поток дня в полосу агентов не встаёт: иначе пакет статей снова ждал бы прогон радара.
     with pytest.raises(ValueError, match="не обслуживает"):
         repository.create_background_job("process_articles", {"limit": 5}, queue_name=lanes.AGENTS)
-    # Радар в полосе сбора — ошибка вызывающего, а не повод угадывать.
+    # Радар в полосе сбора: ошибка вызывающего, а не повод угадывать.
     with pytest.raises(ValueError, match="не обслуживает"):
         repository.create_background_job("signal_discovery", {}, queue_name="external-fetch")
-    # Местный контур (ru, offline) остаётся местным, поток дня — в своей полосе.
+    # Местный контур (ru, offline) остаётся местным, поток дня: в своей полосе.
     assert repository.create_background_job("signal_discovery", {}, queue_name="ai")["queue_name"] == "ai"
     assert repository.create_background_job("process_articles", {"limit": 5}, queue_name="external-ai")["queue_name"] == "external-ai"
 
@@ -100,7 +100,7 @@ def test_watchdog_flags_agents_lane_without_worker():
 
 
 def test_watchdog_lets_evaluation_wait_behind_radar_run():
-    # Один поток: оценка кандидата ждёт, пока идёт прогон радара, — это норма, не застой.
+    # Один поток: оценка кандидата ждёт, пока идёт прогон радара, это норма, не застой.
     alerts = lanes.lane_alerts(_queue(queued=3, ready_minutes=50, activity_minutes=1, running=1), now=NOW)
 
     assert alerts == []
@@ -133,7 +133,7 @@ class _Client:
 
 
 def _steady_handler(payload, heartbeat=None):
-    for _ in range(30):  # 0,6 с работы — вшестеро дольше предела без продвижения
+    for _ in range(30):  # 0,6 с работы: вшестеро дольше предела без продвижения
         heartbeat()
         time.sleep(0.02)
     return {"ok": 1}
@@ -142,7 +142,7 @@ def _steady_handler(payload, heartbeat=None):
 def test_long_agent_job_with_steady_heartbeats_is_not_restarted(monkeypatch):
     """Сторож зависания MVP-1 (LeaseKeeper) считает продвижением только beat(). Агентные
     обработчики звали голый heartbeat: прогон радара дольше 20 мин снимался бы как
-    зависший — задача в повтор, процесс на перезапуск, оплаченная работа в мусор."""
+    зависший: задача в повтор, процесс на перезапуск, оплаченная работа в мусор."""
     from oiltech_digest import signal_discovery
 
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)

@@ -16,7 +16,7 @@ from tests.card_pipeline_support import (MARKET, SCORES_MODEL, card_answer, even
                                          pipeline, process_feed, run_scores, scores)
 from tests.otbor_support import MODEL, OtborModel, answer, api_send, article, reject, showcase
 from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
-from tests.signal_card_support import FakeModel, admin, api_get, run_worker, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import FakeModel, admin, api_get, run_worker, user  # noqa: F401: фикстуры
 
 SINCE = (date.today() - timedelta(days=14)).isoformat()
 # Окно ленты на день статей сбора тестов (otbor_support.window_of_published): без заморозки тесты зависели бы от
@@ -125,12 +125,12 @@ def test_apply_writes_decisions_beside_and_leaves_feed_and_showcases_as_they_wer
     assert (report["publications"], report["decided"]) == (2, 2)
     assert report["gate"] == {"accept": {"accept": 0, "reject": 1}, "reject": {"accept": 1, "reject": 0}}
     assert report["versions"] == {f"{otbor.PROMPT_VERSION} / {load_dictionaries()['version']}": 2}
-    # Лента статей и витрины — как были: решает по-прежнему гейт.
+    # Лента статей и витрины, как были: решает по-прежнему гейт.
     assert _feed(user) == {"Контракт Weatherford"}
     assert set(showcase(user)) == {"Контракт Weatherford"}
     assert showcase(user)["Контракт Weatherford"]["otbor_decision"] is None
     assert showcase(user, "technology") == {}
-    # Расход проверки — своей стадией, не как решения «Отбора».
+    # Расход проверки: своей стадией, не как решения «Отбора».
     stages = {row["stage"] for row in repository.ai_cost_report()}
     assert "otbor_shadow" in stages and "otbor" not in stages
     # Повторный запуск решённое не оплачивает.
@@ -217,7 +217,7 @@ def test_switch_moves_decisions_into_showcases_and_sends_the_accepted_down_the_r
 
     cli.main(["otbor-switch", "--since", SINCE, "--apply"])
 
-    # Витрины — по решениям «Отбора»: отклонённое ушло в раздел, технология из сбора на радаре.
+    # Витрины, по решениям «Отбора»: отклонённое ушло в раздел, технология из сбора на радаре.
     assert set(showcase(user)) == {"Контракт Weatherford"}
     assert set(showcase(user, "technology")) == {"Робот-бурильщик"}
     [rejected] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")

@@ -1,16 +1,16 @@
-"""Проба источника настоящим путём сбора — вердикт рубежей вставки по каждому кандидату.
+"""Проба источника настоящим путём сбора: вердикт рубежей вставки по каждому кандидату.
 
 Идёт ровно тем путём, что сбор по `parse_strategy` источника (лента/листинг → кандидаты
 → статья → предфильтр), теми же генераторами шагов, что и парсеры, а вместо insert_article
 спрашивает его рубежи (`repository.insert_verdict`) в соединении только для чтения. Второй
-реализации рубежей нет — вердикт пробы и есть то, что сделал бы сбор.
+реализации рубежей нет: вердикт пробы и есть то, что сделал бы сбор.
 
 Зачем: 25.09 молчащие источники объяснила разовая проба такого рода (docs/handoff_2026-
 09-25_stale-sources.md). `source-diagnose` показывает «статья скачалась и прошла
-предфильтр» и молчит о рубежах вставки — а именно там терялись статьи Минэнерго, EIA,
+предфильтр» и молчит о рубежах вставки: а именно там терялись статьи Минэнерго, EIA,
 Лукойла (ключ адреса склеил разные статьи) и Eni (то же тело у всех страниц).
 
-Ничего не пишет: соединение пробы — только для чтения; CLI вдобавок включает этот режим
+Ничего не пишет: соединение пробы: только для чтения; CLI вдобавок включает этот режим
 всему процессу (connection.read_only_process), так что отказ базы получит и любая запись
 глубже по стеку.
 """
@@ -48,7 +48,7 @@ def probe_source(source: dict) -> dict:
 
 
 def _steps(source: dict, listing: dict) -> Iterable[Step]:
-    """Шаги сбора по стратегии источника — теми же функциями, что у parse_source парсеров."""
+    """Шаги сбора по стратегии источника: теми же функциями, что у parse_source парсеров."""
     strategy = (source.get("parse_strategy") or "").strip()
     if strategy == "rss":
         url = listing["url"] = source.get("rss_url")
@@ -99,7 +99,7 @@ def _steps(source: dict, listing: dict) -> Iterable[Step]:
 
 
 def _judge(conn, steps: Iterable[Step]) -> list[dict]:
-    """Вердикт по каждому шагу: рубежи сбора — как есть, дошедшее до вставки — insert_verdict;
+    """Вердикт по каждому шагу: рубежи сбора: как есть, дошедшее до вставки: insert_verdict;
     занятый ключ адреса проба делит на SAME и OTHER (key_verdict)."""
     rows: list[dict] = []
     pending: list[dict] = []
@@ -119,7 +119,7 @@ def _judge(conn, steps: Iterable[Step]) -> list[dict]:
         rows.append({"position": position, "verdict": verdict, "url": step.url, "title": step.title,
                      "text_chars": step.text_chars, "published_at": step.published_at,
                      "detail": step.detail, "holder": holder})
-    # Кто держит знакомый адрес — для отчёта: видна ли статья в ленте или скрыта.
+    # Кто держит знакомый адрес, для отчёта: видна ли статья в ленте или скрыта.
     known = [row for row in rows if row["verdict"] == verdicts.KNOWN and row["holder"] is None]
     holders = repository.articles_by_urls(conn, [row["url"] for row in known])
     for row in known:
@@ -128,13 +128,13 @@ def _judge(conn, steps: Iterable[Step]) -> list[dict]:
 
 
 def key_verdict(holder: dict, url: str, title: str | None) -> str:
-    """Ключ адреса занят — этой же статьёй (SAME) или другой (OTHER: ключ склеил разные
-    статьи — потеря)? Без различителя «дубль по ключу» выглядит одинаково для нормы и для
+    """Ключ адреса занят, этой же статьёй (SAME) или другой (OTHER: ключ склеил разные
+    статьи: потеря)? Без различителя «дубль по ключу» выглядит одинаково для нормы и для
     потери: 25.09 так молча терялись все новые статьи Минэнерго, EIA, Губкина, Лукойла.
 
-    Проверка самого ключа, поэтому не через url_key: та же статья — если адрес тот же с
+    Проверка самого ключа, поэтому не через url_key: та же статья: если адрес тот же с
     точностью до схемы, www, регистра хоста и хвостового слэша, или тот же заголовок.
-    Якорь и регистр пути/query — различия: по ним ключ как раз и склеивает.
+    Якорь и регистр пути/query, различия: по ним ключ как раз и склеивает.
     """
     if _plain_address(holder.get("url")) == _plain_address(url):
         return verdicts.DUP_URL_KEY_SAME
@@ -147,7 +147,7 @@ def _plain_address(url: str | None) -> str:
     try:
         parts = urlsplit(raw)
     except ValueError:
-        return raw  # кривой адрес (Invalid IPv6 URL, NFKC) не разобрать — сравниваем как есть
+        return raw  # кривой адрес (Invalid IPv6 URL, NFKC) не разобрать: сравниваем как есть
     address = parts.netloc.lower().removeprefix("www.") + parts.path.rstrip("/")
     if parts.query:
         address += f"?{parts.query}"

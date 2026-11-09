@@ -18,7 +18,7 @@ from oiltech_digest.processing.digest import (
 
 @pytest.fixture(autouse=True)
 def _no_item_kinds_lookup(monkeypatch):
-    """Категорию элементов (плашка «Технология / Бизнес») и поля материала PDF (#161) берёт база; эти проверки — без
+    """Категорию элементов (плашка «Технология / Бизнес») и поля материала PDF (#161) берёт база; эти проверки: без
     базы."""
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
     monkeypatch.setattr(digest.repository, "issue_material_fields", lambda articles, signals: ({}, {}))
@@ -65,7 +65,7 @@ def test_render_digest_email_contains_news_and_escapes_html():
         }
     )
 
-    # Hero-баннер (логотип/заголовок запечены в картинке) — проверяем <img> и alt.
+    # Hero-баннер (логотип/заголовок запечены в картинке): проверяем <img> и alt.
     assert "технологии, рынок и возможности для бизнеса" in html  # alt утверждённого hero
     assert "Добыча" in html  # категория новости
     assert "https://example.com/article" in html
@@ -127,7 +127,7 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
     assert content["hero"]["headline"] == "ТЕСТОВЫЙ ДАЙДЖЕСТ"
     assert content["hero"]["image_url"] == "https://example.com/hero.jpg"
     assert content["issue"]["preheader"] == "Тестовый прехедер"
-    assert content["issue"]["intro"] == "Интро за май 2026 г"  # месяц словами — правка заказчика 24.08
+    assert content["issue"]["intro"] == "Интро за май 2026 г"  # месяц словами: правка заказчика 24.08
     assert content["issue"]["news_title"] == "Материалы"
     assert content["issue"]["read_more_label"] == "Открыть"
     assert content["issue"]["empty_summary_text"] == "Нет сути"
@@ -563,12 +563,12 @@ def test_news_placeholder_does_not_duplicate_tag_text():
 
 
 def test_news_placeholder_truncates_long_tag_with_ellipsis():
-    """Подпись на плитке 130×86 — максимум две строки, обрезка помечается многоточием.
+    """Подпись на плитке 130×86: максимум две строки, обрезка помечается многоточием.
 
-    Раньше умещали до трёх строк кеглем 7.5 — в PDF это нечитаемо, и заказчик
+    Раньше умещали до трёх строк кеглем 7.5: в PDF это нечитаемо, и заказчик
     забраковал такие плитки (03.08). Полное название рубрики всё равно напечатано
     отдельным тегом в правом нижнем углу карточки, поэтому на плитке достаточно
-    начала — но обрыв должен быть виден как обрыв.
+    начала: но обрыв должен быть виден как обрыв.
     """
     from oiltech_digest.processing.digest import _news_placeholder_data_uri
 
@@ -583,7 +583,7 @@ def test_news_placeholder_truncates_long_tag_with_ellipsis():
 
 def test_news_placeholder_colors_differ_between_categories():
     """Регресс: словарь палитры имел ключи «технологии»/«рынок», а реальные теги
-    нормализуются в «роботизацияиавтономныесистемы» — не совпадал НИ ОДИН, и все
+    нормализуются в «роботизацияиавтономныесистемы»: не совпадал НИ ОДИН, и все
     заглушки выпуска выходили одинаковыми тёмно-синими (жалоба заказчика 03.08)."""
     from oiltech_digest.processing.digest import _news_placeholder_data_uri
 
@@ -594,7 +594,7 @@ def test_news_placeholder_colors_differ_between_categories():
     a = grad("Роботизация и автономные системы")
     b = grad("Рынок, экономика, бизнес-модели, контракты и M&A")
     assert a != b, "разные рубрики обязаны различаться цветом"
-    # одна и та же рубрика — всегда один и тот же цвет (детерминированность)
+    # одна и та же рубрика: всегда один и тот же цвет (детерминированность)
     assert a == grad("Роботизация и автономные системы")
 
 
@@ -788,7 +788,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 def test_save_digest_branding_persists_empty_socials(tmp_path, monkeypatch):
     """Регресс: удаление ВСЕХ соцсетей в сборщике не сохранялось.
 
-    Фронт шлёт `socials: []`, а merge стоял на `payload_socials or current_socials` —
+    Фронт шлёт `socials: []`, а merge стоял на `payload_socials or current_socials`:
     пустой список ложен в Python, поэтому проваливался на прежнее значение и
     удалённые ссылки возвращались при следующей сборке (жалоба заказчика 03.08).
     """
@@ -803,12 +803,12 @@ def test_save_digest_branding_persists_empty_socials(tmp_path, monkeypatch):
 
     cleared = digest_module.save_digest_branding({"footer": {"socials": []}})
     assert cleared["footer"]["socials"] == []
-    # и после перечитывания с диска — тоже пусто
+    # и после перечитывания с диска: тоже пусто
     assert digest_module.get_digest_branding()["footer"]["socials"] == []
 
 
 def test_save_digest_branding_keeps_socials_when_key_absent(tmp_path, monkeypatch):
-    """Обратная сторона фикса: если ключ socials не прислали вовсе — не затирать."""
+    """Обратная сторона фикса: если ключ socials не прислали вовсе: не затирать."""
     from oiltech_digest.processing import digest as digest_module
 
     monkeypatch.setattr(digest_module, "TEMPLATE_DIR", tmp_path)
@@ -823,7 +823,7 @@ def test_save_digest_branding_keeps_socials_when_key_absent(tmp_path, monkeypatc
 
 def test_branding_write_and_read_share_one_path(tmp_path, monkeypatch):
     """Регресс инцидента 03.08: админка писала брендинг в свой контейнер, а выгрузку
-    делают воркеры и читали СВОЮ копию из образа — правки были видны в превью и не
+    делают воркеры и читали СВОЮ копию из образа: правки были видны в превью и не
     видны в HTML/PDF. Путь записи и путь чтения обязаны совпадать."""
     from oiltech_digest import config
     from oiltech_digest.processing import digest as digest_module
@@ -836,7 +836,7 @@ def test_branding_write_and_read_share_one_path(tmp_path, monkeypatch):
     assert digest_module._branding_read_path() == shared
     assert digest_module.get_digest_branding()["footer"]["socials"] == []
 
-    # и в собранном контенте выпуска — тоже пусто (именно его берут HTML/PDF)
+    # и в собранном контенте выпуска: тоже пусто (именно его берут HTML/PDF)
     monkeypatch.setattr(digest_module.repository, "digest_candidates", lambda **kw: [])
     content = digest_module.build_digest_content(month="2026-07")
     assert content["footer"]["socials"] == []
@@ -876,7 +876,7 @@ def test_digest_export_has_no_customer_branding():
 
 
 def test_digest_default_branding_is_neutral():
-    """Дефолты брендинга не содержат символики заказчика — даже если том с настройками пуст."""
+    """Дефолты брендинга не содержат символики заказчика: даже если том с настройками пуст."""
     from oiltech_digest.processing.digest import _load_digest_branding
 
     branding = _load_digest_branding()

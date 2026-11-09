@@ -41,7 +41,7 @@ type Props = {
 };
 
 type DraftMap = Record<number, SourcePatch>;
-// "" — весь каталог без архива; иначе — одно состояние (плитка).
+// "": весь каталог без архива; иначе: одно состояние (плитка).
 type StateFilter = "" | SourceState;
 
 const STATE_RANK = new Map(SOURCE_STATES.map((item, index) => [item.state, index]));
@@ -111,7 +111,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
 
   const healthById = useMemo(() => new Map(health.map((item) => [Number(item.id), item])), [health]);
 
-  // Плитки и таблица — по одному и тому же списку источников (см. countSourceStates).
+  // Плитки и таблица: по одному и тому же списку источников (см. countSourceStates).
   const counts = useMemo(() => countSourceStates(sources, healthById), [sources, healthById]);
 
   const visibleSources = useMemo(() => {
@@ -127,8 +127,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           .toLowerCase();
 
         return (
-          // Архив — своя плитка, во «Всего источников» не входит (требование заказчика
-          // 12.09: «уходит в архив — доп раздел внутри источников»).
+          // Архив: своя плитка, во «Всего источников» не входит (требование заказчика
+          // 12.09: «уходит в архив: доп раздел внутри источников»).
           (stateFilter === "" ? state !== "archived" : state === stateFilter) &&
           (!q || hay.includes(q)) &&
           (!strategy || source.parse_strategy === strategy) &&
@@ -143,7 +143,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         const stateDelta =
           (leftState ? STATE_RANK.get(leftState) ?? 9 : 9) - (rightState ? STATE_RANK.get(rightState) ?? 9 : 9);
         if (stateDelta !== 0) return stateDelta;
-        // Внутри состояния — дольше всех молчащие сверху: им внимание нужнее.
+        // Внутри состояния, дольше всех молчащие сверху: им внимание нужнее.
         const leftLast = leftHealth?.last_article_at ? new Date(leftHealth.last_article_at).getTime() : 0;
         const rightLast = rightHealth?.last_article_at ? new Date(rightHealth.last_article_at).getTime() : 0;
         if (leftLast !== rightLast) return leftLast - rightLast;
@@ -154,7 +154,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const narrowed = Boolean(search.trim() || strategy || triageKey);
 
   // Ссылка на архивный источник открывает архив, иначе строки просто не будет. Ровно
-  // один раз, после первой загрузки: дальше плитки и «Сбросить» — выбор пользователя,
+  // один раз, после первой загрузки: дальше плитки и «Сбросить»: выбор пользователя,
   // и возвращать его в архив нельзя (ревью F: из архива было не выйти).
   const focusRevealed = useRef(false);
   useEffect(() => {
@@ -257,7 +257,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
 
   async function handleArchiveSource(source: Source) {
     // Подтверждение обязательно: архив уносит из ленты ВСЕ статьи источника,
-    // а не только прекращает сбор. Операция обратима — «Вернуть из архива».
+    // а не только прекращает сбор. Операция обратима: «Вернуть из архива».
     const articles = healthById.get(source.id)?.articles ?? 0;
     const warning = articles
       ? `«${source.name}»: ${articles} статей уйдут из ленты. Источник перестанет опрашиваться. Продолжить?`

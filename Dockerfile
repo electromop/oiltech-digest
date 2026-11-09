@@ -25,7 +25,7 @@ ARG INSTALL_DEV=false
 RUN if [ "$INSTALL_DEV" = "true" ]; then pip install --no-cache-dir -r requirements-dev.txt; fi
 
 # Chromium для PDF-экспорта дайджеста (Playwright). Тяжёлый слой (~400 МБ): собирать
-# при остановленном стеке (`docker compose down` сначала) — на 1.9 ГБ RAM иначе OOM.
+# при остановленном стеке (`docker compose down` сначала): на 1.9 ГБ RAM иначе OOM.
 RUN python -m playwright install --with-deps chromium
 
 # Код приложения и статика админки
@@ -37,7 +37,7 @@ COPY data/seed ./data/seed
 RUN mkdir -p /app/exports \
     && chmod +x ./scripts/docker-scheduler.sh
 
-# Сборка кода (git SHA) — воркер NL сообщает её ядру вместе с номером контракта
+# Сборка кода (git SHA): воркер NL сообщает её ядру вместе с номером контракта
 # (contract.py). Последним слоем: смена SHA не пересобирает зависимости и Chromium.
 ARG GIT_SHA=unknown
 ENV OILTECH_BUILD=$GIT_SHA

@@ -1,11 +1,11 @@
-"""Отметка «в дайджест» у карточки технологического радара — только в открытом месяце.
+"""Отметка «в дайджест» у карточки технологического радара: только в открытом месяце.
 
-Решение владельца 29.09 (вопрос из хендоффа 29.09: «карточка радара, отмеченная после 05.10, —
-пускать ли в закрытый сентябрь» — нет). Как статус статьи из архива ленты
+Решение владельца 29.09 (вопрос из хендоффа 29.09: «карточка радара, отмеченная после 05.10,:
+пускать ли в закрытый сентябрь»: нет). Как статус статьи из архива ленты
 (PATCH /api/articles/{id} → 409): у карточки закрытого месяца «В дайджест» и «Убрать» не
-работают ни из интерфейса, ни прямым запросом. Окно — то же, что у ленты
-(feed_window.current): текущий месяц, а 1–4 числа по Москве ещё и прошлый, пока собирается
-его выпуск. Месяц карточки — месяц её поступления на радар по Москве, тем же выражением, по
+работают ни из интерфейса, ни прямым запросом. Окно: то же, что у ленты
+(feed_window.current): текущий месяц, а 1-4 числа по Москве ещё и прошлый, пока собирается
+его выпуск. Месяц карточки: месяц её поступления на радар по Москве, тем же выражением, по
 которому сборщик кладёт её в выпуск (#84): feed_window.signal_month_sql.
 
 Прочие статусы, комментарий и отзыв о карточке окно не трогает. Часы окна замораживаются
@@ -60,7 +60,7 @@ def test_card_of_the_current_month_is_marked_and_unmarked(analyst, monkeypatch):
 
 @pytest.mark.parametrize("now", [msk(2026, 10, 1, 0, 0), msk(2026, 10, 4, 23, 59, 59)])
 def test_previous_month_card_is_marked_and_unmarked_on_days_1_to_4(analyst, monkeypatch, now):
-    """Ради зазора и сделано окно: 1–4 числа выпуск за прошлый месяц ещё собирается."""
+    """Ради зазора и сделано окно: 1-4 числа выпуск за прошлый месяц ещё собирается."""
     _freeze(monkeypatch, now)
     card = add_signal("sep", first_seen=msk(2026, 9, 20, 0, 15))
 
@@ -70,7 +70,7 @@ def test_previous_month_card_is_marked_and_unmarked_on_days_1_to_4(analyst, monk
     assert analyst.issue("2026-09") == []
 
 
-# 05.10 00:00 по Москве — это 04.10 21:00 UTC: окно сменяется по московским суткам.
+# 05.10 00:00 по Москве это 04.10 21:00 UTC: окно сменяется по московским суткам.
 @pytest.mark.parametrize("now", [msk(2026, 10, 5, 0, 0), utc(2026, 10, 4, 21, 0)])
 def test_from_the_5th_the_previous_month_card_is_refused(analyst, monkeypatch, now):
     _freeze(monkeypatch, now)
@@ -103,7 +103,7 @@ def test_unmarking_in_a_closed_month_is_refused_and_the_card_stays_in_its_issue(
 
     _freeze(monkeypatch, msk(2026, 9, 5, 12, 0))
     # «Убрать» и любой другой статус вывели бы карточку из закрытого августовского выпуска;
-    # повторное «В дайджест» — та же отметка в закрытом месяце.
+    # повторное «В дайджест»: та же отметка в закрытом месяце.
     for body in ({"selected_for_digest": False}, {"status": "watch"}, {"status": "noise"}, {"selected_for_digest": True}):
         refused = analyst.patch(f"/api/signals/{card}", json=body)
         assert refused.status_code == 409, body
@@ -113,7 +113,7 @@ def test_unmarking_in_a_closed_month_is_refused_and_the_card_stays_in_its_issue(
 
 
 def test_other_statuses_comment_and_feedback_stay_open_in_a_closed_month(analyst, monkeypatch):
-    """Окно — про выпуск: в закрытом месяце нельзя поставить или снять «в дайджест», а разбирать
+    """Окно, про выпуск: в закрытом месяце нельзя поставить или снять «в дайджест», а разбирать
     карточку (статус мимо выпуска, комментарий, отзыв с «Дублем») можно, как и раньше."""
     chosen = add_signal("chosen", first_seen=msk(2026, 8, 12, 0, 15))
     other = add_signal("other", first_seen=msk(2026, 8, 20, 0, 15))
@@ -135,9 +135,9 @@ def test_other_statuses_comment_and_feedback_stay_open_in_a_closed_month(analyst
 
 
 def test_card_month_is_its_moscow_arrival_day(analyst, monkeypatch):
-    """Прогон радара 01.09 в 00:30 МСК — по UTC ещё 31.08. Экран пишет «Поступил: 01.09.2026»,
-    сборщик кладёт карточку в сентябрьский выпуск — значит, и отмечать её можно весь сентябрь.
-    Карточка 31.08 в 23:30 МСК — августовская, и с 05.09 она закрыта."""
+    """Прогон радара 01.09 в 00:30 МСК: по UTC ещё 31.08. Экран пишет «Поступил: 01.09.2026»,
+    сборщик кладёт карточку в сентябрьский выпуск: значит, и отмечать её можно весь сентябрь.
+    Карточка 31.08 в 23:30 МСК: августовская, и с 05.09 она закрыта."""
     first_of_september = add_signal("sep-1", first_seen=utc(2026, 8, 31, 21, 30))
     last_of_august = add_signal("aug-31", first_seen=utc(2026, 8, 31, 20, 30))
     _freeze(monkeypatch, msk(2026, 9, 10, 12, 0))
@@ -150,8 +150,8 @@ def test_card_month_is_its_moscow_arrival_day(analyst, monkeypatch):
 
 
 def test_radar_list_tells_the_screen_which_cards_are_closed(analyst, monkeypatch):
-    """Экран гасит кнопку по признаку сервера: месяц карточки — тем же выражением, что у
-    выпуска, закрыт ли он — тем же окном, что у отказа. Своей формулы у экрана нет."""
+    """Экран гасит кнопку по признаку сервера: месяц карточки: тем же выражением, что у
+    выпуска, закрыт ли он: тем же окном, что у отказа. Своей формулы у экрана нет."""
     aug = add_signal("aug", first_seen=msk(2026, 8, 20, 0, 15))
     sep = add_signal("sep", first_seen=utc(2026, 8, 31, 21, 30))  # 01.09 по Москве
     oct_ = add_signal("oct", first_seen=msk(2026, 10, 2, 0, 15))
@@ -176,7 +176,7 @@ def test_unknown_card_is_still_404_and_unknown_status_400(analyst, monkeypatch):
 
 def test_radar_mark_is_shared_by_everyone(analyst, monkeypatch):
     """Отметка карточки общая (#111): кнопка, число «В дайджесте», выпуск и отказ в закрытом месяце
-    — одни и те же у всех учёток; снять отметку коллеги может любой."""
+    - одни и те же у всех учёток; снять отметку коллеги может любой."""
     from oiltech_digest import signal_feedback
 
     learned = []
@@ -192,11 +192,11 @@ def test_radar_mark_is_shared_by_everyone(analyst, monkeypatch):
     assert by_colleague[card]["selected_for_digest"] is True
     assert colleague.get("/api/signals/summary").json()["in_digest"] == 1
     assert colleague.issue("2026-08") == [("signal", card)]
-    # Повторное «В дайджест» коллегой отметку не меняет — второго примера для обучения нет.
+    # Повторное «В дайджест» коллегой отметку не меняет: второго примера для обучения нет.
     assert _select(colleague, card).status_code == 200
     assert learned == [True]
 
-    # Коллега снимает отметку аналитика — карточка уходит из выпуска у всех, пример гаснет.
+    # Коллега снимает отметку аналитика: карточка уходит из выпуска у всех, пример гаснет.
     assert _select(analyst, sep).status_code == 200
     assert analyst.issue("2026-09") == [("signal", sep)]
     assert _select(colleague, sep, selected=False).status_code == 200

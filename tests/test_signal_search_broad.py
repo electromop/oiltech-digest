@@ -1,7 +1,7 @@
 """Широкий поиск радара (#138, спека #128), шов 1: задача радара → воркер NL с подставным поиском GPT и страницами →
 ядро (tests/otbor_radar_support.py). Поиск ищет все материалы нефтесервиса и нефтегаза, а не только
 технологии; ссылка, которая уже есть в статьях сбора, новой находкой не становится; издания, которые парсер собирает
-целиком, поиск получает как «уже есть, ищи дальше»; модель поиска — явная настройка ядра, едет в задаче.
+целиком, поиск получает как «уже есть, ищи дальше»; модель поиска: явная настройка ядра, едет в задаче.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -13,8 +13,8 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import url_key
 from tests.otbor_radar_support import event, page, run_radar
 from tests.otbor_support import answer, decide
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import DRILLING, radar_finding, run_worker, tag, user, worker  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import DRILLING, radar_finding, run_worker, tag, user, worker  # noqa: F401: фикстуры
 
 MARKET = "Рынок, бизнес-модели, сервисные модели, партнёрства и M&A"
 DEAL_URL = "https://adnoc.example/news/adnoc-buys-stake"
@@ -23,7 +23,7 @@ DEAL_TITLE = "ADNOC buys a stake in a drilling contractor for 1.2 billion dollar
 
 def collected(url, *, source="Upstream Online", site="https://www.upstream.example", source_type="News",
               days_ago=1):
-    """Статья сбора с этим адресом: ключ тождества по адресу — как его пишет сбор (normalize.url_key)."""
+    """Статья сбора с этим адресом: ключ тождества по адресу: как его пишет сбор (normalize.url_key)."""
     when = datetime.now(timezone.utc) - timedelta(days=days_ago)
     with repository.get_connection() as conn:
         row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
@@ -124,7 +124,7 @@ def test_search_is_told_which_outlets_the_parser_collects_whole(user, contour, m
 
     prompt = search.calls[0]["input"]
     assert "worldoil.example" in prompt
-    # Пара статей — издание собирается не целиком; Telegram-канал не сайт, который ищет поиск.
+    # Пара статей: издание собирается не целиком; Telegram-канал не сайт, который ищет поиск.
     for site in ("bakerhughes.example", "t.me", "offshore.example"):
         assert site not in prompt
 
@@ -158,7 +158,7 @@ def test_search_model_reasoning_and_cap_are_core_settings_carried_in_the_task(us
     monkeypatch.setattr(config, "SIGNAL_RESEARCH_EVENTS_PER_TOPIC", 20)
 
     def nl_env():
-        # Свои строки поиска в .env NL воркер не читает: модель, уровень и потолок — решение ядра.
+        # Свои строки поиска в .env NL воркер не читает: модель, уровень и потолок: решение ядра.
         monkeypatch.setattr(config, "SIGNAL_RESEARCH_MODEL", "gpt-5")
         monkeypatch.setattr(config, "SIGNAL_RESEARCH_REASONING", "minimal")
         monkeypatch.setattr(config, "SIGNAL_RESEARCH_EVENTS_PER_TOPIC", 3)

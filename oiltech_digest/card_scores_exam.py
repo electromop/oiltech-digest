@@ -1,20 +1,20 @@
 """Экзамен «Карточки» (#133, спека #128): тема основного вызова и баллы второго вызова на разметке эксперта.
 
-Набор — пакет «Отбора» (#129) с его делением и файлом строк (otbor_exam): строки, которые эксперт взял с категорией
+Набор, пакет «Отбора» (#129) с его делением и файлом строк (otbor_exam): строки, которые эксперт взял с категорией
 «бизнес» или «технология» (у них баллы по критериям профиля и общая оценка), без страниц-списков. На экзамене к ним
 добавляются «сильные сверх пакета» из выгрузки с ядра: выбранное «в дайджест» и эталонный ТОП заказчика (спека); они
-показаны отдельно, решение — по строкам пакета (card_scores_exam_score).
+показаны отдельно, решение: по строкам пакета (card_scores_exam_score).
 
 Каждая строка проходит путь сигнала после «Отбора»: «Суть и перевод» (один раз на строку, с полями «Отбора»
-эксперта), основной вызов «Карточки» (модель ядра, три прогона: тема, дата события и зрелость) и второй вызов —
-модели лестницы, по прогону на каждый прогон основного: вход — категория, отрасль и связь эксперта, дата и зрелость
+эксперта), основной вызов «Карточки» (модель ядра, три прогона: тема, дата события и зрелость) и второй вызов:
+модели лестницы, по прогону на каждый прогон основного: вход: категория, отрасль и связь эксперта, дата и зрелость
 основного вызова того же прогона. Ответы проходят проверку кодом ядра (signal_card.card_values,
 signal_scores.score_values): мерится то, что дошло бы до сигнала. Атрибуты основного вызова сверяются с разметкой
 экзамена карточки (#98) на строках его экзамена, по его порогам. Суть и ответы основного вызова лежат рядом с
 манифестом по отпечатку запроса (card_scores_exam_calls). Критерии «Скоринга» (веса, ключевые слова), теги тем и
-контроль — из выгрузки с ядра (card_scores_exam_control): экзамен идёт без базы. Модель второго вызова — самая дешёвая
-из прошедших; экзамен (не настройка) — только после утверждения владельцем (approved_scores называет инструкции,
-линейки и пороги). Отчёт — рядом с манифестом, вне репозитория: он публичный.
+контроль, из выгрузки с ядра (card_scores_exam_control): экзамен идёт без базы. Модель второго вызова: самая дешёвая
+из прошедших; экзамен (не настройка): только после утверждения владельцем (approved_scores называет инструкции,
+линейки и пороги). Отчёт, рядом с манифестом, вне репозитория: он публичный.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from oiltech_digest.signal_card_countries import Countries
 from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionaries
 from oiltech_digest.signal_card_pack import publication_text
 
-# Кандидаты второго вызова (решение 20 журнала гриля, спека): лестница «Отбора» и gpt-6-sol — модель «Отбора» и
+# Кандидаты второго вызова (решение 20 журнала гриля, спека): лестница «Отбора» и gpt-6-sol: модель «Отбора» и
 # основного вызова на проде с 26.10; с 27.10 линейка 6.1 (terra и sol, решение владельца; 5.6-terra и 5.6-sol не
-# берём). Лестница — по цене.
+# берём). Лестница: по цене.
 MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol",
           "gpt-5.5")
 RUNS = otbor_exam.RUNS
@@ -48,8 +48,8 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
         runs: int = RUNS, part: str = "exam", every: bool = False, workers: int = 1, card_model: str | None = None,
         summary_model: str | None = None, card_markup: str | Path | None = None,
         theme_before: str | Path | None = None) -> dict[str, Any]:
-    """Экзамен второго вызова по лестнице моделей (every — все модели) и тема основного вызова; card_markup — разметка
-    экзамена карточки (#98): атрибуты основного вызова того же прогона сверяются с ней; theme_before — прежний отчёт:
+    """Экзамен второго вызова по лестнице моделей (every: все модели) и тема основного вызова; card_markup: разметка
+    экзамена карточки (#98): атрибуты основного вызова того же прогона сверяются с ней; theme_before, прежний отчёт:
     тема и ошибки «Рынок против темы отрасли» до и после (#149). Отчёт рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
@@ -82,8 +82,8 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
 
 def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: str | Path | None = None,
             card_markup: str | Path | None = None, theme_before: str | Path | None = None) -> dict[str, Any]:
-    """Пересчёт сохранённого отчёта без вызовов модели: те же суть и ответы — по нынешним проверке кодом, выгрузке с
-    ядра, границам ступеней и порогам; новый отчёт — рядом. Ответы относятся к текстам своего манифеста, к своим
+    """Пересчёт сохранённого отчёта без вызовов модели: те же суть и ответы: по нынешним проверке кодом, выгрузке с
+    ядра, границам ступеней и порогам; новый отчёт: рядом. Ответы относятся к текстам своего манифеста, к своим
     линейкам и справочникам карточки: с другими пересчёт отказывает."""
     source = Path(report_path).expanduser().resolve()
     try:
@@ -109,7 +109,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     rows = [found[one["id"]] for one in saved["rows"]]
     _check_control(rows, exam)
     summaries, cards = saved["summaries"], saved["cards"]["answers"]
-    # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
+    # Цена и токены, исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
     tried = [{**_model_scores(one["model"], one["answers"], rows, summaries, cards, inputs,
                               exam["scores_control"]["rows"]),
               **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
@@ -119,7 +119,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
                                             "scores_reasoning")}
     changed = [name for name, value in rules(exam).items() if (saved.get("rules") or {}).get(name) != value]
     decided = saved.get("decision")
-    # Выгрузка с ядра задаёт порог ступени: снятая заново после прогона меняет его так же, как разметка — счёт.
+    # Выгрузка с ядра задаёт порог ступени: снятая заново после прогона меняет его так же, как разметка: счёт.
     control_before = ((saved.get("files") or {}).get("control") or {}).get("sha256")
     control_now = (card_scores_exam_report.files(exam["folder"])["control"] or {}).get("sha256")
     return _report(exam, rows, summaries, cards, tried, settings, spend=saved.get("spend") or {},
@@ -133,8 +133,8 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
          runs: int = RUNS, part: str = "exam", card_model: str | None = None,
          summary_model: str | None = None) -> dict[str, Any]:
     """Сухой прогон: строки, число вызовов и цена по этапам; ничего не пишет и не вызывает модель. Суть и основной
-    вызов, которые уже лежат рядом с манифестом, не считаются. Цена — по длине запросов (signal_card.estimate); вход
-    второго вызова — без даты и зрелости (их даст основной вызов); повтор после сбоя не учтён."""
+    вызов, которые уже лежат рядом с манифестом, не считаются. Цена: по длине запросов (signal_card.estimate); вход
+    второго вызова: без даты и зрелости (их даст основной вызов); повтор после сбоя не учтён."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     calls = _calls(exam, card_model, summary_model, 1)
@@ -160,7 +160,7 @@ def _check_runs(runs: int, part: str) -> None:
 
 
 def _check_control(rows: list[dict[str, Any]], exam: dict[str, Any]) -> None:
-    """Порог ступени — нынешние баллы ядра на строках пакета: без них он не считается, лестница оплатилась бы вся, и
+    """Порог ступени, нынешние баллы ядра на строках пакета: без них он не считается, лестница оплатилась бы вся, и
     каждая модель «не прошла» бы ступень."""
     if not control_agreement(rows, exam["scores_control"]["rows"])["rows"]:
         raise ExamError(f"{card_scores_exam_control.NAME}: нет нынешнего балла ядра ни у одной строки пакета, порог "
@@ -179,7 +179,7 @@ def _check_approved(approved: str | None) -> None:
 
 
 def _calls(exam: dict[str, Any], card_model: str | None, summary_model: str | None, workers: int) -> Calls:
-    """Вызовы экзамена; модели основного вызова и сути — с их ставками в таблице цен, иначе расход в отчёте солгал
+    """Вызовы экзамена; модели основного вызова и сути: с их ставками в таблице цен, иначе расход в отчёте солгал
     бы."""
     card_model, summary_model = card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_SUMMARY_MODEL
     if card_model:
@@ -195,7 +195,7 @@ def _by_price(models: tuple[str, ...]) -> list[str]:
 
 
 def _decision(tried: list[dict[str, Any]], part: str) -> str | None:
-    """Решение — первая по цене модель, прошедшая ступень и порядок, не устаревшая; настройка модель не выбирает."""
+    """Решение: первая по цене модель, прошедшая ступень и порядок, не устаревшая; настройка модель не выбирает."""
     if part != "exam":
         return None
     return next((one["model"] for one in tried if one["passed"] and one["model"] not in otbor_exam.DEPRECATED), None)
@@ -230,8 +230,8 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
 
 
 def _theme_before(path: str | Path, exam: dict[str, Any], part: str, split: dict[str, Any]) -> dict[str, Any]:
-    """Темы ответов основного вызова прежнего прогона (#149) по строкам — «до» в отчёте. Сравнимо только на тех же
-    текстах, той же части и тех же строках (иначе отказ до платных вызовов); счёт — на нынешней разметке
+    """Темы ответов основного вызова прежнего прогона (#149) по строкам: «до» в отчёте. Сравнимо только на тех же
+    текстах, той же части и тех же строках (иначе отказ до платных вызовов); счёт: на нынешней разметке
     (_report): у «до» и «после» одни метки эксперта. Из отчёта берутся только ответы (их проверяет
     card_scores_exam_report.read); схема ответа держит тему в списке тематик, поэтому сверка точная, и ответ
     прежней схемы (до #137, без стран) годится."""
@@ -305,7 +305,7 @@ def _pack_row(item: dict[str, Any], rubrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extra_row(item: dict[str, Any], rubrics: dict[str, Any]) -> dict[str, Any]:
-    """«Сильный сверх пакета»: категория, отрасль и связь — машинные (разметки эксперта у него нет), тема не мерится."""
+    """«Сильный сверх пакета»: категория, отрасль и связь: машинные (разметки эксперта у него нет), тема не мерится."""
     profile = CATEGORY_PROFILE[item["category"]]
     return {**_publication(item), "extra": True, "group": EXTRA, "category": item["category"],
             "industry": item.get("industry"), "oilfield_relevance": item.get("oilfield_relevance"),
@@ -327,7 +327,7 @@ def _computed(rubrics: dict[str, Any], profile: str) -> list[str]:
 
 def finals(answers: list[dict[str, Any]], rows: list[dict[str, Any]], summaries: dict[str, str],
            cards: dict[str, list[dict[str, Any]]], inputs: Inputs) -> dict[str, list[dict[str, Any] | None]]:
-    """Баллы сигнала по прогонам — как их записало бы ядро (signal_scores.score_values); сбой — None."""
+    """Баллы сигнала по прогонам: как их записало бы ядро (signal_scores.score_values); сбой: None."""
     by_id = {row["id"]: row for row in rows}
     found: dict[str, list[dict[str, Any] | None]] = {row["id"]: [] for row in rows}
     for answer in sorted(answers, key=lambda one: one["run"]):
@@ -357,8 +357,8 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
             cards: dict[str, list[dict[str, Any]]], tried: list[dict[str, Any]], settings: dict[str, Any],
             *, spend: dict[str, Any], card_exam: dict[str, Any] | None = None,
             theme_before: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
-    """Отчёт прогона или пересчёта — рядом с манифестом, JSON и читаемый .md (card_scores_exam_report.write).
-    theme_before — тема прежнего прогона (_theme_before): «до» рядом с темой этого."""
+    """Отчёт прогона или пересчёта: рядом с манифестом, JSON и читаемый .md (card_scores_exam_report.write).
+    theme_before, тема прежнего прогона (_theme_before): «до» рядом с темой этого."""
     part, decision = settings["part"], _decision(tried, settings["part"])
     inputs = Inputs(exam)
     control = exam["scores_control"]
@@ -399,8 +399,8 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
 
 def _attributes(card_exam: dict[str, Any] | None, rows: list[dict[str, Any]],
                 values: dict[str, list[dict[str, Any] | None]]) -> dict[str, Any] | None:
-    """Атрибуты основного вызова того же прогона против разметки #98 — по его метрикам и порогам (новых нет); страна
-    события (#137) — против его региона по таблице «страна → регион», без порога."""
+    """Атрибуты основного вызова того же прогона против разметки #98: по его метрикам и порогам (новых нет); страна
+    события (#137): против его региона по таблице «страна → регион», без порога."""
     if card_exam is None:
         return None
     ids = {row["id"] for row in rows if not row["extra"]}

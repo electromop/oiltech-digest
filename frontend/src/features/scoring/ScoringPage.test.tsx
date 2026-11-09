@@ -73,7 +73,7 @@ describe("экран «Скоринг»: вкладки наборов крит�
     expect(screen.getByRole("status")).toHaveTextContent("Этим набором оцениваются карточки технологического радара");
     expect(screen.getByRole("status")).toHaveTextContent("со следующего прогона радара");
     expect(screen.getByRole("status")).not.toHaveTextContent("пока не");
-    expect(confirm).not.toHaveBeenCalled(); // правок не было — и спрашивать не о чем
+    expect(confirm).not.toHaveBeenCalled(); // правок не было: и спрашивать не о чем
   });
 
   it("«Сохранить» уходит в набор открытой вкладки", async () => {
@@ -103,7 +103,7 @@ describe("экран «Скоринг»: вкладки наборов крит�
     // Набор столбиком: перевод строки в конце не съедается, пока поле в фокусе.
     await user.type(ru, "ГРП{Enter}гидроразрыв,{Enter}грп");
     expect(ru).toHaveValue("ГРП\nгидроразрыв,\nгрп");
-    // Вставка столбика из таблицы — отдельные слова, пустые строки отброшены.
+    // Вставка столбика из таблицы: отдельные слова, пустые строки отброшены.
     fireEvent.change(en, { target: { value: "hydraulic fracturing\n\nproppant" } });
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
 

@@ -15,7 +15,7 @@ type Props = {
 };
 
 // Правка материала из бота на платформе (решение владельца 23.10). Те же поля и проверки, что у бота: тип, файл и
-// автор не меняются. Ошибку сервера показываем как есть — она называет, что поправить.
+// автор не меняются. Ошибку сервера показываем как есть: она называет, что поправить.
 export function MaterialEditForm({ material, verdicts, onUnauthorized, showToast, onSaved, onCancel }: Props) {
   const [title, setTitle] = useState(material.title);
   const [description, setDescription] = useState(material.description);

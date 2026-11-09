@@ -13,11 +13,11 @@ from __future__ import annotations
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection
 from oiltech_digest.processing import digest as digest_module
-from tests.digest_pdf_support import image_host  # noqa: F401 — фикстура
+from tests.digest_pdf_support import image_host  # noqa: F401: фикстура
 from tests.digest_pdf_support import pdf_figures, pdf_pages
 from tests.digest_user_path_support import (DRILLING, MARKET, SEPT, Person, add_article, add_signal, feed_signal,
                                             issue_key, msk, set_card, utc)
-from tests.digest_user_path_support import chromium, issue  # noqa: F401 — фикстуры
+from tests.digest_user_path_support import chromium, issue  # noqa: F401: фикстуры
 
 
 def _material(person: Person, kind: str, item_id: int, month: str = "2026-09") -> dict:

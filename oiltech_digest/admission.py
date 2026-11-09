@@ -1,9 +1,9 @@
 """Допуск по коду (#113, спека #110, ADR 0004): войти можно только допущенной учётке.
 
 Новая учётка и учётка, с которой сняли допуск, после верного пароля получают ответ «нужен код
-допуска». Код — восемь цифр, одноразовый, 24 часа, не больше пяти попыток ввода; в таблице кодов
+допуска». Код: восемь цифр, одноразовый, 24 часа, не больше пяти попыток ввода; в таблице кодов
 только его отпечаток, открытым текстом код лежит лишь в задаче отправки, пока она не завершилась.
-Новый код одной учётке — не чаще раза в 10 минут и только когда прежний уже не действует:
+Новый код одной учётке, не чаще раза в 10 минут и только когда прежний уже не действует:
 повторные входы не засыпают чат.
 
 Код уходит в закрытый чат подтверждающих в Telegram. С РФ-ядра Telegram недоступен (решение
@@ -45,7 +45,7 @@ EXHAUSTED = ("Код больше не действует: попытки вво
 
 
 class AdmissionRefused(Exception):
-    """Код не принят; текст — для человека."""
+    """Код не принят; текст: для человека."""
 
 
 def is_admitted(user_id: int) -> bool:
@@ -61,7 +61,7 @@ def admit(user_id: int) -> None:
 
 
 def revoke(user_id: int) -> None:
-    """Снять допуск: сессии закрываются, прежний код пропадает — новый можно выдать сразу.
+    """Снять допуск: сессии закрываются, прежний код пропадает: новый можно выдать сразу.
     Данные учётки не трогаются."""
     with connection.get_connection() as conn:
         conn.execute("UPDATE users SET admitted_at = NULL, updated_at = now() WHERE id = %s", (user_id,))
@@ -71,9 +71,9 @@ def revoke(user_id: int) -> None:
 
 
 def issue_code(user_id: int, *, force: bool = False) -> tuple[str, datetime] | None:
-    """Новый код учётке; None — выдавать рано: прежний ещё действует или выдан меньше 10 минут назад.
+    """Новый код учётке; None, выдавать рано: прежний ещё действует или выдан меньше 10 минут назад.
 
-    force — команда на сервере: выдаёт всегда и заменяет прежний. Проверка и замена — одним
+    force, команда на сервере: выдаёт всегда и заменяет прежний. Проверка и замена: одним
     запросом, чтобы два одновременных входа не выдали два кода."""
     code = f"{secrets.randbelow(10 ** CODE_DIGITS):0{CODE_DIGITS}d}"
     salt, digest = auth.hash_password(code)
@@ -135,8 +135,8 @@ def request_code(user: dict[str, Any]) -> str:
 
 def notify_text(user_id: int, email: str, code: str, expires_at: datetime) -> str:
     """Сообщение подтверждающим: откуда код (платформа), чей он (номер учётки и полная почта), код
-    и срок. Полная почта — решение владельца 20.10: по одному началу почты подтверждающий не понимал,
-    кому передать код (прежде — история 40 спеки #110)."""
+    и срок. Полная почта: решение владельца 20.10: по одному началу почты подтверждающий не понимал,
+    кому передать код (прежде: история 40 спеки #110)."""
     until = expires_at.astimezone(_MSK).strftime("%d.%m.%Y %H:%M")
     return ("OilTech Digest: запрос кода допуска\n"
             f"Учётка №{user_id} {email} ждёт допуска.\n"
@@ -145,7 +145,7 @@ def notify_text(user_id: int, email: str, code: str, expires_at: datetime) -> st
 
 
 def redeem(user_id: int, code: str) -> None:
-    """Принять код: допуск учётке. Неверный код засчитывает попытку; иначе — AdmissionRefused."""
+    """Принять код: допуск учётке. Неверный код засчитывает попытку; иначе: AdmissionRefused."""
     entered = re.sub(r"[\s-]", "", code or "")
     with connection.get_connection() as conn:
         row = conn.execute(
@@ -202,7 +202,7 @@ def settle_notifications() -> None:
 
 
 def without_text(payload: dict[str, Any]) -> dict[str, Any]:
-    """Задача отправки в списке задач — без кода: экран задач видят все допущенные."""
+    """Задача отправки в списке задач, без кода: экран задач видят все допущенные."""
     return {key: value for key, value in (payload or {}).items() if key != "text"}
 
 
@@ -210,13 +210,13 @@ def without_text(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class TelegramError(RuntimeError):
-    """Telegram не принял сообщение — повторяемый сбой задачи. Текст без токена бота."""
+    """Telegram не принял сообщение: повторяемый сбой задачи. Текст без токена бота."""
 
 
 def send_notification(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     """Обработчик задачи admission_notify на воркере: один запрос sendMessage к Bot API.
 
-    Токен и номер чата — в настройках воркера (.env.external-worker). Ошибка — исключение:
+    Токен и номер чата: в настройках воркера (.env.external-worker). Ошибка, исключение:
     воркер вернёт задачу ядру повторяемым сбоем."""
     import requests
 
@@ -231,7 +231,7 @@ def send_notification(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]
         response = requests.post(f"{_TELEGRAM_API}/bot{token}/sendMessage",
                                  json={"chat_id": chat_id, "text": text}, timeout=20)
     except requests.RequestException as exc:
-        # В тексте исключения requests — адрес запроса, а в нём токен.
+        # В тексте исключения requests: адрес запроса, а в нём токен.
         raise TelegramError(f"Telegram недоступен: {type(exc).__name__}") from None
     try:
         body = response.json()

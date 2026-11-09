@@ -1,6 +1,6 @@
 """Ключ адреса после 13.09: бэкфилл в схеме ≡ Python и починка спрятанного склейкой.
 
-13.09 ключ `articles.url_key` срезал query целиком, и схема спрятала «копии» — у сайтов, где
+13.09 ключ `articles.url_key` срезал query целиком, и схема спрятала «копии»: у сайтов, где
 номер статьи в query, это все статьи, кроме одной (у Минэнерго 90 из 91, 25.09).
 """
 
@@ -18,7 +18,7 @@ def _source(conn, name: str) -> int:
 
 
 def test_schema_backfill_computes_url_key_like_python(isolated_db):
-    """Бэкфилл `url_key` в schema.sql (строки без ключа — например, после восстановления
+    """Бэкфилл `url_key` в schema.sql (строки без ключа: например, после восстановления
     старого дампа) обязан давать тот же ключ, что `normalize.url_key` на вставке: иначе
     уникальный индекс пропустит копию или отобьёт чужую статью. Адреса строятся из самого
     списка трекинговых параметров: имя, добавленное только в Python, даст красный тест."""
@@ -72,7 +72,7 @@ def test_repair_url_keys_unhides_only_what_the_13_09_collapse_hid(isolated_db):
         collapsed = put(f"{base}?rid=731755", old, "Релиз о бурении.", hidden=True)
         by_user = put(f"{base}?rid=700000", old, "Релиз-шум.", hidden=True, marked=True)
         same_body = put(f"{base}?rid=731734", old, "Релиз о заводе.", hidden=True)
-        # Вставлен уже новым кодом до починки — держит новый ключ.
+        # Вставлен уже новым кодом до починки: держит новый ключ.
         fresh = put(f"{base}?rid=741000", f"{old}?rid=741000", "Свежий релиз.")
         taken = put(f"http://lukoil.ru/PressCenter/Pressreleases/Pressrelease?rid=741000", old,
                     "Свежий релиз, другое написание.", hidden=True)

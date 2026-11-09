@@ -111,7 +111,7 @@ class OpenAIResponsesClient:
 
         Отдельный метод, а не параметр complete_json: его подменяют десятки тестов, а лента
         поиском не пользуется. Кроме данных, возвращает адреса, на которые модель сослалась
-        (аннотации url_citation), и число поисковых вызовов — по ним видно, что ответ
+        (аннотации url_citation), и число поисковых вызовов: по ним видно, что ответ
         опирается на найденное, а не на память модели."""
         if not self.api_key:
             raise AIClientError("OPENAI_API_KEY is empty")
@@ -124,7 +124,7 @@ class OpenAIResponsesClient:
             "max_output_tokens": _budget_for_sent_effort(max_output_tokens, reasoning_effort, effort),
             "tools": [{"type": "web_search", "search_context_size": search_context_size}],
             # Адреса, которые поиск реально вернул. Сносок (url_citation) при строгом JSON
-            # модель не ставит — прогон 30.09: 0 из 18, — и проверять ссылку было не по чему.
+            # модель не ставит: прогон 30.09: 0 из 18,: и проверять ссылку было не по чему.
             "include": ["web_search_call.action.sources"],
             "text": {"format": {"type": "json_schema", "name": schema["name"], "strict": True,
                                 "schema": schema["schema"]}},
@@ -164,9 +164,9 @@ class OpenAIResponsesClient:
 
 def _single_json_object(text: str) -> dict[str, Any] | None:
     """Единственный целый объект ответа при строгой схеме. Лёгкие модели изредка портят обёртку: строка перед объектом,
-    мусор или оборванный повтор после него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 —
-    «[JSON не возвращать…]{…}», «{…}即»), а сам объект цел — его и берём. Два целых объекта (черновик и итог) — сбой:
-    какой из них ответ, не знаем. Оборванный объект — тоже сбой. В отличие от _research_payload (несколько сообщений
+    мусор или оборванный повтор после него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329:
+    «[JSON не возвращать…]{…}», «{…}即»), а сам объект цел: его и берём. Два целых объекта (черновик и итог), сбой:
+    какой из них ответ, не знаем. Оборванный объект: тоже сбой. В отличие от _research_payload (несколько сообщений
     поиска, берётся то, где больше событий) здесь ответ один."""
     try:
         value = json.loads(text)
@@ -192,8 +192,8 @@ def _single_json_object(text: str) -> dict[str, Any] | None:
 
 def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:
     """JSON ответа с поиском. Модель между поисками пишет несколько сообщений и может дописать
-    текст после объекта (сравнительный прогон 30.09: две темы из трёх — «non-JSON output» при
-    нормальном списке событий внутри). Берём первый объект из каждой части и из них — тот, где
+    текст после объекта (сравнительный прогон 30.09: две темы из трёх: «non-JSON output» при
+    нормальном списке событий внутри). Берём первый объект из каждой части и из них: тот, где
     больше событий; json.loads целиком этого не умеет."""
     chunks = [
         str(content["text"])
@@ -224,13 +224,13 @@ def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 # Сколько токенов ответа добавить на рассуждение: лимиты вызовов подбирались под minimal, и на
-# medium модель тратила весь лимит на рассуждение — «ответ без текста» (прогон 28.09).
+# medium модель тратила весь лимит на рассуждение: «ответ без текста» (прогон 28.09).
 _REASONING_OUTPUT_EXTRA = {"none": 0, "minimal": 0, "low": 2000, "medium": 6000, "high": 14000, "xhigh": 20000,
                            "max": 32000}
 
 
 def output_budget(base: int, reasoning_effort: str | None) -> int:
-    """Лимит ответа с запасом на рассуждение; неизвестный уровень — как medium."""
+    """Лимит ответа с запасом на рассуждение; неизвестный уровень: как medium."""
     effort = (reasoning_effort or "").strip().lower()
     return int(base) + _REASONING_OUTPUT_EXTRA.get(effort, _REASONING_OUTPUT_EXTRA["medium"] if effort else 0)
 
@@ -239,7 +239,7 @@ def _budget_for_sent_effort(max_output_tokens: int, requested: str | None, sent:
     """Лимит ответа под уровень, который реально уходит в API.
 
     Стадия считает запас под свой уровень (output_budget), а модель может его не уметь: minimal у gpt-6.1-sol
-    уходит как low — без добавки рассуждение съело бы весь ответ («ответ без текста», прогон 28.09)."""
+    уходит как low: без добавки рассуждение съело бы весь ответ («ответ без текста», прогон 28.09)."""
     return int(max_output_tokens) + max(0, output_budget(0, sent) - output_budget(0, requested))
 
 
@@ -278,7 +278,7 @@ class OfflineAIClient:
         elif name == "document_chunk":
             # Офлайн-разбор фрагмента: берём ПЕРВОЕ настоящее число из текста и первый
             # якорь фрагмента. Так проверяльщик фактов получает вход, который ДОЛЖЕН
-            # подтвердиться, — иначе тест сквозного пути не отличит рабочую сверку
+            # подтвердиться,: иначе тест сквозного пути не отличит рабочую сверку
             # от сверки, которая всегда возвращает False.
             anchor = _first_int(user_input, "якоря во фрагменте: с") or 1
             match = re.search(r"\b\d[\d\u00a0 ]*(?:[.,]\d+)?\b", _after_marker(user_input, "текст:"))
@@ -341,14 +341,14 @@ def _extract_output_text(raw: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-# Уровни рассуждения от лёгкого к тяжёлому. Неподдержанный уровень заменяется ближайшим поддержанным, при равенстве —
-# более лёгким: minimal у gpt-6-luna уходит как none, у gpt-6.1-sol — как low.
+# Уровни рассуждения от лёгкого к тяжёлому. Неподдержанный уровень заменяется ближайшим поддержанным, при равенстве:
+# более лёгким: minimal у gpt-6-luna уходит как none, у gpt-6.1-sol: как low.
 _EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _ALL_BUT_MINIMAL = frozenset(_EFFORT_ORDER) - {"minimal"}
 _LOW_AND_ABOVE = frozenset(_EFFORT_ORDER[_EFFORT_ORDER.index("low"):])
-# Какие уровни принимает модель — страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra — 03.11.2026).
-# Ключ — начало имени: в ответе API имя бывает с датой. Незнакомая gpt-6 — уровни, которые принимают все известные
-# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max), — правило поколений gpt-5 / gpt-5.N в
+# Какие уровни принимает модель: страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra: 03.11.2026).
+# Ключ, начало имени: в ответе API имя бывает с датой. Незнакомая gpt-6: уровни, которые принимают все известные
+# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max),: правило поколений gpt-5 / gpt-5.N в
 # _reasoning_effort.
 _MODEL_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-6.1-sol": _LOW_AND_ABOVE,
@@ -370,9 +370,9 @@ def _reasoning_effort(model: str, configured: str | None) -> str | None:
     """Normalize reasoning effort across GPT-5 and GPT-6 generations.
 
     GPT-5.1 и новее (5.1, 5.2, 5.3, 5.4, 5.5, …) поддерживают `none` и НЕ принимают
-    `minimal`; исходный GPT-5 (gpt-5/-mini/-nano) — наоборот: принимает `minimal`,
-    но не `none`. GPT-6 — по таблице _MODEL_EFFORTS: `minimal` не принимает никто,
-    gpt-6.1-sol и gpt-6-astra — и `none`. Пустое значение — самый лёгкий уровень
+    `minimal`; исходный GPT-5 (gpt-5/-mini/-nano), наоборот: принимает `minimal`,
+    но не `none`. GPT-6, по таблице _MODEL_EFFORTS: `minimal` не принимает никто,
+    gpt-6.1-sol и gpt-6-astra: и `none`. Пустое значение: самый лёгкий уровень
     модели. Переводим несовместимые значения, чтобы не ловить 400 при смене модели.
     """
     value = (configured or "").strip().lower()

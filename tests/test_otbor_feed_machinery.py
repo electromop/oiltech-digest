@@ -13,7 +13,7 @@ from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, OtborModel, answer, api_send, article, decide, reject, showcase
 from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
-from tests.signal_card_support import DRILLING, admin, api_get, run_worker, tag, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import DRILLING, admin, api_get, run_worker, tag, user  # noqa: F401: фикстуры
 
 # Лента статей и отметка «в дайджест» смотрят окно открытых месяцев: оно на день статей (tests/otbor_support.py).
 pytestmark = pytest.mark.usefixtures("window_of_published")
@@ -92,7 +92,7 @@ def test_article_accepted_by_otbor_is_processed_without_the_gate_and_stop_words(
 
 
 def test_summary_of_an_article_gets_the_otbor_category_and_link_but_not_its_decision(user, contour, monkeypatch):
-    # «Суть и перевод» (#131): на вход — категория, связь и применение «Отбора», без решения и обоснования.
+    # «Суть и перевод» (#131): на вход: категория, связь и применение «Отбора», без решения и обоснования.
     seed_default_scoring_criteria()
     tag(DRILLING)
     article("Роботы-бурильщики Equinor", "Equinor испытала робота-бурильщика на платформе в Северном море.")
@@ -128,10 +128,10 @@ def test_old_feed_machinery_counts_and_recomputes_by_the_otbor_decision(user, ad
 
     # Плитки ленты: принятая обработана.
     assert api_get("/api/stats", user)["processed_articles"] == 1
-    # Воронка платформы и месячная аналитика: принятая и отклонённая — по решению «Отбора».
+    # Воронка платформы и месячная аналитика: принятая и отклонённая: по решению «Отбора».
     [platform] = api_get("/api/stats/monthly", admin)["platform"]
     assert (platform["relevant"], platform["rejected"], platform["summarized"]) == (1, 1, 1)
-    # Аналитика — без стоимости: та за курсом ходит в сеть ЦБ.
+    # Аналитика, без стоимости: та за курсом ходит в сеть ЦБ.
     month = analytics.monthly_analytics(1)["months"][-1]
     assert (month["relevant"], month["rejected"], month["summarized"], month["sources_relevant"]) == (1, 1, 1, 1)
     # Пересчёт после полного текста: суть принятой по новому телу, отклонённой ничего.
@@ -156,7 +156,7 @@ def test_explicit_article_list_does_not_bypass_otbor(user, admin, contour, monke
                             capability=decision.capability)
     [job] = run_worker("external-ai")
     assert api_get(f"/api/jobs/{job['id']}", admin)["result"]["stats"]["processed"] == 1
-    # Местный конвейер — так же.
+    # Местный конвейер: так же.
     cli.main(["process-articles", str(waiting), str(rejected), "--offline"])
     assert "статей=0" in capsys.readouterr().out
     # Ждущую по-прежнему решит «Отбор»: шаг планировщика её берёт.
@@ -214,7 +214,7 @@ def test_rerun_of_otbor_does_not_hide_an_article_chosen_for_the_digest(user, con
 
 
 def test_reprint_never_hides_the_accepted_copy_behind_one_otbor_rejected_or_has_not_decided(user, contour, monkeypatch):
-    # Технические правила (перепечатки) — как раньше (спека), но «видна ли главная» решает и «Отбор».
+    # Технические правила (перепечатки): как раньше (спека), но «видна ли главная» решает и «Отбор».
     rejected = article("Weatherford получила контракт на бурение скважин в Омане", "Котировки нефти и прогноз ОПЕК.",
                        source="Нефтегаз")
     accepted = article("Weatherford получила контракт на бурение скважин в Омане до 2027",
@@ -227,7 +227,7 @@ def test_reprint_never_hides_the_accepted_copy_behind_one_otbor_rejected_or_has_
 
     # Пар с отклонённой и с ждущей решения нет: модель перепечаток их не увидит.
     assert {(pair["a_id"], pair["b_id"]) for pair in repository.reprint_candidates()} == set()
-    # Судья назвал главной отклонённую — пометка не ложится: принятая копия остаётся в витрине.
+    # Судья назвал главной отклонённую, пометка не ложится: принятая копия остаётся в витрине.
     for primary in (rejected, waiting):
         with pytest.raises(ValueError, match="не видна в ленте"):
             repository.mark_article_reprint(article_id=accepted, primary_id=primary, similarity=0.8,

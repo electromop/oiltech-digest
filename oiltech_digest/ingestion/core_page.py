@@ -4,7 +4,7 @@
 Воркер просит ядро (ask) из своей задачи радара: адрес /api/external-worker/jobs/{id}/page с арендой задачи, как у
 остальных адресов задачи, и только для прогона радара. Ядро качает (download) только http(s) и только публичные адреса:
 иначе токен воркера открыл бы внутреннюю сеть ядра. Сайты любые, не только .ru: 04.11 investor.ovintiv.com не открылся
-с NL, а с ядра РФ открылся (решение по замеру, разбор 28 в документах проекта). Ответ — байты страницы как есть:
+с NL, а с ядра РФ открылся (решение по замеру, разбор 28 в документах проекта). Ответ, байты страницы как есть:
 разбирает их воркер тем же разбором, что и свои.
 """
 
@@ -69,8 +69,8 @@ def download(url: str) -> dict[str, Any]:
     """Ядро РФ: скачать страницу по просьбе воркера. Только http(s) и только публичные адреса.
 
     Имя сайта разрешается здесь, и все его адреса обязаны быть публичными (ipaddress.is_global). Соединение идёт на
-    проверенный адрес, имя сайта — в SNI и в проверке сертификата, а не во втором разрешении имени: подмена DNS после
-    проверки ничего не даёт. Переадресации — вручную, каждая проверяется заново; размер — до SIGNAL_PAGE_MAX_BYTES,
+    проверенный адрес, имя сайта, в SNI и в проверке сертификата, а не во втором разрешении имени: подмена DNS после
+    проверки ничего не даёт. Переадресации: вручную, каждая проверяется заново; размер: до SIGNAL_PAGE_MAX_BYTES,
     по разжатому. Сертификат: certifi, затем набор с недостающими промежуточными (extra_ca.pem сбора), затем без
     проверки (российские сайты на «Российском CA»); шага legacy-TLS сбора здесь нет."""
     deadline = time.monotonic() + DEADLINE_SECONDS
@@ -93,7 +93,7 @@ def download(url: str) -> dict[str, Any]:
         return {"ok": False, "status": None, "error": "больше пяти переадресаций", "final_url": current}
     except PageRefused as exc:
         return {"ok": False, "status": None, "error": f"ядро не качает: {exc}", "final_url": current}
-    except Exception as exc:  # noqa: BLE001 - сбой сети ядра — ответ воркеру, а не 500
+    except Exception as exc:  # noqa: BLE001 - сбой сети ядра: ответ воркеру, а не 500
         return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "final_url": current}
 
 
@@ -133,7 +133,7 @@ def _resolve(host: str, port: int) -> list[str]:
 def _is_public(address: str) -> bool:
     try:
         parsed = ipaddress.ip_address(address)
-    except ValueError:  # адрес с зоной (fe80::1%eth0) — только внутренний
+    except ValueError:  # адрес с зоной (fe80:1%eth0): только внутренний
         return False
     return parsed.is_global and not parsed.is_multicast
 
@@ -177,8 +177,8 @@ def _get(target: _Target, *, deadline: float) -> Any:
 def _read(response: Any, *, deadline: float) -> bytes:
     """Тело ответа до предела размера и до общего срока. Медленная отдача по байту держала бы поток ядра без конца:
     по сроку сторож закрывает соединение на чтение (HTTPResponse.shutdown, из другого потока), и чтение обрывается.
-    Разжатие — явно: без decode_content=True urllib3 отдавал сжатый gzip (замер на ядре 04.11: wam.ae, scientica.ru,
-    aer.ca, ovintiv — ответ 200, а разбор видел «не HTML»)."""
+    Разжатие, явно: без decode_content=True urllib3 отдавал сжатый gzip (замер на ядре 04.11: wam.ae, scientica.ru,
+    aer.ca, ovintiv: ответ 200, а разбор видел «не HTML»)."""
     limit = config.SIGNAL_PAGE_MAX_BYTES
     body = bytearray()
     watchdog = threading.Timer(max(deadline - time.monotonic(), 0.0), _shutdown, (response,))

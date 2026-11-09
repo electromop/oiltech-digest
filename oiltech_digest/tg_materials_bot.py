@@ -1,21 +1,21 @@
 """Бот «Материалы коллег»: приём материалов для нефтесервиса из рабочей группы Telegram (NL).
 
-Сотрудник пишет /add — бот ведёт его по шагам: тип (ссылка, файл, событие) → ссылка или
+Сотрудник пишет /add, бот ведёт его по шагам: тип (ссылка, файл, событие) → ссылка или
 файл → заголовок → описание → компании → оценка по шкале эксперта заказчика (те же девять пунктов, что
 у карточки радара) → комментарий к оценке → карточка на проверку → «Отправить». Материал
 уходит в ядро (`/api/external-worker/materials`, токен воркера) и виден на экране
 «Материалы коллег»; в группе остаётся итоговая карточка.
 
-Каждый работает в своём цикле. Диалог — по паре (чат, человек): ответы других участников его
+Каждый работает в своём цикле. Диалог, по паре (чат, человек): ответы других участников его
 не двигают, а нажатие чужой кнопки бот отклоняет. В группе бот просит ответить на свой вопрос
 (ForceReply, selective): такие ответы бот получает и в режиме приватности, ему не нужно читать
-всю переписку группы. Промежуточные вопросы бот после отправки стирает — в ленте группы
+всю переписку группы. Промежуточные вопросы бот после отправки стирает: в ленте группы
 остаются ответы автора и итоговая карточка.
 
 Почему NL, а не ядро: с РФ-адреса Telegram недоступен (тот же довод, что у кода допуска,
 admission.py). Почему свой цикл getUpdates, а не очередь ядра: бот должен отвечать за секунды,
-а задачи очереди живут минутами. Состояние диалогов — в памяти: перезапуск контейнера сбросит
-недописанные материалы (автору — «начните заново»), отправленные уже в ядре.
+а задачи очереди живут минутами. Состояние диалогов, в памяти: перезапуск контейнера сбросит
+недописанные материалы (автору: «начните заново»), отправленные уже в ядре.
 """
 
 from __future__ import annotations
@@ -45,11 +45,11 @@ _POLL_SECONDS = 50
 _HELLO_EVERY_SECONDS = 300
 _MEMBER_CACHE_SECONDS = 600
 _HISTORY_PAGE = 10
-# В группе /history и ответ на неё стираются через столько секунд: лента группы — для материалов.
+# В группе /history и ответ на неё стираются через столько секунд: лента группы: для материалов.
 _GROUP_REPLY_SECONDS = 120
 _CARD_DESCRIPTION_MAX = 2500
-# Сообщение Telegram — до 4096 знаков после разбора HTML, в единицах UTF-16. В карточке на показ ссылка,
-# компании и комментарий урезаются, описание получает остаток; полный текст — на платформе.
+# Сообщение Telegram: до 4096 знаков после разбора HTML, в единицах UTF-16. В карточке на показ ссылка,
+# компании и комментарий урезаются, описание получает остаток; полный текст: на платформе.
 _TELEGRAM_TEXT_MAX = 4096
 _CARD_URL_SHOWN, _CARD_COMPANIES_SHOWN, _CARD_COMMENT_SHOWN = 300, 600, 600
 
@@ -113,7 +113,7 @@ class TelegramError(RuntimeError):
 
 
 class CoreError(RuntimeError):
-    """Ядро не приняло материал. retryable — сбой связи или ядра, а не отказ по существу."""
+    """Ядро не приняло материал. retryable: сбой связи или ядра, а не отказ по существу."""
 
     def __init__(self, message: str, *, retryable: bool) -> None:
         super().__init__(message)
@@ -134,7 +134,7 @@ class TelegramApi:
             response = self.session.post(f"{_TELEGRAM_API}/bot{self.token}/{method}", json=payload,
                                          timeout=http_timeout)
         except requests.RequestException as exc:
-            # В тексте исключения requests — адрес запроса, а в нём токен.
+            # В тексте исключения requests: адрес запроса, а в нём токен.
             raise TelegramError(f"Telegram недоступен: {type(exc).__name__}") from None
         try:
             body = response.json()
@@ -210,7 +210,7 @@ class CoreClient:
         response.raise_for_status()
 
     def history(self, tg_user_id: int, limit: int = 10, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
-        """Материалы автора, новые первыми, и сколько их всего; ядро старее бота total не отдаёт — тогда счёт по странице."""
+        """Материалы автора, новые первыми, и сколько их всего; ядро старее бота total не отдаёт: тогда счёт по странице."""
         response = self.session.get(f"{self.url}/api/external-worker/materials",
                                     params={"tg_user_id": tg_user_id, "limit": limit, "offset": offset}, timeout=20)
         response.raise_for_status()
@@ -306,7 +306,7 @@ def _button(text: str, data: str) -> dict[str, str]:
 
 
 class MaterialsBot:
-    """Логика бота без сети: Telegram и ядро приходят снаружи (в тестах — подставные)."""
+    """Логика бота без сети: Telegram и ядро приходят снаружи (в тестах: подставные)."""
 
     def __init__(self, tg: Any, core: Any, *, chat_ids: list[int], clock: Callable[[], float] = time.monotonic) -> None:
         self.tg = tg
@@ -333,7 +333,7 @@ class MaterialsBot:
             self._tell_crash(update)
 
     def _tell_crash(self, update: dict[str, Any]) -> None:
-        """Автор не остаётся в тишине: кнопке — всплывающий ответ, сообщению — короткий ответ в тот же чат."""
+        """Автор не остаётся в тишине: кнопке: всплывающий ответ, сообщению: короткий ответ в тот же чат."""
         text = "Что-то пошло не так. Попробуйте ещё раз или начните заново: /add."
         try:
             if "callback_query" in update:
@@ -343,7 +343,7 @@ class MaterialsBot:
                 chat = message.get("chat") or {}
                 if chat.get("id") is not None:
                     self._send(chat["id"], text, reply_to=message.get("message_id"))
-        except Exception:  # noqa: BLE001 - сообщить об ошибке — по возможности, не ценой второго падения
+        except Exception:  # noqa: BLE001 - сообщить об ошибке: по возможности, не ценой второго падения
             logger.warning("tg_materials_crash_notice_failed update=%s", update.get("update_id"))
 
     def _allowed(self, chat: dict[str, Any], user: dict[str, Any]) -> bool:
@@ -410,7 +410,7 @@ class MaterialsBot:
             return
         replied = (message.get("reply_to_message") or {}).get("message_id")
         if not dialog.private and replied != dialog.prompt_id:
-            return  # в группе ход диалога — только ответом на свой вопрос
+            return  # в группе ход диалога: только ответом на свой вопрос
         self._answer(dialog, message, text)
 
     def _dialog(self, key: tuple[int, int]) -> Dialog | None:
@@ -427,7 +427,7 @@ class MaterialsBot:
 
     def _start(self, chat: dict[str, Any], user: dict[str, Any], message: dict[str, Any], *,
                own: bool = True) -> None:
-        """own — /add самого автора (стирается вместе с вводом); «Заново» начинает без нового сообщения."""
+        """own: /add самого автора (стирается вместе с вводом); «Заново» начинает без нового сообщения."""
         key = (int(chat["id"]), int(user["id"]))
         previous = self.dialogs.pop(key, None)
         if previous:
@@ -436,7 +436,7 @@ class MaterialsBot:
                         username=user.get("username"), private=chat.get("type") == "private",
                         touched=self.clock())
         # На это сообщение автора бот отвечает вопросами: ForceReply с selective показывается
-        # тому, на чьё сообщение ответ, и тем, кто упомянут, — остальным в группе нет.
+        # тому, на чьё сообщение ответ, и тем, кто упомянут,: остальным в группе нет.
         dialog.data["_last_user_message"] = message.get("message_id")
         if own and message.get("message_id"):
             dialog.user_messages.append(int(message["message_id"]))
@@ -451,7 +451,7 @@ class MaterialsBot:
 
     @staticmethod
     def _intro(dialog: Dialog) -> str:
-        # В группе — упоминание автора: видно, чей это вопрос, и ForceReply адресован ему.
+        # В группе, упоминание автора: видно, чей это вопрос, и ForceReply адресован ему.
         if dialog.private:
             return ""
         return f'<a href="tg://user?id={dialog.user_id}">{html.escape(dialog.author)}</a>, '
@@ -567,7 +567,7 @@ class MaterialsBot:
         if str(user.get("id")) != owner:
             self._ack(query, "Это меню другого участника. Чтобы внести свой материал — /add.", alert=True)
             return
-        if action == "history":  # листание истории — не ввод, диалога у него нет
+        if action == "history":  # листание истории: не ввод, диалога у него нет
             self._ack(query)
             self._history(chat, user, {}, offset=int(value) if value.isdigit() else 0,
                           edit_id=message.get("message_id"))
@@ -604,7 +604,7 @@ class MaterialsBot:
             "kind": data.get("kind"), "title": data.get("title"), "description": data.get("description"),
             "url": data.get("url"), "companies": data.get("companies") or [], "verdict": data.get("verdict"),
             "verdict_comment": data.get("verdict_comment"),
-            # Ключ повтора — сообщение с карточкой: двойное нажатие и повтор после сбоя не двоят материал.
+            # Ключ повтора, сообщение с карточкой: двойное нажатие и повтор после сбоя не двоят материал.
             "tg_chat_id": dialog.chat_id, "tg_message_id": dialog.card_id, "tg_user_id": dialog.user_id,
             "tg_username": dialog.username, "tg_author": dialog.author,
         }
@@ -630,7 +630,7 @@ class MaterialsBot:
         self._cleanup(dialog, keep={dialog.card_id, data.get("_file_message") if data.get("kind") == "file" else None})
 
     def _post_to_groups(self, user_id: int, text: str) -> None:
-        """Материал из лички — и в рабочие группы автора: группа видит всё, что внесено, как бы ни вносили."""
+        """Материал из лички, и в рабочие группы автора: группа видит всё, что внесено, как бы ни вносили."""
         for chat_id in sorted(self.chat_ids):
             try:
                 info = self.tg.call("getChatMember", chat_id=chat_id, user_id=user_id) or {}
@@ -704,14 +704,14 @@ class MaterialsBot:
             self.tg.call("answerCallbackQuery", callback_query_id=query.get("id"), text=text,
                          show_alert=alert or None)
         except TelegramError:
-            pass  # кнопка «повисит» пару секунд — не повод терять ход диалога
+            pass  # кнопка «повисит» пару секунд: не повод терять ход диалога
 
     def _remember(self, dialog: Dialog, sent: dict[str, Any] | None) -> None:
         if sent and sent.get("message_id"):
             dialog.bot_messages.append(int(sent["message_id"]))
 
     def _cleanup(self, dialog: Dialog, keep: set[int | None] | None = None) -> None:
-        """Стереть ввод: вопросы бота, /add и ответы автора; keep — что оставить (итоговая карточка, файл)."""
+        """Стереть ввод: вопросы бота, /add и ответы автора; keep: что оставить (итоговая карточка, файл)."""
         keep = keep or set()
         for message_id in dialog.bot_messages + ([dialog.card_id] if dialog.card_id else []) + dialog.user_messages:
             if message_id in keep:
@@ -726,7 +726,7 @@ class MaterialsBot:
 
 
 def configure_profile(tg: TelegramApi) -> str:
-    """Имя, описание и меню команд бота — их видно в профиле и в пустом чате до /start."""
+    """Имя, описание и меню команд бота: их видно в профиле и в пустом чате до /start."""
     me = tg.call("getMe") or {}
     for method, params in (
         ("setMyDescription", {"description": DESCRIPTION}),
@@ -764,7 +764,7 @@ def run(*, core_api_url: str | None = None, token: str | None = None, worker_id:
 
     if not config.TG_MATERIALS_BOT_TOKEN or not config.TG_MATERIALS_CHAT_IDS:
         # Не падаем: иначе restart-петля, и выкат NL встал бы на этом контейнере. Бот молчит,
-        # но отмечается в ядре — check-lanes и worker-versions покажут, что он жив и чей сборки.
+        # но отмечается в ядре: check-lanes и worker-versions покажут, что он жив и чей сборки.
         logger.error("tg_materials_bot_disabled: задайте TG_MATERIALS_BOT_TOKEN и TG_MATERIALS_CHAT_IDS")
         while not stop["flag"]:
             hello()

@@ -1,4 +1,4 @@
-"""Скрипты выката (сессия C, п. 5): порядок шагов и отказы — настоящим sh.
+"""Скрипты выката (сессия C, п. 5): порядок шагов и отказы: настоящим sh.
 
 docker, git и sleep подменены заглушками в PATH: каждая пишет, чем её позвали, и отвечает
 так, как ответил бы сервер. Так проверяется весь ход выката, а не только синтаксис.
@@ -84,7 +84,7 @@ def test_core_deploy_runs_steps_in_safe_order(tmp_path):
     order = [
         "git fetch", "git reset --hard --quiet origin/main", "docker compose build app scheduler",
         "cli live-ai-leases", "docker compose up -d --no-deps app scheduler", "cli check-lanes",
-        "git update-ref refs/deploy/core HEAD",  # база для следующего выката — только в конце
+        "git update-ref refs/deploy/core HEAD",  # база для следующего выката: только в конце
     ]
     positions = [_index(calls, step) for step in order]
     assert positions == sorted(positions), calls
@@ -94,7 +94,7 @@ def test_core_deploy_runs_steps_in_safe_order(tmp_path):
 
 
 def test_core_deploy_refuses_to_guess_when_schema_changed(tmp_path):
-    """init-db на живой базе — одна транзакция с бэкфиллами и эксклюзивными замками на
+    """init-db на живой базе: одна транзакция с бэкфиллами и эксклюзивными замками на
     articles и background_jobs. Молча его не гоняем и молча не пропускаем."""
     repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
 
@@ -106,7 +106,7 @@ def test_core_deploy_refuses_to_guess_when_schema_changed(tmp_path):
 
 
 def test_core_deploy_first_run_needs_explicit_schema_choice(tmp_path):
-    """Первый выкат скриптом: что уже на базе, неизвестно — угадывать нельзя."""
+    """Первый выкат скриптом: что уже на базе, неизвестно: угадывать нельзя."""
     repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
 
     refused, calls = _run(tmp_path, repo, "deploy-core.sh", "app", FAKE_BASE="")
@@ -183,7 +183,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 def test_core_deploy_schema_check_survives_retry_and_manual_reset(tmp_path):
-    """Повторное ревью 23.09: база сравнения схемы была HEAD до reset — второй запуск той же
+    """Повторное ревью 23.09: база сравнения схемы была HEAD до reset: второй запуск той же
     командой после отказа (и ручной reset перед скриптом, как в инструкции первого выката)
     видел «без изменений» и выкатывал новый код на старую схему. Здесь настоящий git:
     bare-origin, серверный клон, смена schema.sql между выкатами."""
@@ -202,7 +202,7 @@ def test_core_deploy_schema_check_survives_retry_and_manual_reset(tmp_path):
     (server / ".env").write_text("")
     stubs = tmp_path / "bin"
     stubs.mkdir()
-    for name, body in (("docker", DOCKER), ("sleep", SLEEP)):  # git — настоящий
+    for name, body in (("docker", DOCKER), ("sleep", SLEEP)):  # git: настоящий
         (stubs / name).write_text(body)
         (stubs / name).chmod(0o755)
 
@@ -219,17 +219,17 @@ def test_core_deploy_schema_check_survives_retry_and_manual_reset(tmp_path):
     _git(work, "commit", "-am", "v2")
     _git(work, "push", "origin", "HEAD:main")
 
-    refused, retried = deploy(), deploy()  # отказ — и та же команда ещё раз
+    refused, retried = deploy(), deploy()  # отказ: и та же команда ещё раз
     assert refused.returncode != 0 and retried.returncode != 0
     assert "schema.sql изменился" in retried.stdout
     _git(server, "reset", "--hard", "origin/main")  # ручной reset перед скриптом
     assert deploy().returncode != 0
-    assert deploy("--no-schema").returncode == 0  # таблицы созданы вручную — выбор явный
+    assert deploy("--no-schema").returncode == 0  # таблицы созданы вручную: выбор явный
     assert deploy().returncode == 0  # теперь схема та же, что у последнего выката
 
 
 def test_core_guard_covers_every_ai_lane():
-    """Выкат не рвёт ИИ ни в одной полосе; новая полоса защищена по умолчанию. Без ИИ — сбор и
+    """Выкат не рвёт ИИ ни в одной полосе; новая полоса защищена по умолчанию. Без ИИ: сбор и
     отправка кода допуска (#113): секунды, повторить дёшево."""
     assert lanes.AI_LANES == set(lanes.EXTERNAL_LANES) - {lanes.FETCH, lanes.BROWSER, lanes.NOTIFY}
     assert {lanes.AI_LIVE, lanes.AI_BULK} <= lanes.AI_LANES
@@ -238,7 +238,7 @@ def test_core_guard_covers_every_ai_lane():
 # --- NL ------------------------------------------------------------------------------------
 
 
-# Список — из compose, а не копией: при слиянии в агентный репозиторий пятый воркер
+# Список, из compose, а не копией: при слиянии в агентный репозиторий пятый воркер
 # (nl-agents-1) пришёл в compose, а скрипт по умолчанию выкатывал бы четыре (ревью 27.09).
 NL_SERVICES = list(yaml.safe_load((ROOT / "docker-compose.external-worker.yml").read_text())["services"])
 
@@ -246,7 +246,7 @@ NL_SERVICES = list(yaml.safe_load((ROOT / "docker-compose.external-worker.yml").
 def test_nl_deploy_script_lists_exactly_the_compose_workers():
     """В обе стороны: лишний воркер в скрипте, которого нет в compose, прежний тест пропускал
     (строку сборки он искал подстрокой). Порядок сравниваем тоже: сборке он безразличен (у всех
-    один build), но это порядок перезапуска по одному — тест ниже проверяет его по compose."""
+    один build), но это порядок перезапуска по одному: тест ниже проверяет его по compose."""
     script = (ROOT / "scripts" / "deploy-nl.sh").read_text()
     declared = re.findall(r'^ALL_SERVICES="([^"]*)"$', script, re.M)
 
@@ -266,14 +266,14 @@ def test_nl_deploy_restarts_workers_one_by_one_after_checkin(tmp_path):
     for service in NL_SERVICES:
         up = _index(calls, f"up -d --no-deps {service}")
         checkin = _index(calls, f"exec -T {service} python -m oiltech_digest.cli worker-versions --self --expect-build abc1234")
-        assert previous < up < checkin  # следующий — только после отметки предыдущего
+        assert previous < up < checkin  # следующий: только после отметки предыдущего
         previous = checkin
     assert "worker-versions" in calls[-1] and "--self" not in calls[-1]
 
 
 def test_nl_deploy_does_not_wait_two_minutes_for_old_worker_that_ignores_sigterm(tmp_path):
     """Старый воркер (python под PID 1 без обработчика) SIGTERM игнорирует: 120 с ожидания
-    ничего не дали бы — тот же SIGKILL. Новый получает весь срок, чтобы вернуть задачи."""
+    ничего не дали бы: тот же SIGKILL. Новый получает весь срок, чтобы вернуть задачи."""
     repo = _repo(tmp_path, "deploy-nl.sh", env_files=(".env.external-worker",))
 
     _, old_calls = _run(tmp_path, repo, "deploy-nl.sh", "external-worker", FAKE_OLD="1")

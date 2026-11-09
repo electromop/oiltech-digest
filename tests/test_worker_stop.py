@@ -3,7 +3,7 @@
 До правки обработчика SIGTERM не было: пересборка NL обрывала задачи в работе, они
 висели до конца аренды (600 с), а оплаченная часть ИИ-пакета выбрасывалась и
 оплачивалась заново. Теперь задачам даётся срок закончить, остальные возвращаются
-ядру сразу (release) — с тем, что успели сделать.
+ядру сразу (release): с тем, что успели сделать.
 
 Каждый тест падает на коде до правки."""
 
@@ -88,7 +88,7 @@ def _job(job_id=7, kind="process_articles"):
 
 
 def _stepping_handler(steps: list, *, step_seconds=0.02, total=200):
-    """Обработчик по договору циклов ИИ: heartbeat перед каждой статьёй, на остановке —
+    """Обработчик по договору циклов ИИ: heartbeat перед каждой статьёй, на остановке:
     сделанное с пометкой partial."""
 
     def handler(payload, heartbeat=None):
@@ -157,16 +157,16 @@ def test_after_grace_batch_stops_at_next_step_and_hands_back_done_part(monkeypat
     assert client.kinds() == ["release"]
     released = client.calls[0][2]
     assert released["partial"] is True
-    assert [item["article_id"] for item in released["articles"]] == steps  # всё сделанное — ядру
+    assert [item["article_id"] for item in released["articles"]] == steps  # всё сделанное: ядру
 
 
 def test_handler_that_ignores_stop_still_returns_job_without_result(monkeypatch):
-    """Сбор и документ частичный итог не отдают: остановка обрывает их, задача — в очередь целиком."""
+    """Сбор и документ частичный итог не отдают: остановка обрывает их, задача: в очередь целиком."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.0)
 
     def fetch_handler(payload, heartbeat=None):
         for _ in range(100):
-            heartbeat()  # как в сборе: без try — остановка уходит наружу
+            heartbeat()  # как в сборе: без try: остановка уходит наружу
             time.sleep(0.01)
         return {"articles": []}
 
@@ -180,7 +180,7 @@ def test_handler_that_ignores_stop_still_returns_job_without_result(monkeypatch)
 
 
 def test_supervisor_returns_job_whose_step_never_ends(monkeypatch):
-    """Шаг висит в вызове модели и до границы не доходит — процесс возвращает задачу сам,
+    """Шаг висит в вызове модели и до границы не доходит: процесс возвращает задачу сам,
     иначе она ждала бы конца аренды, а Docker убил бы процесс по stop_grace_period."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.05)
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.1)
@@ -203,8 +203,8 @@ def test_supervisor_returns_job_whose_step_never_ends(monkeypatch):
 
 
 def test_supervisor_hands_back_what_was_done_before_the_hung_step(monkeypatch):
-    """Ревью 23.09: шаг ИИ-пакета — целая статья, до пяти вызовов модели. Завис он дольше
-    срока — раньше главный поток возвращал задачу пустой, и 19 из 50 оплаченных статей
+    """Ревью 23.09: шаг ИИ-пакета: целая статья, до пяти вызовов модели. Завис он дольше
+    срока: раньше главный поток возвращал задачу пустой, и 19 из 50 оплаченных статей
     оплачивались второй раз. Теперь уходит снимок сделанного на последней границе шага."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.05)
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.1)
@@ -216,7 +216,7 @@ def test_supervisor_hands_back_what_was_done_before_the_hung_step(monkeypatch):
         for index in range(3):
             heartbeat(result)
             result["articles"].append({"article_id": index})
-        heartbeat(result)  # граница четвёртой статьи, дальше — вызов модели, который висит
+        heartbeat(result)  # граница четвёртой статьи, дальше: вызов модели, который висит
         in_step.set()
         unblock.wait(5)
         result["articles"].append({"article_id": 3})
@@ -242,7 +242,7 @@ def test_supervisor_hands_back_what_was_done_before_the_hung_step(monkeypatch):
 
 
 def test_ready_result_is_not_handed_back_empty_while_progress_is_sent(monkeypatch):
-    """Ревью 23.09: progress(90) шёл, пока задача числилась «в работе», — главный поток мог
+    """Ревью 23.09: progress(90) шёл, пока задача числилась «в работе»,: главный поток мог
     вернуть её пустой, и готовый полный итог выбрасывался."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.0)
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.05)
@@ -317,7 +317,7 @@ def test_sigterm_reaches_worker_loop_and_restores_previous_handler(monkeypatch):
 
 
 def test_compose_gives_workers_time_to_hand_jobs_back():
-    """stop_grace_period — под срок остановки: иначе Docker убьёт процесс до release,
+    """stop_grace_period, под срок остановки: иначе Docker убьёт процесс до release,
     и задача снова будет ждать конца аренды."""
     compose = Path(__file__).resolve().parents[1] / "docker-compose.external-worker.yml"
     services = yaml.safe_load(compose.read_text())["services"]
@@ -380,7 +380,7 @@ def _claim(core: TestClient) -> dict:
     # Повтор до 2 с: часы ВМ colima спешат и раз в минуту подводятся назад (~200 мс), и
     # только что поставленная задача на этот миг «из будущего» (run_after > now() базы).
     # Поймано 23.09: 2 прогона из 25, оба ровно через 60 с друг от друга. Продукт это не
-    # задевает — на проде часы подтягиваются плавно, худшее — задача готова на миг позже.
+    # задевает: на проде часы подтягиваются плавно, худшее: задача готова на миг позже.
     deadline = time.monotonic() + 2.0
     while True:
         response = core.post("/api/external-worker/claim", headers=AUTH,
@@ -432,7 +432,7 @@ def test_release_puts_job_back_at_once_without_spending_attempt(isolated_db, mon
     with connection.get_connection() as conn:  # часы базы, а не Mac: выдача сверяет run_after с now() базы
         ready = conn.execute("SELECT run_after <= now() + interval '1 second' FROM background_jobs WHERE id = %s",
                              (int(created["id"]),)).fetchone()[0]
-    assert ready  # в очереди сразу, а не через 600 с (секунда — на подводку часов ВМ, см. _claim)
+    assert ready  # в очереди сразу, а не через 600 с (секунда: на подводку часов ВМ, см. _claim)
     assert "reserved_article_ids" not in stored["payload_json"]  # статьи не держатся за ушедшим
 
 
@@ -545,7 +545,7 @@ def _fail(core: TestClient, job: dict, result=None):
 def test_stalled_job_writes_done_part_and_spends_its_attempt(isolated_db, monkeypatch):
     """Хвост сессии C: зависший пакет приходит через fail со снимком. Сделанное пишется и
     вычитается, как при release, но попытка списывается: задача, которая виснет сама (вечный
-    вызов, регулярка по тексту статьи), иначе крутилась бы без конца — класс 24.07 (задача 1181)."""
+    вызов, регулярка по тексту статьи), иначе крутилась бы без конца: класс 24.07 (задача 1181)."""
     ids = _seed(3)
     calls: list = []
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI(calls))
@@ -604,7 +604,7 @@ def test_stalled_job_out_of_attempts_fails_but_keeps_done_part(isolated_db, monk
 
 
 def test_stalled_dry_run_goes_back_whole(isolated_db, monkeypatch):
-    """Пробный прогон по частям не складывается (как и при release) — обычный fail целиком."""
+    """Пробный прогон по частям не складывается (как и при release): обычный fail целиком."""
     ids = _seed(3)
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
     created, pairs = _reprint_dry_run(monkeypatch, ids)

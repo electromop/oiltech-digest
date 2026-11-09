@@ -86,10 +86,10 @@ def test_extract_og_image_falls_back_to_twitter_and_handles_missing():
 
 
 # --- Защита от подмены текста статьи (задача №24) ---------------------------------
-# Дефект 28.07: у 10.4% видимой ленты (у Neftegaz.ru — 37.7%) тело было от ДРУГОЙ
+# Дефект 28.07: у 10.4% видимой ленты (у Neftegaz.ru: 37.7%) тело было от ДРУГОЙ
 # новости. Принадлежность не проверялась вообще: `_is_better_text` смотрел только
 # на длину, поэтому листинг/пейвол/«избранный» материал из JSON-LD побеждали статью
-# и записывались со статусом ok — то есть порча помечалась успехом.
+# и записывались со статусом ok: то есть порча помечалась успехом.
 
 FOREIGN_BODY_HTML = b"""
 <html><body><article>
@@ -117,7 +117,7 @@ def _article(**over):
 
 def test_fetch_article_text_rejects_body_that_does_not_match_title(monkeypatch):
     """Реальный кейс владельца 28.07: заголовок про суд над TotalEnergies,
-    а тело — про цифровую модель клапана Пермского Политеха."""
+    а тело: про цифровую модель клапана Пермского Политеха."""
     monkeypatch.setattr(article_fetcher, "fetch", lambda url: FOREIGN_BODY_HTML)
     monkeypatch.setattr(article_fetcher.repository, "body_hash_belongs_to_other_article",
                         lambda *a, **k: False)
@@ -131,7 +131,7 @@ def test_fetch_article_text_rejects_body_that_does_not_match_title(monkeypatch):
 
 
 def test_fetch_article_text_accepts_body_matching_title(monkeypatch):
-    """Контроль: страж не должен резать здоровые статьи — цена ложного отказа выше."""
+    """Контроль: страж не должен резать здоровые статьи: цена ложного отказа выше."""
     monkeypatch.setattr(article_fetcher, "fetch", lambda url: FOREIGN_BODY_HTML)
     monkeypatch.setattr(article_fetcher.repository, "body_hash_belongs_to_other_article",
                         lambda *a, **k: False)
@@ -165,7 +165,7 @@ def test_fetch_article_text_rejects_body_already_stored_for_another_article(monk
 
 
 def test_short_title_is_not_judged(monkeypatch):
-    """«SOCAR» или «May 2026» — заголовков в 1-2 слова не хватает для суждения,
+    """«SOCAR» или «May 2026»: заголовков в 1-2 слова не хватает для суждения,
     и страж обязан пропускать их, а не резать вслепую."""
     monkeypatch.setattr(article_fetcher, "fetch", lambda url: FOREIGN_BODY_HTML)
     monkeypatch.setattr(article_fetcher.repository, "body_hash_belongs_to_other_article",
@@ -224,7 +224,7 @@ def test_fetch_article_text_reports_no_gain_when_stored_text_is_fine(monkeypatch
 
 
 def test_fetch_article_text_reports_too_short_for_thin_page(monkeypatch):
-    """Страница действительно куцая — здесь too_short по-прежнему уместен."""
+    """Страница действительно куцая: здесь too_short по-прежнему уместен."""
     _stub_fetch(monkeypatch, THIN_HTML)
     article = {"id": 2, "url": "https://example.com/b", "title": "Thin", "raw_text": ""}
 
@@ -264,7 +264,7 @@ PINNED_TITLE = "СибБурМаш представил новую модифи�
 
 
 def _feed_block(title: str, lead: str, body: str) -> str:
-    # Как у Neftegaz.ru: лид — внутри того же <h1>, тело — голый текст на <br>, в теле
+    # Как у Neftegaz.ru: лид: внутри того же <h1>, тело: голый текст на <br>, в теле
     # врезка-список; у каждой статьи ленты свой блок со своим <h1>.
     return f"""
     <div class="content_article margin_bottom_40">
@@ -341,7 +341,7 @@ def test_json_ld_of_other_articles_only_is_not_trusted():
 
 
 def test_title_with_a_typo_still_finds_its_block_when_it_clearly_leads():
-    # RSS: «прибило», страница: «прибыло» — совпадение 0,83 при пороге 0,85.
+    # RSS: «прибило», страница: «прибыло»: совпадение 0,83 при пороге 0,85.
     typo_title = "На Чукотку прибило третье судно с углем"  # как в RSS 14.09, дословно
     page = f"""<html><body><div class="wrap-white">
       {_feed_block("На Чукотку прибыло третье судно с углем", "Разгрузка идёт.",
@@ -357,7 +357,7 @@ def test_title_with_a_typo_still_finds_its_block_when_it_clearly_leads():
 
 # --- Статья внутри <form> без полей ввода (SWPU, 25.09) ------------------------------
 # CMS VSB (её ставят китайские университеты) оборачивает новость в
-# <form name="_newscontent_fromname"> — ни одного поля ввода, просто обёртка. Чистка
+# <form name="_newscontent_fromname">: ни одного поля ввода, просто обёртка. Чистка
 # выбрасывала ЛЮБУЮ <form> как поиск или подписку, и статья уходила вместе с ней: у SWPU
 # с каждой страницы извлекалось меню сайта (549 знаков), рубеж «то же тело» пропустил
 # первую такую «статью» и дальше молча отбивал все новые.
@@ -392,7 +392,7 @@ def test_article_wrapped_in_a_form_without_inputs_is_kept():
 
 
 def test_form_with_input_fields_is_still_dropped():
-    # Поиск, подписка, комментарии — подписи и подсказки формы не текст статьи.
+    # Поиск, подписка, комментарии: подписи и подсказки формы не текст статьи.
     text = article_fetcher.extract_main_text(VSB_NEWS_HTML)
 
     assert "Search the site for news" not in text

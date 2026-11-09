@@ -1,4 +1,4 @@
-// Чистые расчёты экрана «Статистика»: база сравнения, дельты, форматы. Без React —
+// Чистые расчёты экрана «Статистика»: база сравнения, дельты, форматы. Без React:
 // чтобы правило «с чем сравниваем» проверялось тестом, а не глазами.
 import type { AnalyticsCounters, AnalyticsMonth, MonthlyAnalytics } from "../../api/types";
 
@@ -30,7 +30,7 @@ export function monthGenitive(month: string): string {
   return MONTHS_GENITIVE[Number(month.split("-")[1]) - 1];
 }
 
-// Месяцы до первого сбора платформы — не «ноль работы», а «платформы ещё не было».
+// Месяцы до первого сбора платформы: не «ноль работы», а «платформы ещё не было».
 export function trimLeadingEmpty(months: AnalyticsMonth[]): AnalyticsMonth[] {
   const first = months.findIndex((row) => row.collected > 0);
   return first <= 0 ? months : months.slice(first);
@@ -38,7 +38,7 @@ export function trimLeadingEmpty(months: AnalyticsMonth[]): AnalyticsMonth[] {
 
 export type Base = { row: AnalyticsCounters; label: string };
 
-/** С чем сравнивать выбранный месяц. Незаконченный — с теми же днями прошлого:
+/** С чем сравнивать выбранный месяц. Незаконченный, с теми же днями прошлого:
  *  «сентябрь по 19-е» против полного августа проигрывал бы всегда. */
 export function comparisonBase(data: MonthlyAnalytics, month: string): Base | null {
   const index = data.months.findIndex((row) => row.month === month);
@@ -54,7 +54,7 @@ export function comparisonBase(data: MonthlyAnalytics, month: string): Base | nu
 
 export type Delta = { text: string; tone: "good" | "bad" | "flat" | "neutral"; arrow: "▲" | "▼" | "—" };
 
-/** upIsGood: null — рост ни хорош, ни плох (объём сбора), только направление. */
+/** upIsGood: null: рост ни хорош, ни плох (объём сбора), только направление. */
 export function delta(current: number | null, base: number | null, upIsGood: boolean | null): Delta | null {
   if (current == null || base == null) return null;
   if (base === 0) return current === 0 ? { text: "без изменений", tone: "flat", arrow: "—" } : null;

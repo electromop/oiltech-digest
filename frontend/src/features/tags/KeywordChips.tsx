@@ -28,7 +28,7 @@ export function mergeKeywords(current: string[], raw: string): string[] {
   return next;
 }
 
-// Ключевые слова и стоп-слова — чипсами с крестиком (документ заказчика 19.09), а не
+// Ключевые слова и стоп-слова: чипсами с крестиком (документ заказчика 19.09), а не
 // строкой текста. Ввод по-прежнему принимает и столбик, и запятые: 13.09 заказчик
 // просил вводить ключи строчками, а вставку списка из таблицы ломать нельзя.
 export function KeywordChips({ label, values, onChange, placeholder, tone = "default" }: Props) {
@@ -63,7 +63,7 @@ export function KeywordChips({ label, values, onChange, placeholder, tone = "def
       </label>
       <div className={styles.chipsBox}>
         {words.map((word, index) => (
-          // Ключ и удаление — по позиции: в сохранённых списках бывают точные повторы.
+          // Ключ и удаление, по позиции: в сохранённых списках бывают точные повторы.
           <span key={`${index}-${word}`} className={tone === "stop" ? `${styles.chip} ${styles.chipStop}` : styles.chip}>
             {word}
             <button

@@ -14,7 +14,7 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
     now = datetime.now(timezone.utc)
 
     with connection.get_connection() as conn:
-        # Пер-юзерное состояние (#12) ссылается на users(id) по внешнему ключу — нужен
+        # Пер-юзерное состояние (#12) ссылается на users(id) по внешнему ключу: нужен
         # настоящий пользователь, а не выдуманный id из dependency_overrides.
         user_id = conn.execute(
             """
@@ -60,7 +60,7 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
             """,
             (article_id,),
         )
-        # Статус статьи — общая отметка (#111): /api/articles фильтрует по article_marks, а не
+        # Статус статьи, общая отметка (#111): /api/articles фильтрует по article_marks, а не
         # по article_cards.status. Без строки отметки статус читается как 'new'.
         conn.execute(
             """
@@ -154,7 +154,7 @@ def test_min_score_filters_scored_noise_but_keeps_unscored_visible(isolated_db):
     статьи (нет строки в article_scores → total_score NULL → COALESCE 0) отсекались
     порогом вместе с настоящим шумом. Свежий приток становился невидим до прохода
     ИИ, и лента выглядела замороженной («обработка сломалась»).
-    Решение заказчика «скрывать <50» касается оценённого шума — оно сохраняется.
+    Решение заказчика «скрывать <50» касается оценённого шума: оно сохраняется.
     """
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
@@ -201,7 +201,7 @@ def test_min_score_filters_scored_noise_but_keeps_unscored_visible(isolated_db):
         ).json()
         ids = [row["id"] for row in payload]
 
-        # Оценённый шум (30 < 50) отсекается — решение «скрыть <50» работает.
+        # Оценённый шум (30 < 50) отсекается: решение «скрыть <50» работает.
         assert noise_id not in ids
         # Ценный сигнал виден.
         assert high_id in ids
@@ -223,7 +223,7 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
     """Пер-статусные счётчики считаются по ВСЕЙ базе и по правилам видимости ленты.
 
     Раньше плитки «Новые/На проверке/Шум/Дубликаты» считались на клиенте по массиву
-    загруженных статей (топ-2000, суженный активным фильтром) — цифры занижали и
+    загруженных статей (топ-2000, суженный активным фильтром): цифры занижали и
     «плавали», расходясь с плитками «Всего»/«Обработано», которые всегда были по базе.
     """
     app = api.app
@@ -275,7 +275,7 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
         add_article("dup2", status="duplicate")
         add_article("arch1", status="archive")
         add_article("dig1", status="digest")
-        # Невидимые в ленте — не должны попадать в счётчики.
+        # Невидимые в ленте: не должны попадать в счётчики.
         add_article("rejected", status="new", relevant=False)
         add_article("marked", status="new", pending_deletion=True)
 
@@ -352,10 +352,10 @@ def test_noise_marked_by_one_account_hides_the_article_from_the_other(isolated_d
 def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db):
     """Статус валидируется на границе API (422), мусор в БД не попадает.
 
-    Колонки статуса — свободный TEXT без CHECK. Раньше ArticlePatch.status был
+    Колонки статуса: свободный TEXT без CHECK. Раньше ArticlePatch.status был
     просто str, поэтому любая опечатка/неизвестное значение молча записывалось в
     отметку статьи, и статья исчезала из всех вкладок (они перечисляют
-    известный набор статусов) — тихая потеря сигнала.
+    известный набор статусов): тихая потеря сигнала.
     """
     app = api.app
     now = datetime.now(timezone.utc)
@@ -628,7 +628,7 @@ def test_archived_source_disappears_from_feed_and_digest(isolated_db):
     """Требование заказчика 12.09: архивный источник уносит с собой свои статьи.
 
     Именно этого НЕ делало `enabled = FALSE`: сбор прекращался, а накопленные статьи
-    продолжали висеть в ленте у всех — 08.09 заказчик прислал пять таких источников
+    продолжали висеть в ленте у всех: 08.09 заказчик прислал пять таких источников
     («сайт всё», «тоже шляпа», «канал никто не ведёт») с просьбой их убрать.
     """
     app = api.app
@@ -683,7 +683,7 @@ def test_archived_source_disappears_from_feed_and_digest(isolated_db):
 def test_readding_archived_source_does_not_resurrect_it(isolated_db):
     """`ON CONFLICT ... SET enabled = TRUE` воскрешал бы архивный источник молча.
 
-    Худшее из двух состояний: сбор идёт, а статьи скрыты — источник жжёт ИИ в никуда.
+    Худшее из двух состояний: сбор идёт, а статьи скрыты: источник жжёт ИИ в никуда.
     """
     from oiltech_digest.db import repository
 
@@ -708,7 +708,7 @@ def test_readding_archived_source_does_not_resurrect_it(isolated_db):
 
 
 def test_deleting_scoring_criterion_refuses_to_break_weight_sum(isolated_db):
-    """Мина, найденная 11.09: «Сохранить» сумму весов проверяет, а «Удалить» — нет.
+    """Мина, найденная 11.09: «Сохранить» сумму весов проверяет, а «Удалить»: нет.
 
     Заказчик в тот день просил «убрать старые, не актуальные» критерии. По одному это
     оставляло сумму != 100, и следующая стадия скоринга падала ЦЕЛИКОМ, ещё до первой
@@ -743,7 +743,7 @@ def test_deleting_scoring_criterion_refuses_to_break_weight_sum(isolated_db):
             ).fetchone()[0]
         assert still_enabled is True, "отклонённое удаление не должно ничего менять"
 
-        # Довели оставшийся критерий до 100 — теперь удаление разрешено.
+        # Довели оставшийся критерий до 100: теперь удаление разрешено.
         with connection.get_connection() as conn:
             conn.execute("UPDATE scoring_criteria SET weight = 100 WHERE id = %s", (keep_id,))
             conn.commit()
@@ -775,9 +775,9 @@ def _feedback_fixture(conn, email: str = "fb@example.com"):
 
 
 def test_feedback_saves_scores_and_comment_and_is_editable(isolated_db):
-    """ОС по сигналу: оценки 1–5 + быстрая причина + комментарий, одна карточка на пару.
+    """ОС по сигналу: оценки 1-5 + быстрая причина + комментарий, одна карточка на пару.
 
-    Повторное сохранение ПРАВИТ карточку, а не плодит дубли — иначе обучающая выборка
+    Повторное сохранение ПРАВИТ карточку, а не плодит дубли: иначе обучающая выборка
     перекосится теми статьями, которые человек открывал чаще.
     """
     app = api.app
@@ -814,8 +814,8 @@ def test_feedback_saves_scores_and_comment_and_is_editable(isolated_db):
 
 
 def test_feedback_stays_with_its_author_while_marks_are_shared(isolated_db):
-    """Отметки общие (#111), а оценка ОС статьи — за автором: одна карточка на пару «учётка ×
-    статья», оценку коллеги не видно и не затереть — агент учитывает мнения всех."""
+    """Отметки общие (#111), а оценка ОС статьи, за автором: одна карточка на пару «учётка ×
+    статья», оценку коллеги не видно и не затереть: агент учитывает мнения всех."""
     app = api.app
     with connection.get_connection() as conn:
         author_id, _source_id, article_id = _feedback_fixture(conn, "author@example.com")
@@ -840,7 +840,7 @@ def test_feedback_stays_with_its_author_while_marks_are_shared(isolated_db):
         assert colleague.post("/api/feedback", json={
             "article_id": article_id, "usefulness": 1, "comment": "слабо",
         }).status_code == 200
-        # Отметка автора видна коллеге, оценка — нет.
+        # Отметка автора видна коллеге, оценка: нет.
         assert colleague.get("/api/articles", params={"status": "digest"}).json()[0]["id"] == article_id
 
         mine = as_user(author_id).get("/api/feedback", params={"article_id": article_id}).json()["entry"]
@@ -870,10 +870,10 @@ def test_feedback_rejects_bad_scores_and_empty_target(isolated_db):
 
 
 def test_feedback_wrong_block_saved_for_signal_rejected_for_source(isolated_db):
-    """«Не тот блок — это технологический сигнал» (встреча с заказчиком 21.09, решение 5).
+    """«Не тот блок это технологический сигнал» (встреча с заказчиком 21.09, решение 5).
 
     Маршрута метка не делает: она копится разметкой и доезжает до выгрузки для обучения,
-    как «Не тот блок» в радаре. К источнику её не приложить — у издания блока нет.
+    как «Не тот блок» в радаре. К источнику её не приложить: у издания блока нет.
     """
     app = api.app
     with connection.get_connection() as conn:
@@ -898,7 +898,7 @@ def test_feedback_wrong_block_saved_for_signal_rejected_for_source(isolated_db):
 
 
 def test_feedback_second_click_clears_reason_and_keeps_the_rest(isolated_db):
-    """Повторный клик по чипу снимает причину — и только её.
+    """Повторный клик по чипу снимает причину: и только её.
 
     Фронт на повторный клик шлёт `"reason": null`, а сохранение сливало поля через
     COALESCE: причина оставалась прежней, и ошибочный «Не тот блок» (как и любой чип)
@@ -928,7 +928,7 @@ def test_feedback_second_click_clears_reason_and_keeps_the_rest(isolated_db):
         assert entry["comment"] == "это техника, а не бизнес", "снятие причины не трогает комментарий"
         assert client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]["reason"] is None
 
-        # Не прислано — не трогаем: оценка без ключа reason причину не снимает.
+        # Не прислано, не трогаем: оценка без ключа reason причину не снимает.
         assert client.post("/api/feedback", json={"article_id": article_id, "reason": "good"}).status_code == 200
         kept = client.post("/api/feedback", json={"article_id": article_id, "usefulness": 2}).json()["entry"]
         assert (kept["reason"], kept["usefulness"]) == ("good", 2)
@@ -944,7 +944,7 @@ def test_feedback_empty_comment_clears_it_and_keeps_the_rest(isolated_db):
 
     Фронт при уходе из поля шлёт `"comment": ""`, а сохранение превращало пустую строку в
     None и сливало через COALESCE: после перезагрузки прежний текст возвращался. Явно
-    присланный пустой комментарий теперь стирает его; не присланный — не трогается.
+    присланный пустой комментарий теперь стирает его; не присланный: не трогается.
     """
     app = api.app
     with connection.get_connection() as conn:
@@ -966,7 +966,7 @@ def test_feedback_empty_comment_clears_it_and_keeps_the_rest(isolated_db):
         spaces = client.post("/api/feedback", json={"article_id": article_id, "comment": "   "}).json()["entry"]
         assert spaces["comment"] is None, "одни пробелы — тоже пусто"
 
-        # Не прислано — не трогаем: оценка без ключа comment текст не стирает.
+        # Не прислано, не трогаем: оценка без ключа comment текст не стирает.
         client.post("/api/feedback", json={"article_id": article_id, "comment": "итоговый"})
         kept = client.post("/api/feedback", json={"article_id": article_id, "usefulness": 2}).json()["entry"]
         assert (kept["comment"], kept["usefulness"]) == ("итоговый", 2)
@@ -975,11 +975,11 @@ def test_feedback_empty_comment_clears_it_and_keeps_the_rest(isolated_db):
 
 
 def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
-    """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
+    """Ответ на вопрос заказчика «я всё что выделил как шум: он на этом обучился?».
 
     До 12.09 signal_feedback_events была мёртвой: писала в неё одна CLI-команда, а
     боевой путь пометки не писал вовсе. Теперь каждая пометка оставляет след с
-    ПРЕЖНИМ значением — без него нельзя отличить «пометил шумом» от «передумал».
+    ПРЕЖНИМ значением: без него нельзя отличить «пометил шумом» от «передумал».
     """
     app = api.app
     with connection.get_connection() as conn:
@@ -1005,7 +1005,7 @@ def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
 
 def test_renaming_parent_tag_does_not_silently_orphan_subtags(isolated_db):
     """Тихий дефект: связь родитель-подтег хранилась ИМЕНЕМ, и переименование родителя
-    делало все его подтеги КОРНЕВЫМИ — без ошибки и без предупреждения.
+    делало все его подтеги КОРНЕВЫМИ: без ошибки и без предупреждения.
 
     Заказчик 07.09 сказал, что будет расширять теги («решил их расширить»), так что
     дерево разваливалось бы на первом же редактировании. Сохранение с разорванной
@@ -1048,7 +1048,7 @@ def test_renaming_parent_tag_does_not_silently_orphan_subtags(isolated_db):
             ).fetchone()
         assert still_child == parent_id, "подтег не должен стать корневым после переименования"
 
-        # А вот ссылка на родителя, которого в списке нет вовсе, — это ошибка, а не тишина.
+        # А вот ссылка на родителя, которого в списке нет вовсе, это ошибка, а не тишина.
         orphan = client.put("/api/tags", json=[
             {"name": "Совсем другой", "enabled": True, "sort_order": 1},
             {"name": "Сирота", "parent_name": "Несуществующий", "enabled": True, "sort_order": 2},
@@ -1064,7 +1064,7 @@ def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
 
     С 12.09 их можно править в UI («Теги» → «Ключевые слова RU/EN»), а seed-tags
     запускается сам в bootstrap на каждом деплое. Прежняя перезапись молча стирала бы
-    правки заказчика — и он бы об этом даже не узнал.
+    правки заказчика: и он бы об этом даже не узнал.
     """
     from oiltech_digest.db import repository
 
@@ -1099,13 +1099,13 @@ def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
     """Мина, которая УЖЕ сработала на проде 11.09.
 
     `seed-scoring` запускается в bootstrap на КАЖДОМ деплое и делал
-    `ON CONFLICT (name) DO UPDATE SET enabled = TRUE` — то есть воскрешал критерии,
+    `ON CONFLICT (name) DO UPDATE SET enabled = TRUE`: то есть воскрешал критерии,
     которые заказчик выключил в UI. 11.09 он утром собрал профиль из пяти критериев
     (сумма ровно 100), в 11:40 прошёл деплой, и через две минуты он написал
     «а что случилось со скорингом? там сейчас 9 параметров».
 
     Сумма весов при этом становится 175 вместо 100, и стадия скоринга падает целиком
-    на первой же статье. Вес и флаг — территория человека, сид их не трогает.
+    на первой же статье. Вес и флаг: территория человека, сид их не трогает.
     """
     from oiltech_digest.db import repository
 
@@ -1136,10 +1136,10 @@ def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
 def test_insert_article_dedups_url_variants(isolated_db):
     """Один и тот же материал заводился по нескольку раз: уникальность держалась на СЫРОМ url.
 
-    Замер прода 13.09: за 90 дней 940 лишних статей, причины ровно три —
+    Замер прода 13.09: за 90 дней 940 лишних статей, причины ровно три:
     query-хвосты (?from=main_lines_11 против ?from=newsfeed у РБК), схема (http против
     https у Ростеха) и хвостовой слэш (Wood Mackenzie). Каждая копия жгла полный
-    ИИ-конвейер заново и занимала отдельную карточку — заказчик 08.09 прислал скрин
+    ИИ-конвейер заново и занимала отдельную карточку: заказчик 08.09 прислал скрин
     «все 4 новости об одном».
     """
     from oiltech_digest.db import repository
@@ -1170,12 +1170,12 @@ def test_insert_article_dedups_url_variants(isolated_db):
     assert add("https://www.rbc.example/news/123?from=newsfeed") is False, "query-хвост"
     assert add("http://rbc.example/news/123") is False, "другая схема и без www"
     assert add("https://www.rbc.example/news/123/") is False, "хвостовой слэш"
-    # Другая статья того же источника обязана пройти — со СВОИМ телом: одинаковый
+    # Другая статья того же источника обязана пройти, со СВОИМ телом: одинаковый
     # текст у разных адресов одного источника отбивает отдельная защита ниже.
     assert add("https://www.rbc.example/news/999", "Совсем другой текст. " * 30) is True
 
     # Третий рубеж: тело уже есть у другой статьи этого источника. Так на проде
-    # набралось 830 «статей» — страницы навигации сайта, на которые сервер отдаёт
+    # набралось 830 «статей»: страницы навигации сайта, на которые сервер отдаёт
     # одну и ту же оболочку (у Новатэка 82 из 86).
     assert add("https://www.rbc.example/about/contacts", "Совсем другой текст. " * 30) is False, "повтор тела"
 
@@ -1187,7 +1187,7 @@ def test_insert_article_dedups_url_variants(isolated_db):
 
 
 def test_saving_tags_survives_null_keyword_lists(isolated_db):
-    """Скрин заказчика 13.09: сохранение экрана «Теги» падало 422 на девяти строках подряд —
+    """Скрин заказчика 13.09: сохранение экрана «Теги» падало 422 на девяти строках подряд:
     «Input should be a valid list», input: null.
 
     Причина: `negative_keywords_json` равен NULL у ВСЕХ тегов в БД, `list_enabled_tags`
@@ -1221,7 +1221,7 @@ def test_saving_tags_survives_null_keyword_lists(isolated_db):
             ).fetchone()
         assert kw == [] and neg == [], "null должен превращаться в пустой список, а не падать"
 
-        # Критерии скоринга страдали тем же — проверяем и их.
+        # Критерии скоринга страдали тем же: проверяем и их.
         assert client.put("/api/scoring-criteria", json=[{
             "id": None, "name": "Единственный", "description": None, "weight": 100,
             "keywords_json": None, "keywords_en_json": None, "enabled": True, "sort_order": 1,
@@ -1231,7 +1231,7 @@ def test_saving_tags_survives_null_keyword_lists(isolated_db):
 
 
 def test_seed_13_themes_replaces_old_taxonomy(isolated_db):
-    """13.09: заказчик прислал список из 13 тематик — оставить только их.
+    """13.09: заказчик прислал список из 13 тематик: оставить только их.
 
     Прежние теги ВЫКЛЮЧАЮТСЯ, а не удаляются: на них ссылается article_tags со всей
     историей классификации корпуса.
@@ -1247,7 +1247,7 @@ def test_seed_13_themes_replaces_old_taxonomy(isolated_db):
 
     stats = seed_tags_13()
     assert stats["tags"] == 14, "13 тематик заказчика плюс приёмник для неклассифицированного"
-    # Выключение прежней таксономии — ОТДЕЛЬНАЯ команда: сид идёт на каждом деплое и не
+    # Выключение прежней таксономии, ОТДЕЛЬНАЯ команда: сид идёт на каждом деплое и не
     # имеет права отменять правки заказчика (см. test_seed_does_not_disable_tags_renamed…).
     assert stats["disabled"] == 0
     assert retire_old_tags()["disabled"] >= 1, "разовая миграция обязана выключить прежние"
@@ -1299,7 +1299,7 @@ def test_seed_does_not_disable_tags_renamed_by_customer(isolated_db):
         alive, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег эксперта'").fetchone()
     assert alive is True, "сид погасил тег, которого нет в его файле"
 
-    # Смена таксономии — отдельная осознанная команда.
+    # Смена таксономии: отдельная осознанная команда.
     assert retire_old_tags()["disabled"] >= 1
     with connection.get_connection() as conn:
         retired, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег эксперта'").fetchone()
@@ -1310,7 +1310,7 @@ def test_saving_incomplete_tag_list_is_refused(isolated_db):
     """Страховка от потери таксономии одним нажатием «Сохранить».
 
     Сохранение выключает всё, чего нет в присланном списке. 13.09 проверочный запрос
-    с ОДНИМ тегом выключил разом все 14 — неполный список (обрыв загрузки, частичный
+    с ОДНИМ тегом выключил разом все 14: неполный список (обрыв загрузки, частичный
     рендер) стирал бы справочник молча. Порог мягкий: сокращение набора законно
     (мы сами ужали 18 направлений до 13), запрещаем только обвал больше чем наполовину.
     """
@@ -1330,7 +1330,7 @@ def test_saving_incomplete_tag_list_is_refused(isolated_db):
     app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "g@e.ru", "role": "admin"}
     try:
         client = TestClient(app)
-        # Прислали один тег вместо шести — это выключило бы пять из шести.
+        # Прислали один тег вместо шести это выключило бы пять из шести.
         response = client.put("/api/tags", json=[
             {"id": None, "parent_name": None, "name": "Тема 1", "name_en": None,
              "description": None, "keywords_json": None, "keywords_en_json": None,
@@ -1359,7 +1359,7 @@ def test_system_tag_survives_save_and_delete(isolated_db):
     """Тег-приёмник «Не классифицировано» нельзя выключить обычной работой с экраном.
 
     13.09 он выключился молча: сохранение прислало 13 тематик, его среди них не было,
-    и страховка «больше половины» не сработала — один тег из четырнадцати. Итог:
+    и страховка «больше половины» не сработала: один тег из четырнадцати. Итог:
     pipeline._fallback_tag не находил приёмник и уводил весь непонятый поток в первый
     тег списка, то есть в «Геологоразведку». Это ровно тот дефект, ради которого
     приёмник и заводили.
@@ -1386,7 +1386,7 @@ def test_system_tag_survives_save_and_delete(isolated_db):
     app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "s@e.ru", "role": "admin"}
     try:
         client = TestClient(app)
-        # Экран прислал только тематики — приёмника в списке нет.
+        # Экран прислал только тематики: приёмника в списке нет.
         response = client.put("/api/tags", json=[
             {"id": None, "parent_name": None, "name": f"Тема {i}", "name_en": None,
              "description": None, "keywords_json": None, "keywords_en_json": None,
@@ -1401,7 +1401,7 @@ def test_system_tag_survives_save_and_delete(isolated_db):
             ).fetchone()[0]
         assert still_on is True, "приёмник обязан пережить сохранение без него в списке"
 
-        # И удалить его руками тоже нельзя — это не тематика.
+        # И удалить его руками тоже нельзя это не тематика.
         deleted = client.delete(f"/api/tags/{system_id}")
         assert deleted.status_code == 400, deleted.text
         assert "служебный приёмник" in deleted.json()["detail"]
@@ -1417,7 +1417,7 @@ def test_full_text_refetch_skips_external_sources(isolated_db):
     """Источники зарубежного контура пропускаются локальной дозагрузкой.
 
     Попытка одна и навсегда: 403 с РФ-адреса пометил бы статью failed, и она больше
-    никогда не переспрашивалась бы — даже когда тело уже добрал зарубежный воркер.
+    никогда не переспрашивалась бы: даже когда тело уже добрал зарубежный воркер.
     """
     from oiltech_digest.db import repository
 
@@ -1445,7 +1445,7 @@ def test_full_text_refetch_skips_external_sources(isolated_db):
 
 
 def test_external_refetch_candidates_only_external_stubs(isolated_db):
-    """Кандидаты на дозаполнение — только обрывки внешних источников.
+    """Кандидаты на дозаполнение: только обрывки внешних источников.
 
     Локальные берёт обычная дозагрузка; полные статьи трогать незачем.
     Уже помеченные failed берём: пометка ставилась локальной попыткой и отражает
@@ -1484,7 +1484,7 @@ def test_external_refetch_candidates_only_external_stubs(isolated_db):
 def test_feed_and_digest_skip_reprints(isolated_db):
     """Пометка перепечатки должна что-то значить: копия уходит из ленты и из выпуска.
 
-    Без этого условия таблица была бы мёртвой записью — заполняется, а заказчик
+    Без этого условия таблица была бы мёртвой записью: заполняется, а заказчик
     по-прежнему видит четыре карточки одной новости, ровно как 08.09.
     """
     with connection.get_connection() as conn:
@@ -1536,7 +1536,7 @@ def test_reprint_rejected_when_primary_is_invisible(isolated_db):
     """Главной копией не может стать статья, которой в ленте нет.
 
     Замер на проде 17.09 (71 пара, признанная судьёй дублем): в 6 парах главной
-    становилась невидимая статья — архивный источник или отбитая гейтом. Пометка
+    становилась невидимая статья: архивный источник или отбитая гейтом. Пометка
     тогда не схлопывает дубль, а убирает новость из ленты целиком: видимую копию
     прячем, а взамен не показывается ничего. Это ровно та жалоба заказчика
     («материалы исчезают»), ради которой перепечатки вообще помечаются, а не
@@ -1580,7 +1580,7 @@ def test_reprint_rejected_when_primary_is_invisible(isolated_db):
 def test_reprint_candidates_skip_invisible_articles(isolated_db):
     """Правило не должно предлагать судье статьи, которых никто не видит.
 
-    Там же, в замере 17.09: 39 пар из 71 состояли ИЗ ДВУХ невидимых статей —
+    Там же, в замере 17.09: 39 пар из 71 состояли ИЗ ДВУХ невидимых статей:
     модель звали и платили за неё впустую, схлопывать было нечего.
     """
     from oiltech_digest.db import repository
@@ -1616,10 +1616,10 @@ def test_reprint_candidates_skip_invisible_articles(isolated_db):
 def test_reprint_candidates_catch_wood_mackenzie_case_0921(isolated_db):
     """Жалоба заказчика 21.09: одна новость Wood Mackenzie трижды в ленте бизнес-сигналов.
 
-    На скрине — Oilfield Technology и World Pipelines (собраны 17.09) и сам Wood Mackenzie
-    (18.09). Заголовки — с публичных страниц изданий (og:title и h1): текст у трёх один,
+    На скрине: Oilfield Technology и World Pipelines (собраны 17.09) и сам Wood Mackenzie
+    (18.09). Заголовки, с публичных страниц изданий (og:title и h1): текст у трёх один,
     разница только в регистре. С параметрами планировщика (окно 7 дней, LIMIT 200) правило
-    обязано отдать судье все три пары — и отдаёт. Значит, промах 21.09 не в правиле пар, а
+    обязано отдать судье все три пары: и отдаёт. Значит, промах 21.09 не в правиле пар, а
     в прогоне или в ответе судьи; это меряется на проде. Соседняя новость того же дня из
     другого издания (Neftegaz.ru, тот же скрин) в пары не попадает.
     """
@@ -1650,7 +1650,7 @@ def test_reprint_candidates_catch_wood_mackenzie_case_0921(isolated_db):
         conn.commit()
     copies = ids[:3]
 
-    # Как в scripts/docker-scheduler.sh: --days 7 --limit 200, порог и разрыв дат — умолчания.
+    # Как в scripts/docker-scheduler.sh: --days 7 --limit 200, порог и разрыв дат: умолчания.
     pairs = reprints.find_candidates(days=7, limit=200)
 
     found = {(int(p["a_id"]), int(p["b_id"])): float(p["overlap"]) for p in pairs}
@@ -1705,7 +1705,7 @@ def test_reprint_chain_resolves_to_group_root(isolated_db):
 
 
 def test_unmark_returns_article_to_feed(isolated_db):
-    """Решение принимает модель — у человека должен быть способ его отменить."""
+    """Решение принимает модель: у человека должен быть способ его отменить."""
     from oiltech_digest.db import repository
 
     with connection.get_connection() as conn:
@@ -1747,7 +1747,7 @@ def _create_source_with_probe(monkeypatch, probe: dict, name: str) -> dict:
 
 def test_create_source_stores_what_the_strategy_probe_chose(monkeypatch, isolated_db):
     """Ручной ввод ссылки: к ней пробуется каждая стратегия, и в источник пишется
-    выбор — стратегия, лента и маршрут. До 18.09 без RSS молча ставился `request`."""
+    выбор: стратегия, лента и маршрут. До 18.09 без RSS молча ставился `request`."""
     probe = {"url": "https://site.example/news", "attempts": [],
              "chosen": {"parse_strategy": "playwright", "listing_url": "https://site.example/news",
                         "network_region": "external"}}
@@ -1757,7 +1757,7 @@ def test_create_source_stores_what_the_strategy_probe_chose(monkeypatch, isolate
 
 
 def test_create_source_is_disabled_when_no_strategy_found_articles(monkeypatch, isolated_db):
-    """Сайт открылся, но статей не дала ни одна стратегия — включённым такой
+    """Сайт открылся, но статей не дала ни одна стратегия: включённым такой
     источник опрашивался бы вечно впустую."""
     got = _create_source_with_probe(monkeypatch, {"url": "https://site.example/news", "attempts": [],
                                                   "chosen": None}, "Probe found nothing")
@@ -1766,7 +1766,7 @@ def test_create_source_is_disabled_when_no_strategy_found_articles(monkeypatch, 
 
 
 def test_manual_import_holder_source_is_not_polled(isolated_db):
-    """Держатель вручную внесённой статьи — не подписка на сайт. Включённым он
+    """Держатель вручную внесённой статьи: не подписка на сайт. Включённым он
     опрашивался `request` по главной вечно (223 статьи научпопа 17.09)."""
     from oiltech_digest.ingestion import manual_import
 
@@ -1776,11 +1776,11 @@ def test_manual_import_holder_source_is_not_polled(isolated_db):
 
 
 def test_insert_article_keeps_articles_that_differ_only_by_query(isolated_db):
-    """25.09: ключ адреса без query склеивал ВСЕ статьи сайтов, где номер статьи — в query.
+    """25.09: ключ адреса без query склеивал ВСЕ статьи сайтов, где номер статьи: в query.
 
     Проба на ядре: свежие релизы Лукойла `Pressrelease?rid=740957` (22.09) и `?rid=740741`
     (18.09) скачивались, проходили предфильтр и отбивались как «дубль» релиза `?rid=739353`
-    от 26.08. Так же — вся лента Минэнерго, EIA, РГУ Губкина, релизы Новатэка.
+    от 26.08. Так же: вся лента Минэнерго, EIA, РГУ Губкина, релизы Новатэка.
     """
     from oiltech_digest.db import repository
 

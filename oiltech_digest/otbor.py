@@ -1,19 +1,19 @@
 """Агент «Отбор» (#130, спека #128, ADR 0005): единственный решает, брать ли публикацию.
 
-Один вызов модели на публикацию, без инструментов и без выхода в сеть, — не автономный агент: путь известен,
+Один вызов модели на публикацию, без инструментов и без выхода в сеть,, не автономный агент: путь известен,
 обязательное проверяет код. Ядро собирает пакет при выдаче задачи (публикация, справочники «Отбора», приёмщик ОС),
-воркер без базы зовёт модель со справочниками в каждом вызове, а если шаги ответа не сошлись (conflicts), — ещё
-один раз, с указанием конфликта. Ответы воркер возвращает как есть, ядро проверяет их само (ответ воркера —
+воркер без базы зовёт модель со справочниками в каждом вызове, а если шаги ответа не сошлись (conflicts),: ещё
+один раз, с указанием конфликта. Ответы воркер возвращает как есть, ядро проверяет их само (ответ воркера:
 недоверенный ввод) и записывает решение в сигнал публикации. Происхождение публикации модель не получает: его
-использует только код. Модель — явная настройка агента (OTBOR_MODEL), без отката на модель ленты: едет в задаче и
+использует только код. Модель, явная настройка агента (OTBOR_MODEL), без отката на модель ленты: едет в задаче и
 попадает в рецепт решения вместе с версией инструкции и справочников.
 
-Сбой — по причине (решение владельца 23.10): технический (модель не ответила) шаг планировщика повторяет до
-OTBOR_ATTEMPTS задач; модель ответила, но не по схеме или не из справочника, — без повтора: такое надо понять, а
+Сбой: по причине (решение владельца 23.10): технический (модель не ответила) шаг планировщика повторяет до
+OTBOR_ATTEMPTS задач; модель ответила, но не по схеме или не из справочника,, без повтора: такое надо понять, а
 не оплачивать ещё раз. Оба видны админу в разделах отклонённого.
 
-С #131 «Отбор» решает и находки поиска радара, и материалы коллег — сигналы с меткой пути (signals.selector): вход у
-них тот же, что строка радара и материала в пакете эксперту; у находки с несколькими ссылками — «Ссылки находки»,
+С #131 «Отбор» решает и находки поиска радара, и материалы коллег: сигналы с меткой пути (signals.selector): вход у
+них тот же, что строка радара и материала в пакете эксперту; у находки с несколькими ссылками: «Ссылки находки»,
 и только у неё «разные события в одной находке» не конфликт шагов.
 """
 
@@ -34,13 +34,13 @@ from oiltech_digest.signal_card import CHARS_PER_TOKEN
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = otbor_store.KIND
-# Версия инструкции (и таблицы конфликтов, otbor_answer) — в рецепте решения: другая инструкция — другие решения.
+# Версия инструкции (и таблицы конфликтов, otbor_answer), в рецепте решения: другая инструкция: другие решения.
 PROMPT_VERSION = "2026-10-26.2"
 _OUTPUT_TOKENS = 600
-# Оценка ответа до вызова — для сухого прогона проверки на реальных данных (#134): на экзамене 26.10 у gpt-6-sol с
-# рассуждением low 116 токенов на вызов; с запасом на повтор при конфликте шагов. Знаков на токен — как у «Карточки».
+# Оценка ответа до вызова, для сухого прогона проверки на реальных данных (#134): на экзамене 26.10 у gpt-6-sol с
+# рассуждением low 116 токенов на вызов; с запасом на повтор при конфликте шагов. Знаков на токен: как у «Карточки».
 ESTIMATED_OUTPUT_TOKENS = 150
-# Справочники, из которых модель выбирает коды, — в порядке её рассуждения (поля ответа).
+# Справочники, из которых модель выбирает коды,: в порядке её рассуждения (поля ответа).
 CHOICES = ("industry", "occasion", "oilfield_relevance", "decision", "reject_reason", "category")
 
 
@@ -53,12 +53,12 @@ class OtborSetupError(ValueError):
 
 def scheduler_step() -> dict[str, Any]:
     """Шаг планировщика «Отбор»: статьи, находки и материалы, у которых кончились попытки,
-    а итога нет (задачи падали целиком), — в раздел «„Отбор“ не ответил»; новые, которые решает он, — в задачи по
+    а итога нет (задачи падали целиком),: в раздел «„Отбор“ не ответил»; новые, которые решает он,: в задачи по
     полосе ежедневной обработки."""
     # Без модели шаг отказывает в каждом цикле, даже когда новых статей нет: настройка видна сразу.
     configured_model()
     window = {"days": config.OTBOR_NEW_DAYS, "attempts": config.OTBOR_ATTEMPTS, "limit": config.OTBOR_STEP_LIMIT}
-    # Попытки кончились, а итога нет (задачи падали целиком): публикация — в раздел «„Отбор“ не ответил».
+    # Попытки кончились, а итога нет (задачи падали целиком): публикация: в раздел «„Отбор“ не ответил».
     unanswered = otbor_store.unanswered_articles(**window)
     for article_id, reason in unanswered:
         failed = technical_failure(reason)
@@ -76,7 +76,7 @@ def scheduler_step() -> dict[str, Any]:
 
 def enqueue(article_ids: list[int], *, signal_ids: list[int] | tuple[int, ...] = (), trigger: str,
             bulk: bool = False) -> list[dict[str, Any]]:
-    """Задачи агента пачками по OTBOR_BATCH: статьи и сигналы (находки и материалы, #131) — своими задачами. bulk —
+    """Задачи агента пачками по OTBOR_BATCH: статьи и сигналы (находки и материалы, #131): своими задачами. bulk:
     названные публикации (повтор после разбора сбоя): по полосе пересчётов, чтобы не стоять перед потоком дня.
     Флага у агента с 08.11 нет: «Отбор» решает всегда (решение владельца, снятие старой цепочки)."""
     from oiltech_digest import network_policy
@@ -134,7 +134,7 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
     """Публикация так, как её видит модель: поля как у входа пакета эксперту (otbor_pack), тот же текст
-    (publication_text) и даты днём по UTC. Приёмщик ОС (решение владельца 21.10) — фиксированная форма: похожие
+    (publication_text) и даты днём по UTC. Приёмщик ОС (решение владельца 21.10), фиксированная форма: похожие
     сигналы, оценённые людьми (заголовок, решение, код причины, категория, тема), и текст оценок, если правила
     сервиса ОС его пропустят. «Отбор» сам ОС не собирает; до сервиса ОС приёмщик пуст."""
     return {
@@ -152,10 +152,10 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
-    """Находка или материал (#131) так, как их видит модель, — как строка радара и материала в пакете эксперту
-    (otbor_pack): издатель — источник статьи корпуса или сайт из ссылки (имя издателя у ссылки поиска записала модель
-    поиска; у материала без ссылки издателя нет); текст материала — colleague_materials.as_publication. Ссылки
-    находки — заголовок, издатель и дата каждой, до 8."""
+    """Находка или материал (#131) так, как их видит модель,: как строка радара и материала в пакете эксперту
+    (otbor_pack): издатель: источник статьи корпуса или сайт из ссылки (имя издателя у ссылки поиска записала модель
+    поиска; у материала без ссылки издателя нет); текст материала: colleague_materials.as_publication. Ссылки
+    находки: заголовок, издатель и дата каждой, до 8."""
     return {
         "ref": contract.signal_ref(row["signal_id"]),
         "title": publication_text(row.get("title"))[:500],
@@ -173,7 +173,7 @@ def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
 
 def _card_fact(row: dict[str, Any]) -> dict[str, str]:
     """Факт «Карточки» у публикации, которую она вернула (#132): дата события из текста старше срока. Только у
-    возвращённой — у остальных входа не меняет (экзамен #133 подаёт манифест без него)."""
+    возвращённой: у остальных входа не меняет (экзамен #133 подаёт манифест без него)."""
     return {"card_fact": row["card_fact"]} if row.get("card_fact") else {}
 
 
@@ -181,11 +181,11 @@ def _card_fact(row: dict[str, Any]) -> dict[str, str]:
 
 
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Сторона воркера: вызов модели на публикацию, справочники — в каждом; шаги не сошлись — второй вызов с
-    указанием конфликта. Ответы модели — как есть."""
+    """Сторона воркера: вызов модели на публикацию, справочники: в каждом; шаги не сошлись: второй вызов с
+    указанием конфликта. Ответы модели: как есть."""
     model = str(payload.get("model") or "").strip()
     if not model:
-        # Клиент без модели взял бы OPENAI_MODEL ленты — тихий откат, которого быть не должно.
+        # Клиент без модели взял бы OPENAI_MODEL ленты: тихий откат, которого быть не должно.
         raise ValueError("otbor: в задаче нет модели (OTBOR_MODEL на ядре) — модель ленты агент не берёт")
     dictionaries = payload.get("dictionaries") or {}
     instructions = _instructions(dictionaries)
@@ -199,7 +199,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             try:
                 heartbeat(result)
             except StopRequested:
-                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное — в очередь.
+                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное: в очередь.
                 result["partial"] = True
                 break
         decisions.append(_decide(client, item, instructions, schema, dictionaries, model, payload.get("reasoning")))
@@ -208,7 +208,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
 
 def _decide(client: Any, item: dict[str, Any], instructions: str, schema: dict[str, Any],
             dictionaries: dict[str, Any], model: str, reasoning: Any) -> dict[str, Any]:
-    """Ответы модели о публикации: каждый вызов — ответ или ошибка; токены — за все вызовы."""
+    """Ответы модели о публикации: каждый вызов: ответ или ошибка; токены: за все вызовы."""
     decision: dict[str, Any] = {"ref": item.get("ref"), "calls": [], "model": None,
                                 "input_tokens": 0, "output_tokens": 0}
     links = len(item.get("links") or [])
@@ -226,7 +226,7 @@ def _decide(client: Any, item: dict[str, Any], instructions: str, schema: dict[s
         decision["model"] = response.model
         decision["input_tokens"] += int(response.input_tokens or 0)
         decision["output_tokens"] += int(response.output_tokens or 0)
-        # Ответ не по правилам не повторяется (решение владельца 23.10); повтор — только при конфликте шагов.
+        # Ответ не по правилам не повторяется (решение владельца 23.10); повтор: только при конфликте шагов.
         found = [] if answer_problem(response.data, dictionaries) else conflicts(response.data, dictionaries,
                                                                                     links=links)
         if not found:
@@ -273,7 +273,7 @@ def _instructions(dictionaries: dict[str, Any]) -> str:
 
 def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> str:
     """Вход модели о публикации: она сама, приёмщик ОС и, при повторе, конфликт прошлого ответа. Происхождения
-    нет (решение владельца 22.10): «радар — значит технология» тянуло бы к старой мерке."""
+    нет (решение владельца 22.10): «радар: значит технология» тянуло бы к старой мерке."""
     feedback = item.get("feedback") or {}
     similar = feedback.get("similar_signals") or []
     links = item.get("links") or []
@@ -283,7 +283,7 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
         f"Язык: {item.get('language') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Дата поступления: {item.get('received') or 'не указана'}",
-        # Вернула «Карточка» (#132): что она нашла в тексте, — решение остаётся за «Отбором».
+        # Вернула «Карточка» (#132): что она нашла в тексте,: решение остаётся за «Отбором».
         *([f"Факт «Карточки»: {item['card_fact']}"] if item.get("card_fact") else []),
         # Как колонка таблицы эксперта (otbor_pack_format.GIVEN_COLUMNS): по ней справочник объясняет причину
         # «разные события в одной находке».
@@ -304,7 +304,7 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
 
 
 def is_shadow(job_payload: dict[str, Any]) -> bool:
-    """Задача проверки на реальных данных (#134, её ставит otbor_shadow.enqueue; находки — пробный прогон #138): итог —
+    """Задача проверки на реальных данных (#134, её ставит otbor_shadow.enqueue; находки, пробный прогон #138): итог:
     в таблицу проверки, а не в
     сигнал."""
     return bool(job_payload.get("shadow"))
@@ -312,10 +312,10 @@ def is_shadow(job_payload: dict[str, Any]) -> bool:
 
 def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_ids: list[Any] | None = None,
                  signal_ids: list[Any] | None = None, shadow: bool = False) -> dict[str, Any]:
-    """Сторона ядра: проверить ответы кодом и записать решения или сбои — у статьи в её сигнал ленты, у находки и
+    """Сторона ядра: проверить ответы кодом и записать решения или сбои: у статьи в её сигнал ленты, у находки и
     материала (#131) в сам сигнал. Строка не о публикации задачи не пишется; ссылок у находки ядро считает само.
-    Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит. shadow — задача
-    проверки на реальных данных (#134): те же проверки, но итог статьи — рядом, в таблицу проверки (_record_shadow)."""
+    Справочники сменились после выдачи, модель выбирала из других: технический сбой, шаг повторит. shadow: задача
+    проверки на реальных данных (#134): те же проверки, но итог статьи: рядом, в таблицу проверки (_record_shadow)."""
     dictionaries = load_dictionaries()
     decisions = [decision for decision in result.get("decisions") or [] if isinstance(decision, dict)]
     expected = None if article_ids is None and signal_ids is None else (
@@ -366,7 +366,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
 
 def _record_shadow(applied: dict[str, Any], article_id: int | None, signal_id: int | None, checked: Any,
                    recipe: dict[str, Any]) -> None:
-    """Итог проверки на реальных данных (#134) — в её таблицу: решение или сбой статьи. Находку радара в тень ставит
+    """Итог проверки на реальных данных (#134), в её таблицу: решение или сбой статьи. Находку радара в тень ставит
     только пробный прогон широкого поиска (#138): её строка своя (signal_id), перенос в витрины её не берёт."""
     decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     outcome_kwargs = {"values": checked.values, "disputed": checked.disputed, "failure": checked.failure,
@@ -386,7 +386,7 @@ def _record_shadow(applied: dict[str, Any], article_id: int | None, signal_id: i
 
 
 def _publication(decision: dict[str, Any], expected: set[str] | None) -> tuple[int | None, int | None]:
-    """(статья, сигнал) строки итога воркера: ровно одно не None, если публикация — из этой задачи."""
+    """(статья, сигнал) строки итога воркера: ровно одно не None, если публикация: из этой задачи."""
     article_id, signal_id = contract.ref_article_id(decision.get("ref")), contract.ref_signal_id(decision.get("ref"))
     ref = (contract.article_ref(article_id) if article_id is not None
            else contract.signal_ref(signal_id) if signal_id is not None else None)
@@ -396,8 +396,8 @@ def _publication(decision: dict[str, Any], expected: set[str] | None) -> tuple[i
 
 
 def _usage(decision: dict[str, Any], expected: set[str] | None) -> dict[str, Any] | None:
-    """Оплаченные вызовы модели — и с ответом не по правилам: модель за них уже взяла деньги. Цена — по ставкам
-    ядра. Строка не о публикации задачи — не расход этой задачи."""
+    """Оплаченные вызовы модели, и с ответом не по правилам: модель за них уже взяла деньги. Цена: по ставкам
+    ядра. Строка не о публикации задачи: не расход этой задачи."""
     article_id, signal_id = _publication(decision, expected)
     try:
         tokens_in = max(0, int(decision.get("input_tokens") or 0))

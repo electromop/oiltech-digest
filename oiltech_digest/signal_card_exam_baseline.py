@@ -1,9 +1,9 @@
-"""Базовая линия экзамена без ИИ (#98, спека #93): компании и регион — словарём.
+"""Базовая линия экзамена без ИИ (#98, спека #93): компании и регион: словарём.
 
-Нужна, чтобы видеть, что модель здесь действительно что-то добавляет. Компании — все компании
-справочника алиасов, названные в заголовке или тексте (слова — с учётом регистра: «Nov.» — не NOV,
-«total» — не Total). Регион — по словарю мест: регион, места которого текст называет чаще (при
-равенстве — названный раньше); мест нет — «не определено».
+Нужна, чтобы видеть, что модель здесь действительно что-то добавляет. Компании: все компании
+справочника алиасов, названные в заголовке или тексте (слова, с учётом регистра: «Nov.»: не NOV,
+«total»: не Total). Регион, по словарю мест: регион, места которого текст называет чаще (при
+равенстве: названный раньше); мест нет: «не определено».
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from oiltech_digest.signal_card_exam_score import text_tokens
 from oiltech_digest.signal_card_pack import UNDEFINED
 from oiltech_digest.word_forms import same_word
 
-# Места — по-русски и по-английски; русские слова сверяются по основе (падежи), составные — целиком.
+# Места: по-русски и по-английски; русские слова сверяются по основе (падежи), составные: целиком.
 _PLACES: dict[str, tuple[str, ...]] = {
     "Россия": ("Россия", "РФ", "российский", "Russia", "Russian", "Москва", "Moscow", "Сибирь", "Siberia", "Тюмень",
                "Тюменская", "ЯНАО", "ХМАО", "Югра", "Ямал", "Yamal", "Татарстан", "Tatarstan", "Башкортостан",
@@ -62,13 +62,13 @@ _PLACES: dict[str, tuple[str, ...]] = {
                "Пакистан", "Pakistan", "Монголия", "Mongolia", "Турция", "Turkey"),
     "глобально": ("worldwide", "globally", "по всему миру"),
 }
-# Длинное место — раньше короткого: «Gulf of Mexico» — это не «Mexico», «New Mexico» — тоже.
+# Длинное место, раньше короткого: «Gulf of Mexico» это не «Mexico», «New Mexico»: тоже.
 _FORMS = sorted(((region, tuple(text_tokens(place))) for region, places in _PLACES.items() for place in places),
                 key=lambda pair: -len(pair[1]))
 
 
 def finals(items: list[dict[str, Any]], dictionaries: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Значения «карточки» без ИИ — в той же форме, что у агента (один прогон)."""
+    """Значения «карточки» без ИИ: в той же форме, что у агента (один прогон)."""
     companies = [(entry["name"], [tuple(text_tokens(name, keep_case=True)) for name in (entry["name"], *entry["aliases"])])
                  for entry in dictionaries["companies"]]
     out: dict[str, list[dict[str, Any]]] = {}

@@ -68,7 +68,7 @@ if [[ -z "$URL" ]]; then
   exit 2
 fi
 
-# --no-deps: иначе compose поднимет зависимости app, в том числе bootstrap — init-db и сиды
+# --no-deps: иначе compose поднимет зависимости app, в том числе bootstrap: init-db и сиды
 # на живой базе. База (db) на сервере и так работает.
 docker compose run --rm --no-deps app python - "$URL" "$SOURCE_ID" "$PROCESS" "$OFFLINE" <<'PY'
 from __future__ import annotations

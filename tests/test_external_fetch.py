@@ -74,7 +74,7 @@ def test_external_fetch_rss_payload_returns_articles(monkeypatch):
     assert result["stats"]["attempted"] == 1
     assert result["stats"]["skipped_irrelevant"] == 2
     assert result["articles"][0]["url"] == "https://example.com/feed/a"
-    # source_id убран из article-rec (его проставит core при apply), published_at — строка
+    # source_id убран из article-rec (его проставит core при apply), published_at: строка
     assert "source_id" not in result["articles"][0]
     assert isinstance(result["articles"][0]["published_at"], str)
     assert result["last_listing_hash"] is None
@@ -148,7 +148,7 @@ def test_worker_skips_urls_the_core_already_has(monkeypatch):
 
 def test_worker_heartbeats_for_request_and_playwright_not_only_rss(monkeypatch):
     """До 18.09 heartbeat получал только RSS-сбор; request и playwright шли без него
-    при lease 600 с — пакет из десятка браузерных статей упирался в lease."""
+    при lease 600 с: пакет из десятка браузерных статей упирался в lease."""
     beats: list[str] = []
     candidates = [CandidateLink(f"https://example.com/a{i}", f"Article number {i} long enough title", 5) for i in range(3)]
     _stub_request_path(monkeypatch, candidates, [])
@@ -168,7 +168,7 @@ def test_worker_heartbeats_for_request_and_playwright_not_only_rss(monkeypatch):
 
 def test_worker_result_is_json_serializable_when_candidates_have_dates(monkeypatch):
     """Регрессия 18.09: у кандидатов появились даты, и дата первого уходила в ответ
-    ядру объектом datetime — задачи падали «Object of type datetime is not JSON
+    ядру объектом datetime: задачи падали «Object of type datetime is not JSON
     serializable». Прежние тесты брали кандидатов без дат и этого не видели."""
     import json
 
@@ -196,7 +196,7 @@ def test_worker_fill_keeps_teaser_when_page_body_belongs_to_another_article(monk
 
     filled = external_fetch._fill_bodies_from_source({"id": 1}, recs)
 
-    # Прежде тело бралось, если оно просто длиннее анонса, — без проверки принадлежности.
+    # Прежде тело бралось, если оно просто длиннее анонса,: без проверки принадлежности.
     assert filled[0]["raw_text"] == teaser
 
 
@@ -229,7 +229,7 @@ def test_worker_prefilter_uses_customer_tag_keywords_from_payload(monkeypatch):
     payload = external_fetch.build_scrape_source_payload(5, {})
     assert payload["prefilter_tag_keywords"] == {"positive": ["гидромонитор"], "negative": ["гороскоп"]}
 
-    # Воркер: базы нет, кеш пуст — ключи тематик берутся из payload.
+    # Воркер: базы нет, кеш пуст: ключи тематик берутся из payload.
     monkeypatch.setattr(relevance_filter, "_TAG_KEYWORDS_CACHE", {"positive": (), "negative": (), "at": 0.0})
 
     def no_database():
@@ -247,7 +247,7 @@ def test_worker_prefilter_uses_customer_tag_keywords_from_payload(monkeypatch):
 
     external_fetch.process_payload(payload)
 
-    assert "гидромонитор" in seen["keep"].matched_keywords  # прежде — нет: тематики не доезжали
+    assert "гидромонитор" in seen["keep"].matched_keywords  # прежде, нет: тематики не доезжали
     assert seen["drop"].keep is False
 
 
@@ -264,7 +264,7 @@ def test_external_playwright_reports_blocked_listing_instead_of_silent_zero(monk
 
     result = external_fetch._process_playwright(source, {"article_limit": 12, "known_urls": []})
 
-    # Прежде — «ok» с нулями, неотличимо от «нового нет».
+    # Прежде: «ok» с нулями, неотличимо от «нового нет».
     assert result["stats"]["listing"] == "blocked:403"
     assert result["stats"]["listing_candidates"] == 0
 

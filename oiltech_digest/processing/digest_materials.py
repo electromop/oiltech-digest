@@ -41,7 +41,7 @@ class Section:
     nouns: tuple[str, str, str]
 
 
-# Разделы по порядку листов: сначала бизнес. Подписи «нет события» — из таблицы спеки #160.
+# Разделы по порядку листов: сначала бизнес. Подписи «нет события»: из таблицы спеки #160.
 SECTIONS = (
     Section(BUSINESS, "01", "Бизнес-сигналы", BUSINESS_PROFILE, "Рыночный контекст", "market",
             ("бизнес-сигнал", "бизнес-сигнала", "бизнес-сигналов")),
@@ -54,7 +54,7 @@ _SECTION_PLACE = {section.key: place for place, section in enumerate(SECTIONS)}
 
 @dataclass(frozen=True)
 class Theme:
-    """Тема выпуска: начало имени корневого тега (тема сигнала равна корневому тегу; имена тем — данные, их правят на
+    """Тема выпуска: начало имени корневого тега (тема сигнала равна корневому тегу; имена тем: данные, их правят на
     экране «Теги», поэтому по началу имени, как signal_themes.MARKET_PREFIX), рубрика карточки, она же строчными для
     «Главного» и заглушка картинки (assets/placeholders)."""
 
@@ -87,13 +87,13 @@ THEMES = (
 )
 # Порядок рубрик: рынок автоматизации сразу за рынком и сервисными моделями, дальше темы по таблице.
 RUBRIC_ORDER = (THEMES[0].rubric, AUTOMATION_MARKET[0], *(theme.rubric for theme in THEMES[1:]))
-# Место рубрики; рубрики не из порядка (тема не из 13) — после всех.
+# Место рубрики; рубрики не из порядка (тема не из 13): после всех.
 _RUBRIC_PLACE = {rubric: place for place, rubric in enumerate(RUBRIC_ORDER)}
 # Давнее событие: своя рубрика и подпись, место сразу за рубрикой своей темы.
 OLD_PRACTICE_RUBRIC, OLD_PRACTICE_LABEL = "СПРАВОЧНАЯ ПРАКТИКА", "Практика прошлых периодов"
 
 # Подпись после рубрики по типу события «Карточки» (таблица спеки #160, значения справочника event_type
-# signal_card_dictionaries.json): говорит о стадии события. Тип не определён — подписи нет.
+# signal_card_dictionaries.json): говорит о стадии события. Тип не определён: подписи нет.
 LABELS = {
     "регулирование": "Регуляторная инициатива",
     "инвестиции": "Программа заказчика",
@@ -110,7 +110,7 @@ LABELS = {
     "коммерциализация": "Выход на рынок",
     "другое событие": "Событие",
 }
-# Особые случаи таблицы: масштабирование при зрелости «масштабное внедрение»; «нет события» — по разделу (Section).
+# Особые случаи таблицы: масштабирование при зрелости «масштабное внедрение»; «нет события»: по разделу (Section).
 SCALING, SCALED_MATURITY, SCALED_LABEL = "масштабирование", "масштабное внедрение", "Масштабное применение"
 NO_EVENT = "нет события"
 
@@ -178,13 +178,13 @@ def section_of(category: str | None) -> str:
 
 def theme_of(name: str | None) -> Theme | None:
     """Тема выпуска по имени темы сигнала (корневого тега). Чужое имя («не классифицировано», тема радара до 13
-    тематик) — None: у карточки нет рубрики, и она идёт после всех рубрик своего раздела."""
+    тематик), None: у карточки нет рубрики, и она идёт после всех рубрик своего раздела."""
     folded = (name or "").casefold()
     return next((theme for theme in THEMES if folded.startswith(theme.prefix.casefold())), None)
 
 
 def label_of(event_type: str | None, maturity: str | None, section: str) -> str:
-    """Подпись карточки по типу события и зрелости «Карточки»; не определено — пусто."""
+    """Подпись карточки по типу события и зрелости «Карточки»; не определено: пусто."""
     if event_type == NO_EVENT:
         return _SECTION[section].no_event_label
     if event_type == SCALING and maturity == SCALED_MATURITY:
@@ -195,7 +195,7 @@ def label_of(event_type: str | None, maturity: str | None, section: str) -> str:
 def criteria_of(fields: dict) -> list[dict]:
     """Баллы по критериям, как на карточке витрины (scoreBreakdown экрана радара): разбивка балла сигнала, имя критерия
     из снимка набора на момент оценки, целые от 0 до 100 (округление как у экрана); «Свежесть» без даты события в итог
-    не входит. Балл посчитан неизвестным профилем — разбивки нет, как на витрине."""
+    не входит. Балл посчитан неизвестным профилем: разбивки нет, как на витрине."""
     if fields.get("score_profile") not in SCORING_PROFILES:
         return []
     names = {}
@@ -223,13 +223,13 @@ def _relevance_labels() -> dict[str, str]:
 
 
 def relevance_of(code: str | None) -> str:
-    """Связь с нефтесервисом словами справочника «Отбора» («прямая», «переносимая»); пусто — «не определено»."""
+    """Связь с нефтесервисом словами справочника «Отбора» («прямая», «переносимая»); пусто: «не определено»."""
     return _relevance_labels().get(code or "", UNDEFINED)
 
 
 def is_old_event(fields: dict, month: date | None) -> bool:
     """Давнее событие: дата события старше SIGNAL_RADAR_MAX_EVENT_AGE_DAYS (180, порог экрана радара) до начала месяца
-    выпуска. Дата с точностью до месяца или года — по последнему дню своего периода, как у «Отбора» (event_dates)."""
+    выпуска. Дата с точностью до месяца или года: по последнему дню своего периода, как у «Отбора» (event_dates)."""
     days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     event = fields.get("event_date")
     if month is None or days <= 0 or not isinstance(event, date):
@@ -238,7 +238,7 @@ def is_old_event(fields: dict, month: date | None) -> bool:
 
 
 def sections(items: list[dict], *, month: str | None) -> list[dict]:
-    """Разделы PDF выпуска: каждый материал с полями своего сигнала, в порядке карточек. `items` — позиции выпуска от
+    """Разделы PDF выпуска: каждый материал с полями своего сигнала, в порядке карточек. `items`: позиции выпуска от
     сборщика: номер статьи или сигнала, заголовок, суть целиком, ссылка на главную публикацию, своя картинка, балл,
     корневой тег статьи."""
     month_start = feed_window.parse_month(month) if month else None
@@ -251,7 +251,7 @@ def sections(items: list[dict], *, month: str | None) -> list[dict]:
                   else by_signal.get(item["signal_id"]), month_start)
         for item in items
     ]
-    # Сортировка устойчивая: при равных разделе, рубрике и балле — порядок сборщика.
+    # Сортировка устойчивая: при равных разделе, рубрике и балле: порядок сборщика.
     materials = [material for _, material in sorted(keyed, key=lambda pair: pair[0])]
     result = []
     for section in SECTIONS:
@@ -264,7 +264,7 @@ def sections(items: list[dict], *, month: str | None) -> list[dict]:
 
 
 def _rubric(theme: Theme | None, section: str) -> tuple[str, str]:
-    """Рубрика карточки и её строчная форма для «Главного»; тема не из 13 — пусто."""
+    """Рубрика карточки и её строчная форма для «Главного»; тема не из 13: пусто."""
     if theme is None:
         return "", ""
     if section == BUSINESS and theme.in_business:
@@ -273,8 +273,8 @@ def _rubric(theme: Theme | None, section: str) -> tuple[str, str]:
 
 
 def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tuple, dict]:
-    """Материал выпуска и его место: раздел (сначала бизнес), рубрика по порядку таблицы (давнее событие — сразу за
-    рубрикой своей темы, тема не из 13 — после всех), балл по убыванию (без балла — последним)."""
+    """Материал выпуска и его место: раздел (сначала бизнес), рубрика по порядку таблицы (давнее событие: сразу за
+    рубрикой своей темы, тема не из 13: после всех), балл по убыванию (без балла: последним)."""
     if fields is None:
         # Статья без сигнала ленты идёт как сигнал без категории, тема по её корневому тегу.
         fields = {"theme": item.get("root_tag")}
@@ -332,7 +332,7 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
         "missing": missing,
         "placeholder": theme.placeholder if theme else _SECTION[section].fallback_placeholder,
         "score": score,
-        # Тема карточки строчными для «Главного» по умолчанию: у давнего события — его своя тема.
+        # Тема карточки строчными для «Главного» по умолчанию: у давнего события: его своя тема.
         "topic": topic,
     }
     order = (_SECTION_PLACE[section], rank, score is None, -(score or 0.0))

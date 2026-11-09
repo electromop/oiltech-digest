@@ -1,5 +1,5 @@
-// Бизнес-лента (#97, спека #93): заготовки тестов экрана в витрине «бизнес» — справочники, сигналы ленты,
-// сервер в миниатюре и помощники. Тесты — BusinessFeed.test.tsx и BusinessFeedFilters.test.tsx (шов 3).
+// Бизнес-лента (#97, спека #93): заготовки тестов экрана в витрине «бизнес»: справочники, сигналы ленты,
+// сервер в миниатюре и помощники. Тесты: BusinessFeed.test.tsx и BusinessFeedFilters.test.tsx (шов 3).
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 import {
@@ -13,7 +13,7 @@ import {
 import type { Signal, SignalEvidence } from "../../api/types";
 import { SignalRadarPage } from "./SignalRadarPage";
 
-// Справочники — как их отдаёт сервер (/api/signals/dictionaries), сокращённо.
+// Справочники: как их отдаёт сервер (/api/signals/dictionaries), сокращённо.
 export const DICTIONARIES: SignalDictionaries = {
   event_type: ["пилот", "контракт", "сделка (M&A)", "нет события"],
   region: ["Россия", "Европа", "Ближний Восток"],
@@ -35,7 +35,7 @@ export function publication(id: number, fields: Partial<SignalEvidence>): Signal
   };
 }
 
-// Сигнал ленты с карточкой агента: статья и её перепечатка — публикации одного события.
+// Сигнал ленты с карточкой агента: статья и её перепечатка: публикации одного события.
 export const contract: Signal = {
   id: 9001,
   signal_key: "feed:1",
@@ -84,7 +84,7 @@ export const contract: Signal = {
   ],
 };
 
-// Агент часть значений определить не смог: «не определено» — пробел карточки, его видно.
+// Агент часть значений определить не смог: «не определено»: пробел карточки, его видно.
 export const forum: Signal = {
   ...contract,
   id: 9002,
@@ -124,11 +124,11 @@ export const fresh: Signal = {
   evidence: [publication(4, {})],
 };
 
-// Служебное раскрытой карточки — не атрибуты события: решение платформы, поступление, число ссылок, дубли.
+// Служебное раскрытой карточки, не атрибуты события: решение платформы, поступление, число ссылок, дубли.
 const CARD_EXTRAS = new Set(["Решение платформы", "Поступил", "Публикаций", "Ссылок", "Объединено дублей"]);
 
-// Атрибуты события — таблицей «подпись: значение» в раскрытой карточке (пересмотр 23.10); свёрнутую помощник
-// раскрывает. Ответ — пары «Подпись: значение» и признак пробела карточки («не определено»).
+// Атрибуты события, таблицей «подпись: значение» в раскрытой карточке (пересмотр 23.10); свёрнутую помощник
+// раскрывает. Ответ, пары «Подпись: значение» и признак пробела карточки («не определено»).
 export function chips(card: HTMLElement) {
   const expand = within(card).queryByRole("button", { name: "Раскрыть сигнал" });
   if (expand) fireEvent.click(expand);
@@ -141,7 +141,7 @@ export function chips(card: HTMLElement) {
 
 export function matches(card: Signal, query: SignalQuery) {
   const names = (card.participants_json || []).map((item) => item.name);
-  // Страна (#137) — в любой роли: страна события или страна участника.
+  // Страна (#137), в любой роли: страна события или страна участника.
   const countries = [...(card.event_countries || []), ...(card.participants_json || []).map((item) => item.country)];
   return (
     (!query.theme || card.theme === query.theme)
@@ -154,7 +154,7 @@ export function matches(card: Signal, query: SignalQuery) {
   );
 }
 
-// Сервер в миниатюре: выборка и числа — «на сервере» по всем карточкам витрины.
+// Сервер в миниатюре: выборка и числа: «на сервере» по всем карточкам витрины.
 export function serve(cards: Signal[]) {
   vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) =>
     cards.filter((card) => matches(card, query)).map((card) => ({ ...card })),

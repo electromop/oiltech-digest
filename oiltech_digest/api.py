@@ -87,9 +87,9 @@ async def log_requests(request, call_next):
     return response
 
 
-# Набор допустимых статусов отметки — единый источник правды в repository.ArticleStatus
-# (там же кортеж для счётчиков). Колонки статуса — свободный TEXT без CHECK, поэтому
-# валидация на границе API — единственное, что не даёт записать мусор: статья с
+# Набор допустимых статусов отметки: единый источник правды в repository.ArticleStatus
+# (там же кортеж для счётчиков). Колонки статуса: свободный TEXT без CHECK, поэтому
+# валидация на границе API, единственное, что не даёт записать мусор: статья с
 # неизвестным статусом молча пропадает из всех вкладок (фильтры перечисляют известный набор).
 class ArticlePatch(BaseModel):
     status: repository.ArticleStatus | None = None
@@ -190,7 +190,7 @@ class TagIn(BaseModel):
     # `| None` ОБЯЗАТЕЛЕН, а не «на всякий случай». Значение по умолчанию срабатывает
     # только когда ключ ОТСУТСТВУЕТ; пришедший явно `null` Pydantic отвергает 422-й.
     # А приходит он всегда: в БД `negative_keywords_json` равен NULL у ВСЕХ тегов,
-    # `list_enabled_tags` отдаёт `SELECT child.*` как есть, фронт возвращает то же самое —
+    # `list_enabled_tags` отдаёт `SELECT child.*` как есть, фронт возвращает то же самое:
     # и сохранение экрана «Теги» падало ЦЕЛИКОМ на каждой попытке (скрин заказчика 13.09:
     # девять строк «Input should be a valid list», input: null). Репозиторий None
     # переваривает сам (`or []`), поэтому достаточно расширить тип.
@@ -217,7 +217,7 @@ class ManualArticleImportRequest(BaseModel):
 class DigestRequest(BaseModel):
     month: str
     limit: int = 20
-    # Без порога (решение владельца 29.09): отметка человека — членство в выпуске, балл —
+    # Без порога (решение владельца 29.09): отметка человека, членство в выпуске, балл:
     # только порядок. С полом 60 черновик после пересчёта баллов терял бы отмеченное.
     min_score: float = 0
     max_score: float | None = None
@@ -264,7 +264,7 @@ class ExternalWorkerLeaseRequest(BaseModel):
 
 
 class ExternalWorkerPageRequest(ExternalWorkerLeaseRequest):
-    # С большим запасом: самые длинные адреса находок поиска — около 300 знаков (04.11).
+    # С большим запасом: самые длинные адреса находок поиска: около 300 знаков (04.11).
     url: str = Field(max_length=4096)
 
 
@@ -286,7 +286,7 @@ class ExternalWorkerFailRequest(ExternalWorkerLeaseRequest):
     retryable: bool = True
     retry_after_seconds: int | None = None
     # Сделанная часть пакета (partial): так зависший ИИ-пакет отдаёт сторож аренды воркера.
-    # Воркер до 28.09 поля не шлёт — тогда это прежний fail.
+    # Воркер до 28.09 поля не шлёт: тогда это прежний fail.
     result: dict[str, Any] | None = None
 
 
@@ -456,7 +456,7 @@ def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
 
 @app.post("/api/auth/admit")
 def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
-    """Шаг «код допуска» (#113): почта, пароль и код одним запросом — допуск и сессия."""
+    """Шаг «код допуска» (#113): почта, пароль и код одним запросом: допуск и сессия."""
     user = repository.authenticate_user(payload.email, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
@@ -470,7 +470,7 @@ def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
 
 
 def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, Any]:
-    """Допущенной учётке — сессия. Недопущенной — «нужен код допуска» без сессии (200, а не
+    """Допущенной учётке: сессия. Недопущенной: «нужен код допуска» без сессии (200, а не
     отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
     if not admission.is_admitted(int(user["id"])):
         notice = admission.request_code(user)
@@ -525,7 +525,7 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
             raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
         repository.set_user_password(user_id, payload.password)
         if int(user["id"]) != user_id:
-            # Чужой пароль сменён — под ним мог войти кто угодно: снова через код допуска (#113).
+            # Чужой пароль сменён, под ним мог войти кто угодно: снова через код допуска (#113).
             admission.revoke(user_id)
     return {"ok": True, "user": _clean(repository.get_user_by_id(user_id))}
 
@@ -579,13 +579,13 @@ def list_articles(
     month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    # Окно месяца (ADR 0001, п. 6): без `month` — открытые месяцы, с `month` — один
+    # Окно месяца (ADR 0001, п. 6): без `month`: открытые месяцы, с `month`: один
     # месяц, прошлый открывается архивом только на просмотр. Для всех ролей одинаково.
     clauses = [feed_window.current(month).sql("a")]
     params: list[Any] = []
     if search:
         # Ищем по тому, ЧТО ЧЕЛОВЕК ВИДИТ, и по тегу. Раньше было два расхождения:
-        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title) — русский
+        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title): русский
         #     заголовок иностранной статьи поиском НЕ находился;
         # (2) теги в поиск не входили вовсе: набрать «Бурение» и получить статьи этого
         #     направления было нельзя, хотя в сборщике дайджеста такой поиск уже есть
@@ -610,14 +610,14 @@ def list_articles(
         clauses.append(f"{marks.article_status_sql()} = %s")
         params.append(status)
     elif not changed_only:
-        # Пометка «Шум»/«Дубликат» — это «убрать с глаз», и она обязана убирать.
+        # Пометка «Шум»/«Дубликат» это «убрать с глаз», и она обязана убирать.
         # Раньше лента не фильтровала статусы вообще, поэтому помеченное продолжало
         # висеть у того, кто его пометил (замер 24.07: 104 таких статьи в ленте).
         # Отметка общая (#111): «шум», поставленный одним, прячет статью у всех. Явный
         # фильтр по статусу и вкладка «Со статусом»
-        # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
+        # (changed_only) по-прежнему показывают помеченное: иначе его не пересмотреть.
         # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
-        # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
+        # «отработано, с глаз долой»: в том числе после снятия статьи из дайджеста.
         clauses.append(f"{marks.article_status_sql()} NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
         clauses.append(f"{marks.article_status_sql()} <> 'new'")
@@ -628,7 +628,7 @@ def list_articles(
         # Ещё НЕ оценённые статьи (у публикации нет балла: «Карточка» не ответила, у статьи без сигнала нет строки в
         # article_scores) не «низкобалльные»:
         # балла у них попросту нет, и COALESCE(...,0) выдавал бы за 0, отсекая свежий приток
-        # порогом. Порог применяем только к УЖЕ оценённым — иначе новые статьи исчезают из
+        # порогом. Порог применяем только к УЖЕ оценённым: иначе новые статьи исчезают из
         # ленты до прохода ИИ и она выглядит замороженной. Тот же принцип, что строкой ниже
         # для c.relevant IS NULL: необработанное не прячем.
         clauses.append("(pub.total_score IS NULL OR pub.total_score >= %s)")
@@ -642,7 +642,7 @@ def list_articles(
     if date_to:
         clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
         params.append(date_to)
-    # Базовая видимость — одно условие с её счётчиками, архивом и сборщиком выпуска
+    # Базовая видимость: одно условие с её счётчиками, архивом и сборщиком выпуска
     # (отсев «Отбором» и гейтом до него, помеченное на удаление, архивный источник, перепечатка): иначе цифры
     # над лентой расходятся с ней самой (23.09: 2 205 против 1 934). См. feed_window.visible_sql.
     clauses.append(feed_window.visible_sql())
@@ -695,7 +695,7 @@ def dashboard_stats(
     month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
-    """Счётчики ленты — по тому же окну месяца, что и сама лента.
+    """Счётчики ленты: по тому же окну месяца, что и сама лента.
 
     Иначе плитки считали бы всю базу (31 тыс.), а лента показывала бы сентябрь
     (2 тыс.), и цифры над лентой перестали бы с ней сходиться. `window` сообщает
@@ -725,7 +725,7 @@ def feed_window_months(user: dict[str, Any] = Depends(require_user)) -> dict[str
 
 @app.patch("/api/articles/{article_id}")
 def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    # Статус и выбор в дайджест — общая отметка (#111). selected_for_digest сводится к статусу.
+    # Статус и выбор в дайджест: общая отметка (#111). selected_for_digest сводится к статусу.
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
         # Снятие из дайджеста ведёт в `archive` (решение владельца 12.09; раньше был
@@ -738,7 +738,7 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Article not found")
-    # Архив — только просмотр (решение владельца 23.09): статус и «в дайджест» у статьи
+    # Архив: только просмотр (решение владельца 23.09): статус и «в дайджест» у статьи
     # прошлого месяца не меняются ни из интерфейса, ни прямым запросом. Ради этого и
     # сделан зазор до FEED_ROLLOVER_DAY: выпуск собирается, пока прошлый месяц виден.
     window = feed_window.current()
@@ -755,8 +755,8 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         article_id, status=target_status, analyst_comment=patch.analyst_comment, user_id=int(user["id"]),
     )
     # Журнал обратной связи. До 12.09 таблица signal_feedback_events была мёртвой:
-    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки —
-    # вот этот эндпоинт — не писал вовсе. Поэтому на вопрос заказчика «я всё что
+    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки:
+    # вот этот эндпоинт: не писал вовсе. Поэтому на вопрос заказчика «я всё что
     # выделил как шум, он на этом обучился?» честный ответ был «обучаться не на чем».
     # Прежний статус возвращает сама запись: в отметке одна строка на статью, истории
     # переходов там нет, после UPDATE прежнее значение уже не достать.
@@ -778,8 +778,8 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
                 comment=patch.analyst_comment,
             )
     except Exception:  # noqa: BLE001
-        # Журнал не должен ронять саму пометку: потерять событие — неприятно,
-        # не дать человеку пометить статью — хуже.
+        # Журнал не должен ронять саму пометку: потерять событие: неприятно,
+        # не дать человеку пометить статью: хуже.
         logger.exception("не удалось записать событие обратной связи article_id=%s", article_id)
     return {"ok": True}
 
@@ -806,10 +806,10 @@ def source_health(
 
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    # Пользователь вставляет просто ссылку — система пробует к ней КАЖДУЮ стратегию:
+    # Пользователь вставляет просто ссылку, система пробует к ней КАЖДУЮ стратегию:
     # RSS-ленту (и проверяет, что она не мёртвая), обычный запрос, браузер; если с
-    # РФ-ядра сайт закрыт — ставит сбор через зарубежный воркер. До 18.09 здесь был
-    # только поиск RSS, а без него — молча `request` по введённому адресу: так
+    # РФ-ядра сайт закрыт: ставит сбор через зарубежный воркер. До 18.09 здесь был
+    # только поиск RSS, а без него, молча `request` по введённому адресу: так
     # заводились источники, не давшие ни одной статьи никогда. RSS, переданный явно,
     # берётся как есть.
     site_url = (payload.url or payload.rss_url or "").strip()
@@ -826,7 +826,7 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
         else:
             # Сайт открылся, но статей не дала ни одна стратегия. Заводим выключенным:
             # включённый он опрашивался бы вечно впустую. Настроить селектор и
-            # включить — руками, отчёт перебора в ответе.
+            # включить: руками, отчёт перебора в ответе.
             parse_strategy, listing_url, enabled = "request", site_url, False
     source_id = repository.add_rss_source(
         name=payload.name,
@@ -927,7 +927,7 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
 def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Убрать источник из работы: перестать опрашивать И убрать его статьи из ленты.
 
-    Требование заказчика 12.09 («выключаем источник — не парсится больше, уходит в архив,
+    Требование заказчика 12.09 («выключаем источник: не парсится больше, уходит в архив,
     его статьи уходят из выборки»). Жёсткого DELETE намеренно нет: articles.source_id
     ссылается на sources БЕЗ ON DELETE, поэтому удаление источника со статьями Postgres
     просто отклонит, а каскад уничтожил бы корпус и историю ИИ-затрат. Архив обратим.
@@ -947,7 +947,7 @@ def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)
 
 @app.post("/api/sources/{source_id}/unarchive")
 def unarchive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть источник из архива. Включать сбор НЕ начинаем — это отдельное решение."""
+    """Вернуть источник из архива. Включать сбор НЕ начинаем это отдельное решение."""
     with get_connection() as conn:
         cur = conn.execute(
             "UPDATE sources SET archived_at = NULL, updated_at = now() WHERE id = %s RETURNING id, name",
@@ -1035,7 +1035,7 @@ def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin))
     try:
         result = repository.save_tags([i.model_dump() for i in items])
     except ValueError as exc:
-        # Разорванная связь родитель-подтег — не 500, а внятный отказ: сохранение целиком
+        # Разорванная связь родитель-подтег, не 500, а внятный отказ: сохранение целиком
         # отменяется, дерево остаётся прежним.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
@@ -1046,14 +1046,14 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
     try:
         repository.delete_tag(tag_id)
     except ValueError as exc:
-        # Служебный тег-приёмник удалить нельзя — объясняем, а не 500.
+        # Служебный тег-приёмник удалить нельзя: объясняем, а не 500.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
 # --- Дочерние общества (решение владельца 20.10) ------------------------------------------------
 # Список «дочка → мать» для фильтра «всё про компанию»: ведут на экране, правка действует без выката.
-# Проверки и разбор вставки — company_parents.py, база — db/company_parents_repo.py.
+# Проверки и разбор вставки: company_parents.py, база: db/company_parents_repo.py.
 # Одна ли это компания: правило фильтра (signal_card_filters.company_rule), берётся раз на запрос.
 
 
@@ -1098,7 +1098,7 @@ def delete_company_parent(pair_id: int, user: dict[str, Any] = Depends(require_a
 def import_company_parents(
     payload: CompanyParentsImportIn, user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply — все строки одной
+    """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply: все строки одной
     транзакцией, если ни в одной нет ошибки; иначе 400 с тем же разбором (и message), ничего не записано."""
     if not payload.apply:
         return company_parents.paste_answer(_company_parent_lines(payload.text, company_parents_repo.pairs()),
@@ -1145,7 +1145,7 @@ def list_scoring_criteria(
     profile: str = Query(ARTICLE_SCORING_PROFILE),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    """Критерии профиля — вкладки экрана «Скоринг» (сессия G). Без параметра — business:
+    """Критерии профиля: вкладки экрана «Скоринг» (сессия G). Без параметра, business:
     старый бандл фронта профилей не знает и работает с набором ленты, как раньше."""
     try:
         rows = repository.list_enabled_scoring_criteria(profile)
@@ -1190,11 +1190,11 @@ class FeedbackIn(BaseModel):
 @app.get("/api/feedback/reasons")
 def feedback_reasons(target: str = Query("article", pattern="^(article|source)$"),
                      user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
-    """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
+    """Словарь быстрых причин. Фронт не хранит свою копию: иначе списки разойдутся,
     как уже разошлись четыре независимых списка статусов статьи.
 
-    `target=source` — для ОС по источнику: без причин про сам сигнал («Не тот блок»).
-    Какая причина к чему применима, решает сервер — он же отбивает её при сохранении."""
+    `target=source`, для ОС по источнику: без причин про сам сигнал («Не тот блок»).
+    Какая причина к чему применима, решает сервер: он же отбивает её при сохранении."""
     # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
     # статус платформы». Платформа выходит на корпоративный портал заказчика, и разговорный
     # тон («Уже было», «Годный сигнал») там неуместен.
@@ -1224,13 +1224,13 @@ def get_feedback(article_id: int | None = None, source_id: int | None = None,
 
 @app.post("/api/feedback")
 def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Оставить ОС по сигналу или по источнику: оценки 1–5, быстрая причина, комментарий.
+    """Оставить ОС по сигналу или по источнику: оценки 1-5, быстрая причина, комментарий.
 
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
-    (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+    (`/api/feedback/sources`) собирает их вместе: там и появляется общая картина.
 
-    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Явно
-    присланный пустой комментарий стирает его — так фронт шлёт очищенное поле. Не
+    Явный `"reason": null` снимает причину: так фронт шлёт повторный клик по чипу. Явно
+    присланный пустой комментарий стирает его: так фронт шлёт очищенное поле. Не
     присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
     comment = (payload.comment or "").strip() or None
@@ -1255,7 +1255,7 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
 @app.get("/api/feedback/sources")
 def feedback_sources(limit: int = Query(300, ge=1, le=1000),
                      user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
-    """Свод оценок по источникам — на что люди жалуются системно."""
+    """Свод оценок по источникам: на что люди жалуются системно."""
     return [_clean(row) for row in repository.feedback_source_summary(limit=limit)]
 
 
@@ -1292,15 +1292,15 @@ def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[st
 
 
 def _company_filter(
-    # «Всё про компанию» (#97): участник карточки — та же компания по правилу «одна компания» (word_forms) или её
+    # «Всё про компанию» (#97): участник карточки: та же компания по правилу «одна компания» (word_forms) или её
     # дочернее общество по списку «дочка → мать» (экран «Дочерние общества», решение владельца 20.10).
     company: str | None = Query(None, max_length=200),
-    # Имена участников и список дочек фильтр читает из базы — только после входа.
+    # Имена участников и список дочек фильтр читает из базы: только после входа.
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, list[str]] | None:
-    """Фильтр «всё про компанию» — здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
+    """Фильтр «всё про компанию», здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
     signal_card_filters.company_group) и под какими именами участников в базе (names: выборка сверяет их точно).
-    Нет компании — нет фильтра; есть — фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
+    Нет компании: нет фильтра; есть: фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
     сигналов, а не все. Список дочек читается на каждом запросе: правка на экране «Дочерние общества» действует
     сразу, без выката. Список сигналов и сводка берут фильтр зависимостью: в одном запросе он считается один раз."""
     if not (company or "").strip():
@@ -1312,7 +1312,7 @@ def _company_filter(
 def _radar_screen_filters(
     maturity: str | None = Query(None, pattern="^(watch|shortlist|proven|reject)$"),
     theme: str | None = None,
-    # Поиск, период «Поступил» (даты по Москве) и балл — на сервере, по всему радару, а не по
+    # Поиск, период «Поступил» (даты по Москве) и балл: на сервере, по всему радару, а не по
     # загруженной странице (замечание заказчика 19.09).
     q: str | None = Query(None, max_length=200),
     since: date | None = None,
@@ -1320,25 +1320,25 @@ def _radar_screen_filters(
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
     # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
-    # поиском, архив) — только админу (решение владельца 05.10: эксперт заказчика тоже админ).
+    # поиском, архив): только админу (решение владельца 05.10: эксперт заказчика тоже админ).
     hidden: bool = False,
-    # Витрина (#95, ADR 0003): «technology» — технологический радар, как был; «business» —
+    # Витрина (#95, ADR 0003): «technology», технологический радар, как был; «business»:
     # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
     showcase: str = Query("technology", pattern="^(technology|business)$"),
-    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity —
-    # зрелость технологии; maturity выше — решение радара (наблюдать / кандидат / подтверждено).
+    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity:
+    # зрелость технологии; maturity выше: решение радара (наблюдать / кандидат / подтверждено).
     event_type: str | None = Query(None, max_length=100),
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
     technology_maturity: str | None = Query(None, max_length=100),
     # Страна (#137): имя справочника стран; сигнал находится и по стране события, и по стране участника.
     country: str | None = Query(None, max_length=100),
-    # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
+    # «Всё про компанию» (#97): с дочками по списку «дочка → мать» (_company_filter).
     company_filter: dict[str, list[str]] | None = Depends(_company_filter),
-    # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
+    # Раздел отклонённого «кто убрал → причина» (#130), только админу: вместо витрины его публикации любой
     # категории, у каждой короткая причина (section_reason).
     section: str | None = Query(None, max_length=60),
-    # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью» —
+    # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью»:
     # список тех же карточек, что посчитала плашка.
     tile: str | None = Query(None, pattern="^(new_7d|in_digest|with_feedback)$"),
     # Наличие ОС (решение владельца 03.11): with значит у карточки есть запись блока «Обратная связь» (её «Оценки
@@ -1369,7 +1369,7 @@ def _radar_screen_filters(
         "min_score": min_score,
         "max_score": max_score,
         **card,
-        # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
+        # Пустой список имён: фильтр, который ничего не нашёл, а не «без фильтра».
         "company_names": None if company_filter is None else company_filter["names"],
         "section": found_section,
         "tile": tile,
@@ -1388,15 +1388,15 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
-    # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
+    # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
-    # Месяц выпуска карточки закрыт — «В дайджест» и «Убрать» на экране неактивны. Правило то
+    # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
     # же, что у отказа в PATCH /api/signals/{id}: экран своей формулы не держит.
     window = feed_window.current()
     rows = []
     for row in cards:
-        # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
-        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
+        # Словесная оценка: по порогам ленты (80/65/40), как у бизнес-сигналов (документ
+        # заказчика 19.09); цвет балла на экране: по этому слову, как в ленте. У сигнала с баллами второго
         # вызова «Карточки» (#132) его ступень: сильный, полезный, наблюдать, слабый. Балла нет, нет и подписи
         # (signal_scoring.unscored). Та же подпись у статьи в /api/articles: «Дайджест» и витрины показывают один балл.
         unscored = signal_scoring.unscored(row)
@@ -1421,7 +1421,7 @@ def signal_radar_weekly(
     """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
     weekly = repository.radar_weekly_summary(days=days)
     if user.get("role") != "admin":
-        # Отсеянное и скрытое — служебное, как и сам раздел: число и причины только админу.
+        # Отсеянное и скрытое, служебное, как и сам раздел: число и причины только админу.
         weekly.pop("filtered", None)
         weekly.pop("filtered_reasons", None)
     return _clean(weekly)
@@ -1434,12 +1434,12 @@ def signal_radar_summary(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра. С фильтром «всё про
-    компанию» — и кого он показывает (company_group: сама компания первой, затем её дочки по списку): экран пишет
+    компанию», и кого он показывает (company_group: сама компания первой, затем её дочки по списку): экран пишет
     это рядом с полем «Компания»."""
     _guard_hidden_radar(filters, user)
     summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
-        # Число отсеянных и скрытых — служебное, как и сами карточки.
+        # Число отсеянных и скрытых: служебное, как и сами карточки.
         summary.pop("rejected", None)
     if company_filter is not None:
         summary["company_group"] = company_filter["group"]
@@ -1448,8 +1448,8 @@ def signal_radar_summary(
 
 @app.get("/api/signals/dictionaries")
 def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»; и что можно
-    вписать, возвращая отклонённое (#132) — по справочнику «Отбора»."""
+    """Значения фильтров атрибутов карточки на экранах (#97): справочники агента «Карточка сигнала»; и что можно
+    вписать, возвращая отклонённое (#132): по справочнику «Отбора»."""
     from oiltech_digest.otbor_answer import return_choices
     from oiltech_digest.otbor_pack_format import load_dictionaries
 
@@ -1462,12 +1462,12 @@ def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
 
 
 def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:
-    """«В дайджест» и «Убрать» у карточки радара закрытого месяца — отказ (решение владельца
-    29.09), как статус статьи из архива ленты: выпуск прошлого месяца — только просмотр.
+    """«В дайджест» и «Убрать» у карточки радара закрытого месяца: отказ (решение владельца
+    29.09), как статус статьи из архива ленты: выпуск прошлого месяца: только просмотр.
 
-    Месяц карточки — месяц её поступления на радар по Москве (feed_window.signal_month_sql):
-    по нему сборщик кладёт её в выпуск. Открытые месяцы — окно ленты: текущий, а до
-    FEED_ROLLOVER_DAY ещё и прошлый, пока собирается его выпуск. Отказ — только если запрос
+    Месяц карточки: месяц её поступления на радар по Москве (feed_window.signal_month_sql):
+    по нему сборщик кладёт её в выпуск. Открытые месяцы, окно ленты: текущий, а до
+    FEED_ROLLOVER_DAY ещё и прошлый, пока собирается его выпуск. Отказ: только если запрос
     ставит или снимает «в дайджест»: другой статус у выбранной карточки тоже вывел бы её из
     выпуска закрытого месяца. Статус мимо выпуска, комментарий и отзыв окно не трогает.
     """
@@ -1503,9 +1503,9 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
             raise HTTPException(status_code=409, detail=f"В дайджест не ставится: {refusal}")
     article_id = repository.feed_signal_article(signal_id)
     if article_id is not None:
-        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка — его статьи, та же,
-        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи — «новая».
-        # Прочие статусы и комментарий статьи — в ленте статей, витрина их не меняет.
+        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка: его статьи, та же,
+        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи: «новая».
+        # Прочие статусы и комментарий статьи: в ленте статей, витрина их не меняет.
         if patch.status not in (None, "digest", "watch") or patch.analyst_comment is not None:
             raise HTTPException(status_code=422,
                                 detail="У сигнала ленты витрина меняет только отметку «в дайджест»")
@@ -1536,7 +1536,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         )
     was_selected = previous == "digest"
     if target_status is not None and (target_status == "digest") != was_selected:
-        # Выбор в дайджест — «Сильный сигнал» для обучения агента, один пример на карточку;
+        # Выбор в дайджест: «Сильный сигнал» для обучения агента, один пример на карточку;
         # снятие отметки (любым статусом и любым участником) гасит примеры этой карточки.
         # Учимся на смене отметки, а не на нажатии: повторная «в дайджест» второго примера не даёт.
         # Сбой обучения не должен отменять отметку, которую пользователь уже поставил.
@@ -1554,8 +1554,8 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 @app.post("/api/signals/{signal_id}/return")
 def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
                            user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», — отрасль, связь и
-    применение, категорию — и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
+    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор»,: отрасль, связь и
+    применение, категорию, и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
     человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит только он (решение 05.10)."""
     from oiltech_digest.db import otbor_store
     from oiltech_digest.otbor_answer import return_problems
@@ -1593,15 +1593,15 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
     if payload.article_id is None and payload.signal_id is None and not payload.source_url:
         raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
     if payload.signal_id is not None and not repository.judge_learns_from(payload.signal_id):
-        # Блок ОС (#130, решение владельца 22.10) — у сигнала ленты и у находки радара в бизнес-ленте: только
-        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт — ею, как и всей ОС,
+        # Блок ОС (#130, решение владельца 22.10), у сигнала ленты и у находки радара в бизнес-ленте: только
+        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт: ею, как и всей ОС,
         # будет управлять сервис ОС. Правок карточки и «дубля» у блока нет: экран их не предлагает, сервер не
         # принимает молча.
         if (payload.corrected_title or "").strip() or (payload.corrected_thesis or "").strip() \
                 or payload.duplicate_of_signal_id:
             raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
                                                         "правки карточки и «дубль» — у находки радара на радаре")
-        # Пустой блок не пишется: неизвестная оценка — не оценка, как на пути радара (store_signal_feedback).
+        # Пустой блок не пишется: неизвестная оценка: не оценка, как на пути радара (store_signal_feedback).
         verdict = _normalize_verdict(payload.verdict)
         if not (payload.comment.strip() or verdict or (payload.reason or "").strip()):
             raise HTTPException(status_code=400, detail="comment or structured feedback is required")
@@ -1686,8 +1686,8 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
 
 
 def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
-    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128) — не только блок ОС: категория меняется сразу, баллы
-    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора» — как раньше: блок ОС
+    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128), не только блок ОС: категория меняется сразу, баллы
+    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора», как раньше: блок ОС
     и память судьи. {"recategorized": новая категория} или пусто, если категория не менялась."""
     from oiltech_digest.signal_feedback import _normalize_verdict
 
@@ -1698,8 +1698,8 @@ def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[s
 
 
 def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any] | None:
-    """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
-    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути. Запись без
+    """Сохранённый блок ОС (#130): как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
+    экран добавляет его, не перечитывая витрину. Оценка: тем же словарём, каким её сохранили оба пути. Запись без
     оценки, причины и комментария (только правка заголовка, сути или «дубль») не блок: список и счётчик
     «Обратная связь: N» её не берут (решение владельца 03.11), поэтому None."""
     from oiltech_digest.signal_feedback import _normalize_verdict
@@ -1759,7 +1759,7 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
     from oiltech_digest import signal_discovery
 
     try:
-        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        # Модель поиска GPT и прочие его настройки (#138): решение ядра, едут в задаче.
         research = signal_discovery.research_settings(offline=payload.offline, days=payload.days)
     except signal_discovery.SearchSetupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1808,7 +1808,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
                        fresh: bool = False,
                        user: dict[str, Any] = Depends(require_user)) -> Response:
     """Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же выпуск и та же вёрстка, что у выгрузки
-    PDF, но для окна экрана — inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
+    PDF, но для окна экрана: inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
     отдаётся без повторной сборки (render_digest_preview_pdf); «Обновить PDF» (`fresh`) собирает заново."""
     content = build_digest_content(
         month=month,
@@ -1820,7 +1820,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
     )
     try:
         pdf = render_digest_preview_pdf(content, fresh=fresh)
-    except RuntimeError as exc:  # нет Chromium, занят сборкой, браузер упал — понятное сообщение, не 500
+    except RuntimeError as exc:  # нет Chromium, занят сборкой, браузер упал: понятное сообщение, не 500
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(
         content=pdf,
@@ -1842,7 +1842,7 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
 def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
     """Правка черновика выпуска: месяц «ГГГГ-ММ», не архивный, и без статей из архива.
 
-    Решение владельца 23.09: прошлый выпуск — только просмотр и выгрузка. Статью прошлого
+    Решение владельца 23.09: прошлый выпуск: только просмотр и выгрузка. Статью прошлого
     месяца нельзя провести и в выпуск открытого месяца: PUT принимает готовый список
     статей, и без этой проверки «из архива в дайджест» проходило бы запросом в обход ленты.
     """
@@ -1867,7 +1867,7 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
             status_code=409,
             detail=f"В выпуск нельзя добавить статьи из архива ({labels}): архив открыт только для просмотра.",
         )
-    # У каждого месяца свой выпуск (29.09). 1–4 числа открыты два месяца, и «Все месяцы» +
+    # У каждого месяца свой выпуск (29.09). 1-4 числа открыты два месяца, и «Все месяцы» +
     # «Сохранить draft» клали в черновик следующего месяца статьи предыдущего: тот их терял.
     foreign = sorted(m for m in periods if m != feed_window.month_key(issue_month))
     if foreign:
@@ -2009,7 +2009,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     decision = network_policy.route_digest_export(payload.export_format)
     job = background_jobs.enqueue(
         "digest_export",
-        payload.model_dump(),  # выпуск общий (#111): учётка — только владелец задачи
+        payload.model_dump(),  # выпуск общий (#111): учётка: только владелец задачи
         user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
@@ -2102,7 +2102,7 @@ def external_worker_claim(
 
 @app.get("/api/external-worker/consumers")
 def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
-    """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
+    """Сборки и контракты контейнеров NL: для скрипта выката на NL, где базы нет."""
     return _clean(repository.external_consumers_status())
 
 
@@ -2113,7 +2113,7 @@ def external_worker_page(
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
     """Сбор на РФ (добор находок радара, поручение владельца 04.11): страницу, которую воркер NL не открыл, качает
-    ядро со своего адреса — в аренде задачи и только для прогона радара; что ядро качает, а что нет, — core_page."""
+    ядро со своего адреса: в аренде задачи и только для прогона радара; что ядро качает, а что нет,: core_page."""
     lease = _sha256_hex(payload.lease_token)
     if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease):
         raise HTTPException(status_code=409, detail="Job lease is not active")
@@ -2175,14 +2175,14 @@ def external_worker_complete(
     lease_token_hash = _sha256_hex(payload.lease_token)
     # Баг T2 (двойной AI-расход): застолбить завершение АТОМАРНО до применения результата.
     # Пока идёт apply (запись карточек/скоринга + биллинг ai_processing_runs), задача в статусе
-    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст —
+    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст:
     # значит другой воркер не прогонит AI повторно. Лиз истёк/переотдан → 409, ничего не применяем.
     if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
     try:
         result = _apply_external_result(job, result, job_id)
     except Exception:
-        # apply упал — снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
+        # apply упал: снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
         repository.release_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash)
         raise
     ok = repository.finish_external_background_job(
@@ -2198,7 +2198,7 @@ def external_worker_complete(
 
 
 def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Записать итог внешней задачи в базу ядра — полный (complete) или частичный (release)."""
+    """Записать итог внешней задачи в базу ядра: полный (complete) или частичный (release)."""
     if job.get("kind") == "process_articles" and result.get("external_ai"):
         # Какие стадии писать, лежит в payload_json задачи (пересчёт после полного текста: только суть).
         # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи в нём это
@@ -2223,8 +2223,8 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         from oiltech_digest import signal_discovery, signal_search_trial
 
         # Конверт ЗАМЕНЯЕТСЯ итогом: кандидаты с подтверждениями и промптами весят
-        # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
-        # Пробный прогон широкого поиска (#138) — по задаче ядра: находки отдельно от радара, затем их «Отбор».
+        # мегабайты и уже лежат в signal_training_examples: в задаче только счётчики.
+        # Пробный прогон широкого поиска (#138), по задаче ядра: находки отдельно от радара, затем их «Отбор».
         trial = (job.get("payload_json") or {}).get("search_trial")
         applied = signal_discovery.apply_external_result(result, job_id=job_id, **({"trial": True} if trial else {}))
         if trial:
@@ -2264,7 +2264,7 @@ def external_worker_release(
 ) -> dict[str, Any]:
     """Воркер останавливается (выкат NL) и возвращает задачу сам, не дожидаясь конца аренды.
 
-    Сделанная часть пакета записывается, как при complete, и вычитается из задачи — при
+    Сделанная часть пакета записывается, как при complete, и вычитается из задачи: при
     следующей выдаче модель не зовётся за уже оплаченное (contract.remaining_after_partial).
     Задача сразу в очереди, попытка не списывается."""
     job = repository.get_background_job(job_id)
@@ -2280,7 +2280,7 @@ def external_worker_release(
     try:
         applied = _apply_external_result(job, partial, job_id) if partial else None
     except Exception:
-        # Итог не лёг — вернуть задачу сразу и целиком: воркер уходит, ждать аренду незачем.
+        # Итог не лёг, вернуть задачу сразу и целиком: воркер уходит, ждать аренду незачем.
         repository.requeue_released_external_job(
             job_id, lease_token_hash=lease_token_hash, payload=contract.without_reservation(original),
             note=f"Возвращена воркером ({reason}); частичный итог не записан",
@@ -2316,18 +2316,18 @@ def external_worker_fail(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
-    # Окончательный сбой отправки кода — текст с кодом стирается (повторяемый — остаётся до попытки).
+    # Окончательный сбой отправки кода: текст с кодом стирается (повторяемый: остаётся до попытки).
     if (repository.get_background_job(job_id) or {}).get("kind") == admission.KIND:
         admission.settle_notifications()
     return {"ok": True}
 
 
 def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> bool:
-    """Сбой ИИ-пакета со снимком сделанного (шаг завис — external_worker.LeaseKeeper).
+    """Сбой ИИ-пакета со снимком сделанного (шаг завис: external_worker.LeaseKeeper).
 
-    Сделанное пишется и вычитается из задачи, как при release, — модель не зовётся второй раз
+    Сделанное пишется и вычитается из задачи, как при release,: модель не зовётся второй раз
     за оплаченное. Но попытка списывается (repository.fail_finalizing_external_job): зависание
-    может сидеть в самой задаче. False — снимок не принимается (вид без частичного итога,
+    может сидеть в самой задаче. False: снимок не принимается (вид без частичного итога,
     пробный прогон): тогда это обычный fail."""
     job = repository.get_background_job(job_id)
     if job is None:
@@ -2350,7 +2350,7 @@ def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> boo
         remaining = contract.remaining_after_partial(job.get("kind"), original, payload.result)
         applied = _apply_external_result(job, payload.result, job_id)
     except Exception:
-        # Снимок не лёг — задача уходит целиком, как обычный fail.
+        # Снимок не лёг: задача уходит целиком, как обычный fail.
         fail(contract.without_reservation(original), "частичный итог не записан")
         raise
     if remaining is None:
@@ -2370,7 +2370,7 @@ def monthly_stats(
     """Месячные результаты платформы + активность ВСЕХ пользователей.
 
     ADMIN-ONLY по решению владельца: раздел сводный, показывает работу каждого
-    пользователя и общий итог. Гейт стоит здесь, на API, а не только во фронте —
+    пользователя и общий итог. Гейт стоит здесь, на API, а не только во фронте:
     аудит изоляции 24.07 показал, что фронтовый гейт без серверного (брендинг,
     maintenance) означает, что любой залогиненный получает данные запросом в обход UI.
     """
@@ -2392,7 +2392,7 @@ def analytics_monthly(
 ) -> dict[str, Any]:
     """Месячная аналитика платформы: воронка, источники, темы, скорость, цели ГД.
 
-    Только администратору — решение владельца 19.09 («показываем только админам»):
+    Только администратору: решение владельца 19.09 («показываем только админам»):
     в ответе стоимость ИИ, коммерческая сторона. Гейт на API, а не только во фронте
     (аудит изоляции 24.07)."""
     return _clean(analytics.monthly_analytics(months, include_cost=True))
@@ -2462,7 +2462,7 @@ def digest_export(
             top_tag=top_tag.strip() or None,
         )
         repository.finish_export_job(job_id, "ok", result["path"])
-    except RuntimeError as exc:  # PDF без Chromium и т.п. — понятное сообщение, не 500
+    except RuntimeError as exc:  # PDF без Chromium и т.п.: понятное сообщение, не 500
         repository.finish_export_job(job_id, "failed", error_message=str(exc))
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -2534,9 +2534,9 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "refetch_text": lambda payload, job_id: external_fetch.build_refetch_text_payload(payload),
     # Агенты (полоса external-agents): снимок базы для радара.
     "signal_discovery": lambda payload, job_id: _signal_discovery_payload(payload),
-    # Агент «Карточка сигнала» (#96): публикации и справочники — воркеру без базы.
+    # Агент «Карточка сигнала» (#96): публикации и справочники: воркеру без базы.
     "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
-    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС — воркеру без базы.
+    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС: воркеру без базы.
     "otbor": lambda payload, job_id: otbor.build_payload(payload),
     # «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», с его категорией и связью.
     "signal_summary": lambda payload, job_id: signal_summary.build_payload(payload),
@@ -2546,7 +2546,7 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
 
 
 def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Payload для воркера — по таблице полос (lanes.py), а не по имени очереди.
+    """Payload для воркера: по таблице полос (lanes.py), а не по имени очереди.
 
     Раньше ИИ-виды собирались только при queue_name == "external-ai": задача той же
     природы в новой полосе (external-ai-bulk) ушла бы воркеру сырым payload без статей."""
@@ -2564,8 +2564,8 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
 
     Вес у балла статьи берётся из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
     после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
-    профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
-    в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
+    профилей снимка нет (или он битый): вес текущий, как раньше. Вес достаётся из снимка
+    в запросе: сам снимок в каждой строке разбивки: ~0,7 КБ × пять подпунктов × до 2000
     статей ленты, мегабайты на каждое открытие ленты (ревью PR #82)."""
     if not article_ids:
         return {}
@@ -2674,11 +2674,11 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         tag = f"{row['parent_tag_name']} / {tag}"
     score = float(row["total_score"]) if row.get("total_score") is not None else None
     # Эмодзи снимаем НА ВЫДАЧЕ, а не при вставке (решение владельца 12.09:
-    # «чтобы в любой части сигнала — название, суть и так далее — не было эмодзи»).
-    # Этот сериализатор — единственный шов, через который лента, поиск и карточка
+    # «чтобы в любой части сигнала: название, суть и так далее: не было эмодзи»).
+    # Этот сериализатор: единственный шов, через который лента, поиск и карточка
     # получают текст, поэтому чистка здесь накрывает весь пользовательский показ.
     # Исходники в БД не трогаем: content_hash остаётся прежним, бэкфилл не нужен,
-    # решение обратимо. Экспорт дайджеста идёт мимо — он чистится в processing/digest.py.
+    # решение обратимо. Экспорт дайджеста идёт мимо: он чистится в processing/digest.py.
     return {
         "id": row["id"],
         "title": normalize.strip_emoji(row["title"]),
@@ -2734,7 +2734,7 @@ def _date(value: Any) -> str | None:
 # Приём файлов: загрузка документа, карточка, оригинал
 # =========================================================================
 # Разбор идёт ИНЛАЙНОМ в этом процессе, а не фоновой задачей, и это осознанное
-# отступление от спеки под срок. Основание — замер: pypdf на 299-страничном документе
+# отступление от спеки под срок. Основание, замер: pypdf на 299-страничном документе
 # держит пик 35 МБ и 5,5 секунды, а размер файла ограничен 25 МБ. Фоновая задача
 # потребовала бы локального обработчика, а тип без него не откладывается, а гибнет:
 # локальный воркер заберёт задачу и терминально завалит её как неизвестную.
@@ -2789,7 +2789,7 @@ async def upload_document(
     try:
         parsed = doc_parsing.parse_document(data, kind)
     except DocumentError as exc:
-        # Скан, пароль, повреждение — понятный отказ, а не пустая карточка. Разбор
+        # Скан, пароль, повреждение: понятный отказ, а не пустая карточка. Разбор
         # документа без текстового слоя дал бы уверенную сводку из ничего.
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -2855,7 +2855,7 @@ def download_document(document_id: int, user: dict[str, Any] = Depends(require_u
     if document is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     path = Path(document["storage_path"]).resolve()
-    # Проверка принадлежности каталогу. Существующая выдача файлов её НЕ делает —
+    # Проверка принадлежности каталогу. Существующая выдача файлов её НЕ делает:
     # копировать тот образец нельзя.
     if not str(path).startswith(str(_documents_dir().resolve())) or not path.exists():
         raise HTTPException(status_code=404, detail="Файл недоступен")
@@ -2936,7 +2936,7 @@ async def external_worker_save_material(
         file_fields = {"file_name": (file.filename or "файл")[:300], "file_path": str(path), "file_size": len(content)}
     row, created = colleague_materials.save(fields, **file_fields)
     if created:
-        # Материал — сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
+        # Материал, сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
         # записан, сигнал заведёт команда накопленных (otbor-materials).
         try:
             row = {**row, "signal_id": material_signals.to_signal(row)}
@@ -2977,7 +2977,7 @@ def external_worker_list_materials(
     offset: int = Query(default=0, ge=0),
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
-    """История материалов автора со статусом, страницами — для команды бота /history."""
+    """История материалов автора со статусом, страницами: для команды бота /history."""
     rows = colleague_materials.list_materials(limit=limit, tg_user_id=tg_user_id, offset=offset)
     return {"ok": True, "materials": [_clean(colleague_materials.brief(row)) for row in rows],
             "total": colleague_materials.count_materials(tg_user_id=tg_user_id)}
@@ -3013,7 +3013,7 @@ def update_colleague_material(
     payload: ColleagueMaterialPatch,
     user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Правка материала из бота на платформе (решение владельца 23.10) — только админ, проверки как у бота."""
+    """Правка материала из бота на платформе (решение владельца 23.10): только админ, проверки как у бота."""
     try:
         row = colleague_materials.update_material(material_id, payload.model_dump(exclude_unset=True),
                                                   user_id=int(user["id"]))
@@ -3026,8 +3026,8 @@ def update_colleague_material(
 
 @app.delete("/api/materials/{material_id}")
 def delete_colleague_material(material_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Удаление материала из бота на платформе (решение владельца 23.10) — только админ. Сигнал материала уходит в
-    архив; выбранный «в дайджест» — отказ 409 с объяснением (ревью PR #155)."""
+    """Удаление материала из бота на платформе (решение владельца 23.10): только админ. Сигнал материала уходит в
+    архив; выбранный «в дайджест»: отказ 409 с объяснением (ревью PR #155)."""
     try:
         deleted = colleague_materials.delete_material(material_id)
     except colleague_materials.MaterialInDigest as exc:
@@ -3061,7 +3061,7 @@ def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
         "anchor_unit": row.get("anchor_unit"),
         "anchor_count": row.get("anchor_count"),
         # Сколько якорей без текста. На реальном заключении экспертизы это 67 страниц
-        # из 107 — пользователь обязан видеть, что часть документа не прочитана,
+        # из 107: пользователь обязан видеть, что часть документа не прочитана,
         # иначе полнота карточки выглядит выше, чем она есть.
         "empty_anchors": row.get("empty_anchors"),
         "text_chars": row.get("text_chars"),

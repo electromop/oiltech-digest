@@ -50,7 +50,7 @@ def png(width: int, height: int) -> bytes:
 
 
 class ImageHost(str):
-    """Адрес сайта издателя; `revive()` — сайт ожил, и картинка /revives.png, на которую он отказывал, отдаётся."""
+    """Адрес сайта издателя; `revive()`: сайт ожил, и картинка /revives.png, на которую он отказывал, отдаётся."""
 
     revived = False
 
@@ -66,7 +66,7 @@ def image_host():
     host_type = type("Host", (ImageHost,), {"revived": False})
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 — имя задаёт http.server
+        def do_GET(self) -> None:  # noqa: N802: имя задаёт http.server
             body = files["/fit.png"] if self.path == "/revives.png" and host_type.revived else files.get(self.path)
             self.send_response(200 if body else 403)
             if body:
@@ -87,7 +87,7 @@ def image_host():
 
 
 def pdf_images(pdf: bytes) -> list[list[tuple[int, int]]]:
-    """Растровые картинки листов PDF (размер в точках). Заглушка темы — SVG, Chromium рисует её вектором: в этом
+    """Растровые картинки листов PDF (размер в точках). Заглушка темы, SVG, Chromium рисует её вектором: в этом
     списке её нет."""
     from pypdf import PdfReader
 
@@ -104,7 +104,7 @@ def pdf_image_boxes(pdf: bytes) -> list[list[tuple[tuple[int, int], float, float
 
     def multiply(m: list[float], n: list[float]) -> list[float]:
         a, b, c, d, e, f = m
-        A, B, C, D, E, F = n  # noqa: N806 — обозначения матрицы PDF
+        A, B, C, D, E, F = n  # noqa: N806: обозначения матрицы PDF
         return [a * A + b * C, a * B + b * D, c * A + d * C, c * B + d * D, e * A + f * C + E, e * B + f * D + F]
 
     def walk(stream, resources, ctm: list[float], found: list) -> None:
@@ -153,7 +153,7 @@ def pdf_document(pdf: bytes) -> dict:
 
 def pdf_figures(pdf: bytes) -> list[str]:
     """Подписи картинок размеченного PDF (/Alt у рисунков структуры документа) по порядку документа: так видно, что
-    нарисовано на месте картинки карточки — своя картинка или рисунок какой темы."""
+    нарисовано на месте картинки карточки: своя картинка или рисунок какой темы."""
     from pypdf import PdfReader
     from pypdf.generic import ArrayObject, DictionaryObject
 

@@ -140,7 +140,7 @@ def test_bot_history_pages_with_total_and_status(core):
     assert {row["id"] for row in first["materials"]}.isdisjoint(row["id"] for row in rest["materials"])
 
 
-# --- правка и удаление на платформе (решение владельца 23.10): только админ, проверки — те же, что у бота ---
+# --- правка и удаление на платформе (решение владельца 23.10): только админ, проверки: те же, что у бота ---
 
 
 def _as(role):
@@ -165,7 +165,7 @@ def test_admin_edits_material_with_bot_rules(core):
     assert (edited["verdict"], edited["verdict_comment"]) == ("approved", None)
     # Поле, которого нет в правке, не меняется.
     assert edited["description"] == saved["description"]
-    # Короткое описание и ссылка у события — отказ с причиной, как у бота.
+    # Короткое описание и ссылка у события: отказ с причиной, как у бота.
     assert core.patch(f"/api/materials/{saved['id']}", json={"description": "коротко"}).status_code == 422
     assert core.patch(f"/api/materials/{saved['id']}", json={"url": "https://example.com/x"}).status_code == 422
     assert core.patch(f"/api/materials/{saved['id']}", json={}).status_code == 422
@@ -182,7 +182,7 @@ def test_only_admin_edits_and_deletes_materials(core):
 
 
 def test_delete_removes_material_and_its_file_unless_shared(core):
-    # Файл на диске назван по отпечатку: одинаковый файл двух сообщений — один файл на двоих.
+    # Файл на диске назван по отпечатку: одинаковый файл двух сообщений: один файл на двоих.
     first = _post(core, _material(kind="file", tg_message_id=80),
                   file=("a.pdf", b"%PDF same", "application/pdf")).json()["material"]
     second = _post(core, _material(kind="file", tg_message_id=81),

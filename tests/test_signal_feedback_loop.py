@@ -59,7 +59,7 @@ def test_weekly_summary_counts_radar_filtered_reasons_review_and_feedback(isolat
     assert report["filtered_reasons"] == [{"reason": "бизнес-сигнал", "count": 2},
                                           {"reason": "отсеяно (судья)", "count": 1}]
     assert [row["id"] for row in report["top"]] == [best, reviewed]
-    # Ждут разбора — карточки радара без вердикта: best и вне недели old.
+    # Ждут разбора, карточки радара без вердикта: best и вне недели old.
     assert report["awaiting_review"] == 2
     assert (report["feedback"], report["feedback_verdicts"]) == (1, [{"verdict": "approved", "count": 1}])
 

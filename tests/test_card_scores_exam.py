@@ -1,7 +1,7 @@
-"""Экзамен «Карточки» (#133, спека #128), шов 2 — тема основного вызова и баллы второго на подставной модели.
+"""Экзамен «Карточки» (#133, спека #128), шов 2: тема основного вызова и баллы второго на подставной модели.
 
-Пакет и разметка — card_scores_exam_support: «Отбор» эксперта как в otbor_exam_support, у взятых бизнес- и
-технологических строк — баллы, общая оценка и тема по кругу; выгрузка с ядра — с той же изолированной базы.
+Пакет и разметка, card_scores_exam_support: «Отбор» эксперта как в otbor_exam_support, у взятых бизнес- и
+технологических строк: баллы, общая оценка и тема по кругу; выгрузка с ядра: с той же изолированной базы.
 """
 
 import json
@@ -12,9 +12,9 @@ from oiltech_digest import signal_card, signal_scores
 from oiltech_digest.db import repository
 from tests.card_scores_exam_support import (CARD, LUNA, MATURITY, MINI, SUMMARY, export_control, flat, oracle_card,
                                             oracle_scores, part_rows, run_exam)
-from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
+from tests.card_scores_exam_support import scores_pack  # noqa: F401: фикстура
 from tests.otbor_pack_support import THEMES
-from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
+from tests.otbor_pack_support import pack  # noqa: F401: фикстура
 
 
 def test_a_model_that_scores_like_the_expert_passes_and_the_main_call_measures_the_theme(scores_pack, monkeypatch):
@@ -24,7 +24,7 @@ def test_a_model_that_scores_like_the_expert_passes_and_the_main_call_measures_t
     strong = [one["id"] for one in scores_pack["control"]["strong"]]
     assert len(strong) == 2 and exam
     rows = len(exam) + len(strong)
-    # Суть — один раз на строку, основной вызов на модели ядра и второй вызов — по три прогона.
+    # Суть: один раз на строку, основной вызов на модели ядра и второй вызов: по три прогона.
     assert len(model.of("article_summary", SUMMARY)) == rows
     assert len(model.of("signal_card", CARD)) == rows * 3
     assert len(model.of("signal_scores", LUNA)) == rows * 3
@@ -37,16 +37,16 @@ def test_a_model_that_scores_like_the_expert_passes_and_the_main_call_measures_t
         scores = luna["scores"][variant]
         assert scores["band"]["agent"] == 1.0 and scores["order"]["agent"] == 1.0
         assert scores["band"]["extra_strong"] == 1.0 and scores["order"]["with_extra"] == 1.0
-    # Тема — у строк пакета (у «сильных сверх пакета» темы эксперта нет), версии инструкций — в отчёте.
+    # Тема: у строк пакета (у «сильных сверх пакета» темы эксперта нет), версии инструкций: в отчёте.
     assert report["theme"]["agent"] == 1.0 and report["theme"]["n"] == len(exam) * 3
     assert report["card_prompt_version"] == signal_card.PROMPT_VERSION
     assert report["scores_prompt_version"] == signal_scores.PROMPT_VERSION
-    # Деление — то же, что у экзамена «Отбора» (файл рядом с манифестом).
+    # Деление: то же, что у экзамена «Отбора» (файл рядом с манифестом).
     split = json.loads((scores_pack["out"] / "otbor_exam_split.json").read_text(encoding="utf-8"))
     assert report["split"] == {key: split[key] for key in ("tuning", "exam")}
 
-    # Рядом без модели, на строках пакета: константа — самая частая ступень эксперта, эксперт сам с собой — итог по
-    # весам из его баллов (в синтетике баллы и оценка согласованы), контроль — баллы ленты (77) и судьи (70): оба
+    # Рядом без модели, на строках пакета: константа: самая частая ступень эксперта, эксперт сам с собой: итог по
+    # весам из его баллов (в синтетике баллы и оценка согласованы), контроль, баллы ленты (77) и судьи (70): оба
     # «полезный».
     bands = [scores_pack["expert"][number]["band"] for number in exam]
     base = report["baseline"]
@@ -65,8 +65,8 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
 
     luna, mini = report["models"]
     assert (luna["model"], mini["model"]) == (LUNA, MINI)
-    # Один балл всем: итог у всех строк одинаковый — порядок только ничьи (половина), ступень «полезный» у всех, как у
-    # нынешних баллов ядра, — не лучше их (решение — по строкам пакета).
+    # Один балл всем: итог у всех строк одинаковый: порядок только ничьи (половина), ступень «полезный» у всех, как у
+    # нынешних баллов ядра,: не лучше их (решение: по строкам пакета).
     rows = report["rows"]
     pack = [one for one in rows if one["rating"] != "strong_extra"]
     useful = sum(one["band"] == "useful" for one in pack)
@@ -74,7 +74,7 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
     assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(useful / len(pack))
     assert set(luna["failed"]) == {"band", "order"} and luna["passed"] is False
     assert mini["passed"] is True and report["decision"]["model"] == MINI
-    # Основной вызов — один на прогон строки для всех моделей второго вызова: дата и зрелость у них одни и те же.
+    # Основной вызов, один на прогон строки для всех моделей второго вызова: дата и зрелость у них одни и те же.
     assert len(model.of("signal_card")) == len(rows) * 3
     assert len(model.of("article_summary")) == len(rows)
 
@@ -110,7 +110,7 @@ def test_the_band_passes_only_when_better_than_the_core_scores_on_the_same_rows(
     assert luna["failed"] == ["band"] and luna["scores"]["plain"]["order"]["agent"] == 1.0
     assert mini["scores"]["plain"]["band"]["agent"] < report["baseline"]["expert"]["band"]
     assert mini["passed"] is True and report["decision"]["model"] == MINI
-    # Порог в отчёте — доля ядра на тех же строках, с десятыми: рядом с ним целые проценты спрятали бы «не прошла».
+    # Порог в отчёте, доля ядра на тех же строках, с десятыми: рядом с ним целые проценты спрятали бы «не прошла».
     text = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1].read_text(encoding="utf-8")
     line = next(one for one in text.splitlines() if one.startswith("Пороги на строках пакета"))
     assert "лучше нынешних баллов ядра" in line and f"({useful:.1%}" in line
@@ -124,7 +124,7 @@ def test_the_band_is_judged_only_on_the_rows_with_a_core_score(scores_pack, monk
     uncontrolled = [number for number in exam if number not in controlled]
     assert controlled and uncontrolled  # иначе сценарий ничего не проверяет
     # gpt-6-luna права там, где балла ядра нет, а там, где он есть, ставит «полезный», как ядро (77 и 70): по всем
-    # строкам пакета она лучше порога, на строках ядра вровень с ним — ступень не пройдена.
+    # строкам пакета она лучше порога, на строках ядра вровень с ним: ступень не пройдена.
     _, report = run_exam(monkeypatch, scores_pack,
                          {LUNA: oracle_scores(scores_pack, {number: 72 for number in controlled})})
     [luna] = report["models"]
@@ -153,12 +153,12 @@ def test_both_keyword_variants_are_scored_and_the_one_closer_to_the_expert_is_ch
     keywords, plain = luna["scores"]["keywords"], luna["scores"]["plain"]
     assert plain["band"]["agent"] == 1.0
     assert keywords["band"]["agent"] < plain["band"]["agent"]
-    # Нынешняя настройка — с ключевыми словами, но ближе к эксперту вариант без них: его и берёт решение.
+    # Нынешняя настройка, с ключевыми словами, но ближе к эксперту вариант без них: его и берёт решение.
     assert report["keywords_setting"] is True
     assert luna["variant"] == "plain" and report["decision"] == {**report["decision"], "model": LUNA,
                                                                   "variant": "plain"}
     weak_feed = [one for one in report["rows"] if one["band"] == "weak" and one["id"].startswith("article:")]
-    assert weak_feed and luna["scores"]["totals"]["reject"]["max"] == 25.0  # итоги — варианта решения
+    assert weak_feed and luna["scores"]["totals"]["reject"]["max"] == 25.0  # итоги: варианта решения
 
 
 def test_the_main_call_theme_is_scored_against_the_expert_with_the_constant_and_core_control(scores_pack,
@@ -170,14 +170,14 @@ def test_the_main_call_theme_is_scored_against_the_expert_with_the_constant_and_
     other = {name: next(theme for theme in THEMES if theme != name) for name in THEMES}
     card = oracle_card(scores_pack, {number: {"theme": other[scores_pack["expert"][number]["theme"]]}
                                      for number in wrong})
-    # Ответы основного вызова лежат рядом с манифестом: новые ответы — после их удаления.
+    # Ответы основного вызова лежат рядом с манифестом: новые ответы: после их удаления.
     (scores_pack["out"] / "card_scores_exam_cards.json").unlink()
 
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)}, card=card)
 
     assert report["theme"]["agent"] == pytest.approx((len(exam) - len(wrong)) / len(exam))
     assert report["theme"]["passed"] is True
-    # Константа — самая частая тема эксперта; контроль — тег ленты и тема судьи (в синтетике у всех «Бурение»).
+    # Константа: самая частая тема эксперта; контроль: тег ленты и тема судьи (в синтетике у всех «Бурение»).
     themes = [scores_pack["expert"][number]["theme"] for number in exam]
     assert report["baseline"]["constant"]["theme"] == pytest.approx(max(map(themes.count, THEMES)) / len(exam))
     controlled = [number for number in exam if scores_pack["control"]["rows"].get(number, {}).get("theme")]
@@ -192,7 +192,7 @@ MARKET = "Рынок нефтесервиса"
 def test_market_against_industry_theme_errors_are_shown_now_and_in_the_previous_report(scores_pack, monkeypatch):
     _, before = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     [first] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))[-1:]
-    # Прежний отчёт — до #137 (#149): в ответах основного вызова ещё нет стран; «до» берёт из них только тему.
+    # Прежний отчёт, до #137 (#149): в ответах основного вызова ещё нет стран; «до» берёт из них только тему.
     saved = json.loads(first.read_text(encoding="utf-8"))
     for answers in saved["cards"]["answers"].values():
         for card in answers:
@@ -237,7 +237,7 @@ def test_the_previous_report_is_compared_on_the_current_rows_and_markup_of_the_s
     _, again = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)}, "--theme-before", str(edited))
 
     assert (again["theme"]["before"]["agent"], again["theme"]["before"]["n"]) == (1.0, first["theme"]["n"])
-    # Прогон другой части (или других строк) — другая база: «до» не сравнить, отказ до платных вызовов.
+    # Прогон другой части (или других строк), другая база: «до» не сравнить, отказ до платных вызовов.
     other = scores_pack["out"] / "previous_tuning_report.json"
     other.write_text(json.dumps({**saved, "part": "tuning"}, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(SystemExit, match="другой части"):
@@ -274,7 +274,7 @@ def test_criteria_error_counts_what_reaches_the_signal_and_freshness_follows_the
 
 
 def test_strong_signals_beyond_the_pack_are_shown_apart_and_do_not_decide(scores_pack, monkeypatch):
-    # Модель, которая всем ставит «сильный»: у «сильных сверх пакета» она права всегда, у пакета — только у сильных.
+    # Модель, которая всем ставит «сильный»: у «сильных сверх пакета» она права всегда, у пакета: только у сильных.
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: flat(90)})
 
     [luna] = report["models"]
@@ -284,7 +284,7 @@ def test_strong_signals_beyond_the_pack_are_shown_apart_and_do_not_decide(scores
     assert plain["band"]["extra_strong"] == 1.0
     assert plain["band"]["agent"] == pytest.approx(strong / len(pack))  # смесь с «сильными» дала бы больше
     assert luna["passed"] is False and report["decision"]["model"] is None
-    # Ступень эксперта против ступени модели: все ответы — «сильный», точность «кандидатов» — доля сильных эксперта.
+    # Ступень эксперта против ступени модели: все ответы: «сильный», точность «кандидатов»: доля сильных эксперта.
     bands = luna["scores"]["bands"]
     assert {band: counts.get("strong", 0) for band, counts in bands["matrix"].items()} == {
         band: sum(one["band"] == band for one in pack) * 3 for band in ("strong", "useful", "watch", "weak")}

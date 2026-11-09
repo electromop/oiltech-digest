@@ -1,6 +1,6 @@
 """Пакет эксперту для «Отбора» (#129, шов 2 спеки #128): справочники, черновики линеек, разметка вслепую.
 
-Шов — команда `otbor-expert-pack` на изолированной базе; синтетика — otbor_pack_support. Настоящий пакет
+Шов: команда `otbor-expert-pack` на изолированной базе; синтетика: otbor_pack_support. Настоящий пакет
 уходит эксперту вне репозитория (он публичный)."""
 
 from __future__ import annotations
@@ -64,13 +64,13 @@ def test_dictionaries_and_rubric_drafts_are_versioned_data():
         assert dictionaries[key]["title"] and dictionaries[key]["rule"], key
     for key in labels:
         assert all(value["rule"] and value["examples"] for value in dictionaries[key]["values"]), key
-    # Граница прямой связи и правило переносимой — то, что эксперт утверждает.
+    # Граница прямой связи и правило переносимой: то, что эксперт утверждает.
     direct, transferable, _ = dictionaries["oilfield_relevance"]["values"]
     assert "программы бурения" in direct["rule"] and "Котировки" in direct["rule"]
     assert "горнодобыча" in transferable["rule"]
     # Причина отказа главнее связи: старое событие и разные события отклоняются и при прямой связи (спека #128).
     assert "главнее" in dictionaries["decision"]["rule"]
-    # Старое событие у находки без даты публикации — от даты поступления.
+    # Старое событие у находки без даты публикации: от даты поступления.
     old_event = next(value for value in dictionaries["reject_reason"]["values"] if value["code"] == "old_event")
     assert "даты поступления" in old_event["rule"]
 
@@ -131,7 +131,7 @@ def test_apply_writes_every_group_blind_and_freezes_the_exam_inputs(corpus, tmp_
     assert not listed & excluded
     assert len(listed) == len(items) == 116
     assert data["window"] == {"since": "2026-09-22", "until": UNTIL, "days": 30}
-    # Версии справочников и линеек — в рецепте пакета: экзамен и агент сверяют их со своими.
+    # Версии справочников и линеек, в рецепте пакета: экзамен и агент сверяют их со своими.
     assert data["recipe"]["dictionaries_version"] == pack_format.load_dictionaries()["version"]
     assert data["recipe"]["rubrics_version"] == pack_format.load_rubrics()["version"]
     # Манифест хранит входы экзамена: заголовок, текст, дату публикации, издателя, ссылки находки.
@@ -153,12 +153,12 @@ def test_apply_writes_every_group_blind_and_freezes_the_exam_inputs(corpus, tmp_
     for group in ("feed_rejected", "feed_accepted", "radar_filtered", "radar_links"):
         positions = [index for index, value in enumerate(order) if value == group]
         assert positions != list(range(positions[0], positions[0] + len(positions))), group
-    # Тот же текст, что получит агент: отпечаток манифеста — от текста в таблице.
+    # Тот же текст, что получит агент: отпечаток манифеста: от текста в таблице.
     by_id = _rows(out)
     for item in items:
         text = by_id[item["id"]]["Текст публикации"]
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == item["text_sha256"]
-    # Колонки разметки пусты; связь заполнена только у прежних строк — ответом самого эксперта.
+    # Колонки разметки пусты; связь заполнена только у прежних строк: ответом самого эксперта.
     answer_columns = header[len(pack_format.GIVEN_COLUMNS):]
     for item_id, row in by_id.items():
         filled = {column for column in answer_columns if row[column] is not None}
@@ -174,13 +174,13 @@ def test_card_markup_rows_keep_what_the_expert_saw_and_his_relevance(corpus, tmp
     rows = _rows(out)
     for card in corpus["card"]["items"]:
         item = items[card["id"]]
-        # Входы — из прежнего манифеста (там поправки с первоисточника), а не из базы.
+        # Входы: из прежнего манифеста (там поправки с первоисточника), а не из базы.
         assert [item[key] for key in ("title", "text", "published", "publisher", "text_sha256")] == [
             card[key] for key in ("title", "text", "published", "publisher", "text_sha256")]
         assert rows[card["id"]]["Связь с нефтесервисом"] == corpus["card"]["relevance"][card["id"]]
     first = corpus["card"]["items"][0]["id"]
     assert items[first]["overrides"] == ["published"] and items[first]["override_note"]
-    # Прежняя находка с несколькими ссылками получает их список — агент получит его так же.
+    # Прежняя находка с несколькими ссылками получает их список: агент получит его так же.
     with_links, single = (items[f"signal:{one}"] for one in corpus["card_radar"])
     assert len(with_links["links"]) == 3 and single["links"] == []
     assert rows[with_links["id"]]["Ссылки находки"] and rows[single["id"]]["Ссылки находки"] is None
@@ -195,11 +195,11 @@ def test_links_of_a_find_are_its_input_without_the_search_model_values(corpus, t
     rows = _rows(out)
     many = items[f"signal:{corpus['links_many']}"]
     assert len(many["links"]) == otbor_pack.LINKS_LIMIT == 8
-    # Ссылка поиска: издатель — сайт из адреса (имя записала модель), даты нет (её дала модель поиска).
+    # Ссылка поиска: издатель: сайт из адреса (имя записала модель), даты нет (её дала модель поиска).
     assert many["links"][0] == {"url": "https://www.radar0.example.com/links-many",
                                 "title": "Page title links-many #0", "publisher": "radar0.example.com",
                                 "published": None}
-    # Ссылка на статью корпуса: заголовок, издатель и дата — статьи.
+    # Ссылка на статью корпуса: заголовок, издатель и дата: статьи.
     assert many["links"][1] == {"url": "https://news.example.org/corpus-link", "title": "Publisher title corpus-link",
                                 "publisher": "World Oil", "published": "2026-09-10"}
     # Ссылка поиска «режима ChatGPT» без докачки: заголовок написала модель поиска (бывает переводом), он в пакет не
@@ -210,7 +210,7 @@ def test_links_of_a_find_are_its_input_without_the_search_model_values(corpus, t
     cell = rows[many["id"]]["Ссылки находки"]
     assert cell.count("\n8. ") == 1 and "9. " not in cell and "Publisher title corpus-link" in cell
     assert "\n3. заголовок не известен (radar2.example.com, дата не указана)\nhttps://www.radar2.example.com/" in cell
-    # Главная публикация находки: издатель — сайт, даты публикации нет, ссылок одна — колонка пуста.
+    # Главная публикация находки: издатель: сайт, даты публикации нет, ссылок одна: колонка пуста.
     judge = rows[f"signal:{corpus['filtered']['judge'][0]}"]
     assert judge["Издатель"] == "radar0.example.com" and judge["Дата публикации"] is None
     assert judge["Ссылки находки"] is None
@@ -219,7 +219,7 @@ def test_links_of_a_find_are_its_input_without_the_search_model_values(corpus, t
 
 def test_received_date_anchors_the_age_of_an_event_without_a_publication_date(corpus, tmp_path):
     # У находки «режима ChatGPT» даты публикации нет (её дала модель поиска): возраст события эксперт и агент
-    # считают от дня, когда публикация пришла на платформу. У прежних строк его нет в манифесте — берётся из базы.
+    # считают от дня, когда публикация пришла на платформу. У прежних строк его нет в манифесте: берётся из базы.
     out = tmp_path / "pack"
 
     run_pack(*pack_args(corpus, out, "--apply"))
@@ -260,7 +260,7 @@ def test_a_file_material_brings_the_text_of_its_file(corpus, tmp_path):
     with_file, without = items[f"material:{readable}"], items[f"material:{broken}"]
     assert with_file["text"].startswith("Author description of file")
     assert "протокол промысловых испытаний долота" in with_file["text"] and with_file["file_note"] is None
-    # Файл не прочитался: только описание автора, причина — в манифесте.
+    # Файл не прочитался: только описание автора, причина: в манифесте.
     assert without["text"].startswith("Author description of broken") and "не прочитан" in without["file_note"]
 
 
@@ -277,7 +277,7 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
         "Отрасль", "Связь с нефтесервисом", "Брать или нет", "Причина отказа", "Категория", "Тема", *scores,
         "Почему такой балл", "Общая оценка", "Комментарий эксперта"]
     letter = {name: openpyxl.utils.get_column_letter(index + 1) for index, name in enumerate(header)}
-    # Шапка переносится по словам (длинные имена критериев видны целиком), номер строки — у верхнего края строки,
+    # Шапка переносится по словам (длинные имена критериев видны целиком), номер строки: у верхнего края строки,
     # заголовки колонок дат помещаются в ширину.
     assert all(cell.alignment.wrap_text and cell.alignment.vertical == "top" for cell in sheet[1])
     assert all(row[0].alignment.vertical == "top" for row in rows)
@@ -299,7 +299,7 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
     assert set(THEMES) <= shown and "Выключенная тема" not in shown
     assert repository.SYSTEM_TAG_UNCLASSIFIED not in shown
 
-    # Лист правил: у каждой колонки разметки правило и пример; значения справочников — с правилом и примерами; темы —
+    # Лист правил: у каждой колонки разметки правило и пример; значения справочников, с правилом и примерами; темы:
     # с описанием.
     rules = list(book[pack_format.RULES_SHEET].iter_rows(values_only=True))
     ruled = {row[0]: row[1] for row in rules[1:] if row[0] and row[1]}
@@ -307,13 +307,13 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
     by_value = {row[2]: row for row in rules[1:] if row[2]}
     listed = {"Отрасль", "Связь с нефтесервисом", "Брать или нет", "Причина отказа", "Категория"}
     for column in set(ruled) - listed - {"Ссылки находки", "Дата поступления"}:
-        assert "Пример" in ruled[column], column  # у колонок со справочником примеры — у значений
+        assert "Пример" in ruled[column], column  # у колонок со справочником примеры: у значений
     for value in ("нефтесервис", "прямая", "брать", "не брать", *REASONS, "бизнес"):
         assert "Примеры:" in by_value[value][3], value
     assert by_value["Бурение"][3] == THEMES["Бурение"]
     assert "вынести в дайджест" in by_value["Сильный сигнал"][3]
 
-    # На утверждение: шесть причин отказа и граница прямой связи; линейки — десять критериев.
+    # На утверждение: шесть причин отказа и граница прямой связи; линейки: десять критериев.
     approval = list(book[pack_format.APPROVAL_SHEET].iter_rows(values_only=True))
     assert approval[0][:2] == ("Раздел", "Значение") and "Решение" in approval[0]
     decision = approval[0].index("Решение")
@@ -326,7 +326,7 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
     assert all(row[2] and row[3] and row[4] and row[5] and "Пример: " in row[2] for row in lines[1:])
     guide = _sheet_text(book, "Инструкция")
     assert pack_format.load_dictionaries()["version"] in guide and rubrics["version"] in guide
-    # Тексты для эксперта — без длинного и среднего тире (кроме текстов издателей на листе разметки).
+    # Тексты для эксперта: без длинного и среднего тире (кроме текстов издателей на листе разметки).
     for name in ("Инструкция", pack_format.RULES_SHEET, pack_format.APPROVAL_SHEET, pack_format.RUBRICS_SHEET):
         assert not DASHES.search(_sheet_text(book, name)), name
 
@@ -381,7 +381,7 @@ def test_rubrics_must_match_the_criteria_on_the_scoring_screen(corpus, tmp_path,
 def test_same_seed_and_window_give_the_same_rows_and_never_overwrite(corpus, tmp_path):
     with repository.get_connection() as conn:
         source = conn.execute("SELECT id FROM sources WHERE name = 'World Oil'").fetchone()[0]
-        for number in range(12):  # кандидатов больше квоты: выбор — по зерну
+        for number in range(12):  # кандидатов больше квоты: выбор: по зерну
             article(conn, source, f"rejected-extra-{number}", "2026-10-07", relevant=False)
         conn.commit()
     first, second, other = tmp_path / "a", tmp_path / "b", tmp_path / "c"

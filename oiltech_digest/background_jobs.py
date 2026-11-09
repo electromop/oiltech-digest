@@ -28,12 +28,12 @@ from oiltech_digest.processing.pipeline import (
 _executor = ThreadPoolExecutor(max_workers=max(1, config.BACKGROUND_JOB_WORKERS))
 logger = logging.getLogger(__name__)
 DAILY_SIGNAL_DISCOVERY_MARKER = "daily_signal_discovery"
-# «Ежедневный» — это календарные сутки заказчика, а не «24 часа назад».
+# «Ежедневный» это календарные сутки заказчика, а не «24 часа назад».
 DAILY_SIGNAL_DISCOVERY_TZ = ZoneInfo("Europe/Moscow")
 
 
 def daily_signal_discovery_payload() -> dict[str, Any]:
-    """Задача ежедневного прогона радара. Модель и прочие настройки поиска GPT (#138) — решение ядра при постановке:
+    """Задача ежедневного прогона радара. Модель и прочие настройки поиска GPT (#138), решение ядра при постановке:
     без годной модели поиска задача не ставится (signal_discovery.SearchSetupError)."""
     from oiltech_digest import signal_discovery
 
@@ -61,9 +61,9 @@ def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
     marker = {"schedule": DAILY_SIGNAL_DISCOVERY_MARKER}
     # С полуночи по Москве, а не «за 24 часа»: 18.09 запуск в 17:15 МСК заблокировал
     # утренний крон 19.09 (прошло 14 ч из 24), и радар в тот день не отработал.
-    # При фиксированном часе крона окно ровно в 24 ч — ещё и гонка секунд.
+    # При фиксированном часе крона окно ровно в 24 ч: ещё и гонка секунд.
     lookback_hours = _hours_since_local_midnight()
-    # 'failed' — тоже попытка этого дня. Без него упавшая задача ставилась заново на
+    # 'failed': тоже попытка этого дня. Без него упавшая задача ставилась заново на
     # каждом цикле планировщика (30 мин): 134 запуска за 5 дней вместо 5. Пока падение
     # было мгновенным (403 на первом вызове), это ничего не стоило; падение в конце
     # прогона сжигало бы почти весь его бюджет каждые полчаса.
@@ -94,7 +94,7 @@ def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
 
     # Маршрут спрашиваем у политики, а не прибиваем к 'ru'. Радар ищет через
     # OpenAI (поиск GPT), а OpenAI отвечает РФ-адресам 403
-    # unsupported_country_region_territory — поэтому жёсткий регион 'ru' ронял
+    # unsupported_country_region_territory: поэтому жёсткий регион 'ru' ронял
     # ежедневную задачу КАЖДЫЙ раз, молча: сигналы стояли с 13.09.
     # Остальные ИИ-стадии давно ходят этим же маршрутом, через внешний воркер.
     from oiltech_digest import network_policy
@@ -141,7 +141,7 @@ def enqueue(
 def runs_inline(queue_name: str) -> bool:
     """Можно ли исполнить задачу в этом же процессе.
 
-    Внешняя очередь — решение маршрута: задачу должен взять воркер за рубежом. У агентов
+    Внешняя очередь, решение маршрута: задачу должен взять воркер за рубежом. У агентов
     20.09 планировщик без BACKGROUND_JOB_INLINE=0 выполнил радар из external-ai прямо на
     РФ-ядре → OpenAI 403, задача дня потеряна. Здесь маршрут не обходит ни один процесс,
     какой бы флаг ни забыли в compose."""
@@ -173,7 +173,7 @@ def worker_loop(
     stale_minutes = config.BACKGROUND_JOB_STALE_MINUTES if stale_minutes is None else stale_minutes
     queue_names = queue_names or config.BACKGROUND_JOB_QUEUES
     finalize_minutes = config.FINALIZE_STALE_MINUTES
-    sweep_interval = max(poll_seconds, 30.0)  # переочередь зависших — не чаще раза в ~30с
+    sweep_interval = max(poll_seconds, 30.0)  # переочередь зависших: не чаще раза в ~30с
 
     def _sweep_stale() -> None:
         local = repository.requeue_stale_background_jobs(stale_minutes, finalize_minutes)
@@ -187,10 +187,10 @@ def worker_loop(
                 finalize_minutes,
                 ",".join(queue_names),
             )
-        # Внешний контур убирается ПО LEASE, а не по настенным часам, — и делать это надо
+        # Внешний контур убирается ПО LEASE, а не по настенным часам,: и делать это надо
         # по расписанию. Раньше реапер жил только внутри /api/external-worker/claim (T21):
         # пока воркер занят длинной задачей, он за новой не приходит, значит и протухшие
-        # lease никто не разбирает. Умри воркер совсем — задачи висели бы 'running' вечно,
+        # lease никто не разбирает. Умри воркер совсем: задачи висели бы 'running' вечно,
         # и интерфейс врал бы про идущую работу. Здесь этот сигнал наконец опрашивается
         # регулярно, независимо от того, приходит воркер за работой или нет.
         external = repository.requeue_expired_external_leases()
@@ -200,7 +200,7 @@ def worker_loop(
                 external.requeued,
                 external.exhausted,
             )
-        # Отправка кода допуска, упавшая окончательно по истёкшей аренде, — без текста с кодом.
+        # Отправка кода допуска, упавшая окончательно по истёкшей аренде,: без текста с кодом.
         try:
             from oiltech_digest import admission
 
@@ -210,7 +210,7 @@ def worker_loop(
 
     last_sweep = 0.0
     while True:
-        # Периодически вытаскиваем зависшие running/finalizing (раньше — только разово на старте,
+        # Периодически вытаскиваем зависшие running/finalizing (раньше: только разово на старте,
         # из-за чего застрявший после краша 'finalizing' ждал рестарта воркача; баг T2/H2).
         now_mono = time.monotonic()
         if now_mono - last_sweep >= sweep_interval:
@@ -299,7 +299,7 @@ def _run_process_articles(payload: dict[str, Any], job_id: int) -> dict[str, Any
     else:
         articles = repository.get_articles_needing_pipeline(limit)
 
-    # Отметка «эта попытка НАЧАЛА жечь OpenAI» — строго ДО первого обращения к модели.
+    # Отметка «эта попытка НАЧАЛА жечь OpenAI»: строго ДО первого обращения к модели.
     # По ней requeue_stale_background_jobs отличает задачу, которую нельзя перезапускать
     # автоматически (повторный прогон = повторный реальный расход), от упавшей до AI.
     # Именно отдельная колонка, а не progress: claim/mark-running форсят progress в 10
@@ -394,7 +394,7 @@ def _run_reprint_review(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
 
 def _run_refetch_text(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Дозаполнение тела статей-обрывков — та же причина регистрации."""
+    """Дозаполнение тела статей-обрывков: та же причина регистрации."""
     from oiltech_digest.ingestion import external_fetch
 
     repository.update_background_job_progress(job_id, 20)
@@ -407,7 +407,7 @@ def _run_refetch_text(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
 
 def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Агент «Карточка сигнала» в местном контуре (#96) — та же причина регистрации, что у судьи
+    """Агент «Карточка сигнала» в местном контуре (#96): та же причина регистрации, что у судьи
     перепечаток: без внешних воркеров маршрут ИИ ставит задачу в местную очередь ai."""
     from oiltech_digest import signal_card
 
@@ -419,7 +419,7 @@ def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
 
 def _run_otbor(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Агент «Отбор» в местном контуре (#130) — как карточка сигнала: без внешних воркеров маршрут ИИ ставит
+    """Агент «Отбор» в местном контуре (#130), как карточка сигнала: без внешних воркеров маршрут ИИ ставит
     задачу в местную очередь ai."""
     from oiltech_digest import otbor
 
@@ -432,7 +432,7 @@ def _run_otbor(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
 
 def _run_signal_summary(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """«Суть и перевод» сигналов в местном контуре (#131) — как «Отбор»."""
+    """«Суть и перевод» сигналов в местном контуре (#131): как «Отбор»."""
     from oiltech_digest import signal_summary
 
     repository.update_background_job_progress(job_id, 20)
@@ -443,7 +443,7 @@ def _run_signal_summary(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
 
 def _run_signal_scores(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Баллы «Карточки» (второй вызов, #132) в местном контуре — как «Суть и перевод»."""
+    """Баллы «Карточки» (второй вызов, #132) в местном контуре: как «Суть и перевод»."""
     from oiltech_digest import signal_scores
 
     repository.update_background_job_progress(job_id, 20)

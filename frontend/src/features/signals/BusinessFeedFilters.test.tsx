@@ -65,7 +65,7 @@ describe("бизнес-лента: фильтры и «всё про компа�
     renderFeed();
     fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
     fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
-    // Выбраны тема и регион, порядок — «сначала новые»: «всё про компанию» снимает фильтры, порядок оставляет.
+    // Выбраны тема и регион, порядок, «сначала новые»: «всё про компанию» снимает фильтры, порядок оставляет.
     fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Бурение" } });
     fireEvent.change(await screen.findByRole("combobox", { name: "Регион" }), { target: { value: "Ближний Восток" } });
     fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "date_desc" } });
@@ -83,7 +83,7 @@ describe("бизнес-лента: фильтры и «всё про компа�
     expect(screen.getByText("SLB запустила установку мехдобычи")).toBeInTheDocument();
     expect(screen.getByText("2 из 3 сигналов")).toBeInTheDocument();
 
-    // Компанию вводят и руками: подсказки — канонические имена справочника алиасов.
+    // Компанию вводят и руками: подсказки: канонические имена справочника алиасов.
     const input = screen.getByRole("combobox", { name: "Компания" });
     const suggestions = document.getElementById(input.getAttribute("list") ?? "") as HTMLDataListElement;
     expect([...suggestions.options].map((option) => option.value)).toEqual(DICTIONARIES.companies);
@@ -212,7 +212,7 @@ describe("бизнес-лента: фильтры и «всё про компа�
       ["Страна события: ОАЭ", false], ["Компании: SLB (США), ADNOC", false],
     ]));
     expect(chips(await cardOf("Обзор рынка бурения"))).toContainEqual(["Страна события: не определено", true]);
-    // Карточка до #137: страну агент ещё не ставил — чипа нет.
+    // Карточка до #137: страну агент ещё не ставил: чипа нет.
     expect(chips(await cardOf("SLB получила контракт Saudi Aramco на бурение")).map(([text]) => text))
       .not.toContainEqual(expect.stringMatching(/^Страна/));
 

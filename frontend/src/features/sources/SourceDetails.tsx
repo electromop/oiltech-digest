@@ -21,7 +21,7 @@ type Props = {
 };
 
 // Раскрытая строка таблицы источников. Имя, ссылка, тип и состояние уже видны в самой
-// строке — здесь только то, что нужно, чтобы с источником что-то сделать.
+// строке: здесь только то, что нужно, чтобы с источником что-то сделать.
 export function SourceDetails(props: Props) {
   const { source, health, diagnostic, hasDraft, pending, pendingLabel, focused } = props;
   const primaryUrl = source.url || source.rss_url || source.listing_url || "";
@@ -101,7 +101,7 @@ export function SourceDetails(props: Props) {
 
       <details className="sourceFeedbackReact">
         <summary>Обратная связь по источнику</summary>
-        {/* Шкала перевода тут не нужна — она про конкретный текст, а не про источник. */}
+        {/* Шкала перевода тут не нужна: она про конкретный текст, а не про источник. */}
         <FeedbackPanel sourceId={source.id} withTranslation={false} />
       </details>
 

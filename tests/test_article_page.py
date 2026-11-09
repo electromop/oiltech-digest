@@ -1,6 +1,6 @@
 """Разбор страницы статьи: тело, которое не про её заголовок (Eni, 25.09).
 
-У Eni на каждой странице висит виджет чат-бота EnergIA — bootstrap-окно `.modal-content`.
+У Eni на каждой странице висит виджет чат-бота EnergIA: bootstrap-окно `.modal-content`.
 Тело статьи лежит в `div.container-body`, у которого нет ни одного «статейного» класса,
 поэтому основное извлечение брало окно чат-бота: 3177 одинаковых знаков у всех страниц,
 первая такая «статья» легла в базу, остальные молча отбивал рубеж «то же тело».
@@ -78,7 +78,7 @@ def test_text_about_the_title_does_not_call_second_extractor(monkeypatch):
 
 
 def test_foreign_text_stays_when_second_extractor_is_not_about_the_title_either(monkeypatch):
-    # Хуже, чем было, не делаем: второй разбор тоже чужой — остаётся то, что взяли раньше
+    # Хуже, чем было, не делаем: второй разбор тоже чужой: остаётся то, что взяли раньше
     # (дальше его ловит рубеж «то же тело», и отказ виден в логе).
     other = "Quarterly dividend policy of an unrelated retail company explained in detail. " * 4
     monkeypatch.setattr(article_page, "_trafilatura_extract", lambda content: other)
@@ -90,8 +90,8 @@ def test_foreign_text_stays_when_second_extractor_is_not_about_the_title_either(
 
 # --- Дата публикации против даты в адресе статьи (#139) ------------------------------------
 # Pipeline & Gas Journal с 30.05.2026: первый <time> страницы (он же datePublished) несёт
-# datetime="2025-10-01" у всех статей, а его видимый текст — настоящая дата «10/06/2026» (месяц
-# первым). В адресе — `/news/2026/october/<slug>`. Атрибут выигрывал: 542 статьи из 560 легли в
+# datetime="2025-10-01" у всех статей, а его видимый текст: настоящая дата «10/06/2026» (месяц
+# первым). В адресе: `/news/2026/october/<slug>`. Атрибут выигрывал: 542 статьи из 560 легли в
 # октябрь 2025 года, и в лентах июня-октября 2026 их не было. Страницы синтетические: HTML сайта
 # в репо не кладём.
 
@@ -139,7 +139,7 @@ def test_dates_of_other_articles_on_the_page_are_not_taken():
 
 
 def test_listing_date_is_the_last_candidate_and_is_checked_against_the_url_too():
-    agrees, contradicts = _utc(2026, 10, 6), _utc(2026, 6, 10)  # второе — «10/06/2026» днём первым
+    agrees, contradicts = _utc(2026, 10, 6), _utc(2026, 6, 10)  # второе: «10/06/2026» днём первым
 
     assert _date(_pgj_page(""), PGJ_URL, fallback_date=agrees) == agrees
     assert _date(_pgj_page(""), PGJ_URL, fallback_date=contradicts) is None
@@ -170,7 +170,7 @@ def test_ambiguous_numeric_date_is_read_the_way_it_agrees_with_the_url(month, ex
 
 
 def test_date_without_time_gets_no_day_of_slack_at_the_month_boundary():
-    # «01/02/2026» днём первым — 1 февраля, сутки запаса пустили бы его в январь. У даты без времени
+    # «01/02/2026» днём первым: 1 февраля, сутки запаса пустили бы его в январь. У даты без времени
     # сдвига пояса нет: по адресу `/2026/january/` это 2 января.
     page = _pgj_page("01/02/2026", attribute="")
 
@@ -178,7 +178,7 @@ def test_date_without_time_gets_no_day_of_slack_at_the_month_boundary():
 
 
 def test_utc_timestamp_a_day_off_the_local_date_in_the_url_still_agrees():
-    # Адрес пишут по местному дню, метатег — в UTC: выпуск в 01:00 МСК 18.09 — это 22:00 UTC 17.09.
+    # Адрес пишут по местному дню, метатег, в UTC: выпуск в 01:00 МСК 18.09 это 22:00 UTC 17.09.
     page = f"""<html><head><meta property="og:title" content="{PGJ_TITLE}">
 <meta property="article:published_time" content="2026-09-17T22:00:00Z"></head><body><p>x</p></body></html>"""
 

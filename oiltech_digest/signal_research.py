@@ -30,10 +30,10 @@ from oiltech_digest.processing.openai_client import AIClientError, output_budget
 from oiltech_digest.processing.pipeline import make_client
 
 EVIDENCE_SOURCE = "openai_web_search"
-# Технические причины отсева поиска — по ним разделы «Поиск → …» (rejected_sections, #130, #131). Ссылку не подтвердили
-# ни страница, ни источники поиска; страница не открылась, хотя адрес из найденного, — во вход «Отбора» нечего дать:
+# Технические причины отсева поиска: по ним разделы «Поиск → …» (rejected_sections, #130, #131). Ссылку не подтвердили
+# ни страница, ни источники поиска; страница не открылась, хотя адрес из найденного,, во вход «Отбора» нечего дать:
 # текст у находки только от модели поиска, а это черновые данные; страница-список (лента новостей, оглавление номера,
-# страница пресс-релизов или портфеля) — не одна публикация (черновая проверка разбора разметки 23.10: заголовок
+# страница пресс-релизов или портфеля): не одна публикация (черновая проверка разбора разметки 23.10: заголовок
 # короче пяти слов ловит 7 из 8 таких страниц без лишних).
 NO_LINK_OR_TITLE = "нет ссылки или заголовка"
 UNCONFIRMED_LINK = "страница не открылась и адрес не из найденного"
@@ -100,7 +100,7 @@ material_kind:
 
 RESEARCH_SCHEMA_BROAD = _research_schema("radar_topic_research_broad", "material_kind", MATERIAL_KINDS)
 
-# Модели, которые OpenAI снимает 11.12.2026: исходное поколение gpt-5 (с датой в имени — тоже). gpt-5.4, gpt-5.5 и
+# Модели, которые OpenAI снимает 11.12.2026: исходное поколение gpt-5 (с датой в имени: тоже). gpt-5.4, gpt-5.5 и
 # новее не снимаются.
 _RETIRED_MODEL_RE = re.compile(r"^gpt-5(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?$", re.IGNORECASE)
 
@@ -117,14 +117,14 @@ RETRY_HINT = ("\n\nПредыдущая попытка не нашла ни од
 
 
 def research_period(days: int | None = None, period_end: date | None = None) -> tuple[date, date]:
-    """Период поиска темы: days дней до period_end (по умолчанию — сегодня). Один и для промпта, и
+    """Период поиска темы: days дней до period_end (по умолчанию: сегодня). Один и для промпта, и
     для списка уже известного, который поиску передаёт run_discovery."""
     end = period_end or date.today()
     return end - timedelta(days=int(days or app_config.SIGNAL_RESEARCH_DAYS)), end
 
 
 def covered_sites_block(sites: list[str]) -> str:
-    """«Уже есть, ищи дальше» (#138): сайты, которые парсер собирает целиком, — их материалы у нас уже есть, и тратить
+    """«Уже есть, ищи дальше» (#138): сайты, которые парсер собирает целиком,: их материалы у нас уже есть, и тратить
     на них поиски незачем (сами ссылки статей сбора новыми находками всё равно не станут)."""
     sites = [site for site in sites if site]
     if not sites:
@@ -134,7 +134,7 @@ def covered_sites_block(sites: list[str]) -> str:
 
 
 def _add_usage(stats: dict[str, Any], response: Any) -> None:
-    """Расход — за все попытки: платим и за пустую."""
+    """Расход, за все попытки: платим и за пустую."""
     data = response.data or {}
     stats["web_search_calls"] += int(data.get("_web_search_calls") or 0)
     stats["input_tokens"] += int(getattr(response, "input_tokens", 0) or 0)
@@ -159,8 +159,8 @@ def research_topic(
     отсевов и без потолка числа находок, решает «Отбор»; и ищет широко (#138): все материалы нефтесервиса и нефтегаза,
     а не только технологии.
 
-    Модель и уровень прогон радара передаёт свои — из задачи (решение ядра, #138): пустая модель — ошибка темы, а
-    не откат на строку .env воркера. None — вызов на ядре (тесты, разовые команды): настройка ядра."""
+    Модель и уровень прогон радара передаёт свои, из задачи (решение ядра, #138): пустая модель: ошибка темы, а
+    не откат на строку .env воркера. None, вызов на ядре (тесты, разовые команды): настройка ядра."""
     start, end = research_period(days, period_end)
     count = int(limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC)
     used_model = app_config.SIGNAL_RESEARCH_MODEL if model is None else model
@@ -184,14 +184,14 @@ def research_topic(
     client = (client_factory or (lambda: make_client(False)))()
     response = None
     errors: list[str] = []
-    # Модель с поиском отвечает по-разному от вызова к вызову: сравнительный прогон 30.09 —
-    # на теме автоматизации первая попытка дала события, повтор — пустой список после 15
-    # поисков. Пустой ответ и временный сбой — ещё одна попытка с подсказкой искать шире.
+    # Модель с поиском отвечает по-разному от вызова к вызову: сравнительный прогон 30.09:
+    # на теме автоматизации первая попытка дала события, повтор: пустой список после 15
+    # поисков. Пустой ответ и временный сбой: ещё одна попытка с подсказкой искать шире.
     beat = heartbeat or (lambda: None)
     for attempt in range(1, RESEARCH_ATTEMPTS + 1):
         # Признак продвижения перед каждой попыткой: вызов с поиском молчит до
         # SIGNAL_RESEARCH_TIMEOUT_SECONDS, а воркер NL снимает задачу как зависшую после
-        # 1200 с без признаков (external_worker._JOB_STALL_SECONDS) — две попытки подряд
+        # 1200 с без признаков (external_worker._JOB_STALL_SECONDS): две попытки подряд
         # без beat подходили к порогу вплотную.
         beat()
         attempt_prompt = prompt if attempt == 1 else prompt + RETRY_HINT
@@ -202,11 +202,11 @@ def research_topic(
                 RESEARCH_SCHEMA_BROAD,
                 model=used_model,
                 reasoning_effort=effort,
-                # Ответ — до count событий по ~150 токенов плюс рассуждение между поисками.
+                # Ответ: до count событий по ~150 токенов плюс рассуждение между поисками.
                 max_output_tokens=output_budget(1500 + 250 * count, effort),
                 timeout=app_config.SIGNAL_RESEARCH_TIMEOUT_SECONDS,
             )
-        except AttributeError as exc:  # клиент без поиска (офлайн) — повтор не поможет
+        except AttributeError as exc:  # клиент без поиска (офлайн): повтор не поможет
             return {**stats, "status": "error", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "evidence": []}
         except (AIClientError, requests.RequestException) as exc:
             errors.append(f"{type(exc).__name__}: {str(exc)[:300]}")
@@ -290,7 +290,7 @@ def _event_to_evidence(
             **({"material_kind": material_kind} if material_kind else {}),
             "why_important": why,
             "research_summary": summary,
-            # Сослалась ли модель на этот адрес в найденном — признак, что он из поиска, а
+            # Сослалась ли модель на этот адрес в найденном: признак, что он из поиска, а
             # не из памяти модели. Вместе с докачкой страницы решает, верить ли ссылке.
             "cited_by_search": _url_key(url) in cited,
         },
@@ -326,7 +326,7 @@ def verify_research_evidence(evidence: list[dict[str, Any]]) -> tuple[list[dict[
 
 def is_list_page(title: str) -> bool:
     """Страница-список, а не одна публикация: заголовок короче LIST_PAGE_TITLE_WORDS слов («Press Releases»,
-    «News», «JPT October 2026 Issue»). Черновая проверка: у статьи о событии заголовок обычно длиннее. Иероглиф —
+    «News», «JPT October 2026 Issue»). Черновая проверка: у статьи о событии заголовок обычно длиннее. Иероглиф:
     слово: китайский заголовок без пробелов иначе считался бы одним словом (на разметке эксперта 23.10 те же 7 из 8
     страниц-списков без лишних)."""
     return len(_TITLE_WORD_RE.findall(title)) < LIST_PAGE_TITLE_WORDS
@@ -344,7 +344,7 @@ def _parse_date(value: Any) -> date | None:
 
 
 def _strip_tracking(url: str) -> str:
-    # Поиск OpenAI дописывает utm_source=openai — в ключе ссылки ему не место.
+    # Поиск OpenAI дописывает utm_source=openai: в ключе ссылки ему не место.
     url = re.sub(r"([?&])utm_[a-z]+=[^&#]*", r"\1", url)
     return re.sub(r"[?&]+(#|$)", r"\1", url).rstrip("?&")
 

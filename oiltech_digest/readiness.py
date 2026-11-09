@@ -12,7 +12,7 @@ REQUIRED_TABLES = (
     "article_cards",
     "article_scores",
     "article_tags",
-    # Общие отметки (#111): их создаёт отдельный SQL до выката кода — без них лента падает.
+    # Общие отметки (#111): их создаёт отдельный SQL до выката кода: без них лента падает.
     "article_marks",
     "signal_marks",
     "background_jobs",

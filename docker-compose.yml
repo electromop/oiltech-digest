@@ -41,7 +41,7 @@ services:
   app:
     build: .
     container_name: oiltech_app
-    init: true  # подбирает зомби Chromium — см. scheduler
+    init: true  # подбирает зомби Chromium: см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -68,16 +68,16 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Конвейер статей (worker, playwright-worker, scheduler) — под профилем pipeline:
+  # Конвейер статей (worker, playwright-worker, scheduler), под профилем pipeline:
   # 21.09 голый `up -d --build` у агентов поднял лишний планировщик, и за 8,5 ч он
-  # задублировал сбор и ИИ ($4,48). Голый `up -d` их не поднимает; выкат — только
+  # задублировал сбор и ИИ ($4,48). Голый `up -d` их не поднимает; выкат: только
   # scripts/deploy-core.sh с явным списком сервисов (названный сервис профиль включает
-  # сам). Второй планировщик и так не начнёт шагов — он ждёт замок (singleton.py).
+  # сам). Второй планировщик и так не начнёт шагов: он ждёт замок (singleton.py).
   worker:
     build: .
     profiles: ["pipeline"]
     container_name: oiltech_worker
-    init: true  # подбирает зомби Chromium — см. scheduler
+    init: true  # подбирает зомби Chromium: см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -106,7 +106,7 @@ services:
     build: .
     profiles: ["pipeline"]
     container_name: oiltech_playwright_worker
-    init: true  # подбирает зомби Chromium — см. scheduler
+    init: true  # подбирает зомби Chromium: см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -138,7 +138,7 @@ services:
     # init (tini) под PID 1 подбирает осиротевшие процессы. Chromium при каждом рендере
     # оставляет 2 хелпера, а python под PID 1 их не подбирает: 25.09 было 2259 зомби при
     # pids.max 2315 (DefaultTasksMax systemd), и рендеры падали с «Target crashed». На
-    # исчерпанном лимите Playwright и падает, и виснет навсегда. То же — везде, где есть Chromium.
+    # исчерпанном лимите Playwright и падает, и виснет навсегда. То же: везде, где есть Chromium.
     init: true
     depends_on:
       bootstrap:
@@ -148,7 +148,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан в .env}@db:5432/${POSTGRES_DB:-oiltech_digest}
       PYTHONUNBUFFERED: "1"
-      # Без этой строки enqueue() исполнял бы задачи прямо в планировщике — у агентов
+      # Без этой строки enqueue() исполнял бы задачи прямо в планировщике: у агентов
       # 20.09 так радар из external-ai ушёл в OpenAI с РФ-адреса. Код теперь и сам не
       # исполняет внешние очереди на месте (background_jobs.runs_inline).
       BACKGROUND_JOB_INLINE: "0"
@@ -224,14 +224,14 @@ services:
 volumes:
   pgdata:
   exports:
-  # Брендинг дайджеста — ОБЩИЙ для админки и воркеров выгрузки. Именованный том,
+  # Брендинг дайджеста: ОБЩИЙ для админки и воркеров выгрузки. Именованный том,
   # а не файл в репозитории: (1) правки видны всем контейнерам сразу, (2) деплой
   # `git reset --hard` + `build` их больше не затирает.
   branding:
   # Оригиналы загруженных документов. Общий том, а не каталог в контейнере: пишет
-  # `app`, читает разбор — состояние в этой системе делят пять процессов, и правки
+  # `app`, читает разбор: состояние в этой системе делят пять процессов, и правки
   # в «свою копию» файла тут уже приводили к дефекту (брендинг, 03.08).
-  # ⚠️ В pg_dump этот том НЕ попадает: расширение задачи бэкапа — отдельный тикет #34.
+  # ⚠️ В pg_dump этот том НЕ попадает: расширение задачи бэкапа: отдельный тикет #34.
   documents:
   caddy_data:
   caddy_config:

@@ -1,4 +1,4 @@
-"""Возврат отклонённого человеком (#132, спека #128), шов 1 — человек вписывает поля «Отбора» (отрасль, связь и
+"""Возврат отклонённого человеком (#132, спека #128), шов 1: человек вписывает поля «Отбора» (отрасль, связь и
 применение, категорию), публикация идёт по остатку конвейера (суть, оба вызова «Карточки») и получает пометку «спорное:
 „Отбор“ не взял бы» с причиной; повтор «Отбора» решение человека не перезаписывает (tests/card_pipeline_support.py).
 """
@@ -9,8 +9,8 @@ from oiltech_digest.otbor_pack_format import load_dictionaries
 from tests.card_pipeline_support import (accepted, answer, card_answer, even, fill_cards, pipeline, process_feed,  # noqa: F401
                                          run_scores, scores)
 from tests.otbor_support import OtborModel, api_request, api_send, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, run_worker, user  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import admin, api_get, run_worker, user  # noqa: F401: фикстуры
 
 SALES = "Сбыт топлива Лукойла"
 SALES_TEXT = "Лукойл заключил контракт на бурение 12 скважин и расширил сбыт топлива на северных АЗС."
@@ -47,7 +47,7 @@ def test_returned_publication_goes_through_the_rest_of_the_pipeline_marked_dispu
     assert any(step["stage"] == "Человек" and "Вернул" in step["text"] for step in card["decision_log"])
     assert SALES not in {one["title"] for one in api_get("/api/signals", admin, section="all")}
 
-    # Остаток конвейера: суть (обработка ленты), основной вызов «Карточки», баллы; «Решение платформы» — из ступени.
+    # Остаток конвейера: суть (обработка ленты), основной вызов «Карточки», баллы; «Решение платформы»: из ступени.
     process_feed()
     fill_cards(monkeypatch, {SALES: card_answer()})
     run_scores(monkeypatch, {SALES: scores(even("business", 85))})
@@ -71,7 +71,7 @@ def test_returned_publication_goes_through_the_rest_of_the_pipeline_marked_dispu
 
 def test_publication_returned_days_after_the_refusal_still_goes_through_the_pipeline(user, admin, pipeline,
                                                                                       monkeypatch):
-    # Шаги конвейера берут сигнал по окну дней: отсчёт — от того, как публикация пошла дальше «Отбора» (его решение
+    # Шаги конвейера берут сигнал по окну дней: отсчёт: от того, как публикация пошла дальше «Отбора» (его решение
     # или человека), а не от заведения сигнала: отказ мог быть неделю назад.
     _, signal_id, _ = _rejected(monkeypatch, admin)
     with repository.get_connection() as conn:
@@ -104,11 +104,11 @@ def test_return_form_takes_only_the_otbor_fields_by_its_rules_and_only_for_rejec
     assert {reason: response.status_code for reason, response in refusals.items()} == {
         reason: 422 for reason in refusals}
     assert "применени" in refusals["переносимая без применения"].json()["detail"]
-    # Вернуть можно только отклонённое «Отбором»; форма — у админа, как и сами разделы отклонённого.
+    # Вернуть можно только отклонённое «Отбором»; форма: у админа, как и сами разделы отклонённого.
     assert _return(admin, accepted_id).status_code == 409
     assert _return(user, signal_id).status_code == 403
     assert showcase(user).keys() == {"Программа бурения"}
-    # Что вписывать, экран берёт у сервера — по справочнику «Отбора»; связь — только прямая и переносимая.
+    # Что вписывать, экран берёт у сервера: по справочнику «Отбора»; связь: только прямая и переносимая.
     choices = api_get("/api/signals/dictionaries", user)["otbor_return"]
     dictionaries = load_dictionaries()
     assert [one["code"] for one in choices["industry"]] == [value["code"] for value in dictionaries["industry"]["values"]]
@@ -123,7 +123,7 @@ def test_returned_publication_goes_to_the_showcase_of_the_human_category(user, a
         "industry": "other_industry", "oilfield_relevance": "transferable",
         "oilfield_application": "Экзоскелеты для работ на буровой", "signal_category": "technology"})
 
-    # Витрину выбирает категория человека: технология — на радаре, в бизнес-ленте её нет.
+    # Витрину выбирает категория человека: технология: на радаре, в бизнес-ленте её нет.
     card = showcase(user, "technology")[SALES]
     assert (card["industry"], card["oilfield_relevance"], card["oilfield_application"]) == (
         "other_industry", "transferable", "Экзоскелеты для работ на буровой")

@@ -30,7 +30,7 @@ class SwitchError(ValueError):
 
 def plan(since: date, *, model: str | None = None) -> dict[str, Any]:
     """Что поставит проверка: статьи окна (otbor_shadow_store.candidate_article_ids), цена по длине запросов и
-    полоса. Модель — названная или OTBOR_MODEL; пусто — отказ."""
+    полоса. Модель: названная или OTBOR_MODEL; пусто: отказ."""
     model = model or config.OTBOR_MODEL
     if not model:
         raise otbor.OtborSetupError("модель не задана (OTBOR_MODEL или --model): модель ленты «Отбор» не берёт")
@@ -49,7 +49,7 @@ def plan(since: date, *, model: str | None = None) -> dict[str, Any]:
 
 
 def enqueue(planned: dict[str, Any]) -> list[dict[str, Any]]:
-    """Задачи проверки по плану пачками по OTBOR_BATCH, по полосе пересчётов; без неё во внешнем контуре — отказ.
+    """Задачи проверки по плану пачками по OTBOR_BATCH, по полосе пересчётов; без неё во внешнем контуре: отказ.
     Витрины проверка не меняет."""
     if not planned["bulk_lane"]:
         raise otbor.OtborSetupError(
@@ -127,7 +127,7 @@ def _versions(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _price(stage: str, model: str, calls: int) -> float | None:
-    """Цена вызовов стадии по ставкам заданной модели и средним токенам вызова на этой базе; расхода нет — None."""
+    """Цена вызовов стадии по ставкам заданной модели и средним токенам вызова на этой базе; расхода нет: None."""
     tokens = otbor_shadow_store.average_tokens(stage)
     if tokens is None or not model:
         return None
@@ -136,7 +136,7 @@ def _price(stage: str, model: str, calls: int) -> float | None:
 
 
 def switch(since: date, *, apply: bool = False) -> dict[str, Any]:
-    """Переключение витрин (#134): решения проверки статей окна — в сигналы тем же путём, что пишет сам «Отбор»
+    """Переключение витрин (#134): решения проверки статей окна: в сигналы тем же путём, что пишет сам «Отбор»
     (otbor_shadow_store.transfer: статья перепроверяется и пишется одной транзакцией), со шагом «перенесено из
     проверки» в «Ходе решения». По умолчанию сухой прогон: что перенесётся и куда (с номерами статей), что пропущено,
     что дальше пройдёт конвейер и почём.
@@ -146,7 +146,7 @@ def switch(since: date, *, apply: bool = False) -> dict[str, Any]:
     гейтом, нет строки проверки (пришла после неё): сначала дозапуск проверки. Принятой с карточкой прогона по
     истории (сделана до решения: без темы, с категорией ленты) карточка делается заново полосой пересчётов, пачками по
     ходу переноса; баллы ставит шаг дня, когда новая карточка готова. Принятой, которую гейт отклонял, суть и перевод
-    даст обработка ленты, затем карточку и баллы — шаги дня, как новой."""
+    даст обработка ленты, затем карточку и баллы: шаги дня, как новой."""
     from oiltech_digest import signal_card, signal_scores
 
     window = feed_window.current()
@@ -197,7 +197,7 @@ def switch(since: date, *, apply: bool = False) -> dict[str, Any]:
         written = otbor_shadow_store.transfer(row, window=window, log=log, recipe={**row["recipe"], "switched": True})
         (switched if written else skipped).append(int(row["article_id"]))
         if number % config.SIGNAL_CARD_BATCH == 0:
-            # Карточку заново — по ходу переноса: шаг дня «Карточки» увидит её в задаче и в свою полосу не возьмёт.
+            # Карточку заново, по ходу переноса: шаг дня «Карточки» увидит её в задаче и в свою полосу не возьмёт.
             jobs += _cards_again(since)
     jobs += _cards_again(since)
     return {**planned, "applied": True, "switched": switched, "skipped": skipped, "card_jobs": len(jobs)}

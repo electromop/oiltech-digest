@@ -59,7 +59,7 @@ describe("экран «Теги»", () => {
     render(<TagsPage onUnauthorized={() => {}} showToast={() => {}} />);
 
     const toggle = await screen.findByRole("button", { name: /Бурение/ });
-    // По умолчанию свёрнуто: полей направления не видно, в шапке — сводка.
+    // По умолчанию свёрнуто: полей направления не видно, в шапке: сводка.
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Направление")).not.toBeInTheDocument();
     expect(toggle).toHaveTextContent("1 подтег · 3 ключевых слова");

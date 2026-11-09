@@ -1,6 +1,6 @@
 """Правка русских заголовков принятых статей последних двух недель (решение владельца 03.11): enqueue-title-edit.
 
-Новые принятые статьи правит «Суть и перевод» сам; заголовки, написанные до правки, — только этим прогоном, по слову
+Новые принятые статьи правит «Суть и перевод» сам; заголовки, написанные до правки,: только этим прогоном, по слову
 владельца: сначала всегда сухой прогон с N и ценой.
 """
 
@@ -38,7 +38,7 @@ def _freeze(monkeypatch) -> None:
 
 def _article(title: str, *, title_ru=COPY, relevant: bool | None = True, published: str = "2026-10-28 12:00+00",
              pending_deletion: bool = False, digest: bool = False) -> int:
-    """Статья ленты с карточкой; title_ru по умолчанию — копия заголовка, как у русского до правки."""
+    """Статья ленты с карточкой; title_ru по умолчанию: копия заголовка, как у русского до правки."""
     with connection.get_connection() as conn:
         source = conn.execute("SELECT id FROM sources WHERE name = 'Лента'").fetchone() or conn.execute(
             "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
@@ -102,7 +102,7 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
 
 def test_refuses_without_the_external_contour_or_the_bulk_lane(isolated_db, monkeypatch):
     """Задачи с пометкой only (rescore.enqueue_stage): локальный конвейер пометки не знает, а в потоке дня пачки
-    встали бы перед новыми статьями — только сознательно, --allow-live-lane."""
+    встали бы перед новыми статьями: только сознательно, --allow-live-lane."""
     _freeze(monkeypatch)
     _article(OFF_RULES)
     monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
@@ -156,8 +156,8 @@ def test_dry_run_shows_the_live_worker_of_the_bulk_lane(isolated_db, monkeypatch
 
 
 def test_jobs_edit_the_title_on_the_worker_and_the_core_writes_it(isolated_db, monkeypatch, capsys):
-    """Задачи — process_articles с only=["translation"] в полосе пересчётов: правит тот же шаг воркера, что у новых
-    статей, ядро пишет только заголовок; правленая статья в выборку больше не попадает, стоящая в задаче — тоже."""
+    """Задачи, process_articles с only=["translation"] в полосе пересчётов: правит тот же шаг воркера, что у новых
+    статей, ядро пишет только заголовок; правленая статья в выборку больше не попадает, стоящая в задаче: тоже."""
     _freeze(monkeypatch)
     seed_default_scoring_criteria()
     first, second = _article(OFF_RULES), _article(OFF_RULES)

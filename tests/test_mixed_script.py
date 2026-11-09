@@ -54,7 +54,7 @@ def test_scripts_only_repair_fixes_twins_and_glue_and_writes_only_changed_fields
     with connection.get_connection() as conn:
         cards = {row[0]: row[1:] for row in conn.execute("SELECT article_id, title_ru, summary FROM article_cards")}
     assert cards[ids["twins"]] == ("Компания входит в топ", "Суть совместно с ExxonMobil.")
-    assert cards[ids["half"]] == ("Цены растут", "Цены на электроэнergyю выросли.")  # полуперевод — не наша починка
+    assert cards[ids["half"]] == ("Цены растут", "Цены на электроэнergyю выросли.")  # полуперевод: не наша починка
 
 
 def test_resummarize_selection_separates_summary_title_and_source_defects(isolated_db):
@@ -100,8 +100,8 @@ def _claim(core: TestClient) -> dict:
 
 
 def test_resummarize_reaches_the_worker_with_only_and_rewrites_every_summary(isolated_db, monkeypatch):
-    """Перегенерация 27.09 (задачи 11034–11038): воркер NL пометки only не знал — гонял гейт и
-    балл, которые ядро не пишет ($0,59 из $0,83 — гейт), а статьи, которые его гейт счёл
+    """Перегенерация 27.09 (задачи 11034-11038): воркер NL пометки only не знал: гонял гейт и
+    балл, которые ядро не пишет ($0,59 из $0,83: гейт), а статьи, которые его гейт счёл
     нерелевантными, пропускал: 7 из 52 сутей остались с браком. Теперь пометка доходит до
     воркера: зовутся только суть и перевод (гейт, тег и балл статьи сняты 08.11), суть переписана
     у каждой статьи."""

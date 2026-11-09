@@ -85,7 +85,7 @@ describe("экран «Дочерние общества»", () => {
 
     const zapolyarye = (await screen.findByRole("cell", { name: "Газпромнефть-Заполярье" })).closest("tr") as HTMLElement;
     const cellsOf = (row: HTMLElement) => within(row).getAllByRole("cell").map((cell) => cell.textContent);
-    // Учётку автора удалили — «кто» пусто.
+    // Учётку автора удалили: «кто» пусто.
     expect(cellsOf(zapolyarye).slice(0, 5)).toEqual(["Газпромнефть-Заполярье", "→Газпром нефть", "", "", "20.10.2026, 13:00"]);
     const neft = screen.getByRole("cell", { name: "контроль 95%" }).closest("tr") as HTMLElement;
     expect(cellsOf(neft).slice(0, 5)).toEqual(["Газпром нефть", "→Газпром", "контроль 95%", "expert@example.test", "20.10.2026, 12:30"]);

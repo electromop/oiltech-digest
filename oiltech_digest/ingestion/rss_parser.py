@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _guess_language(source: dict) -> str | None:
-    """Грубая эвристика языка по группе источника. Точное определение — будущий этап."""
+    """Грубая эвристика языка по группе источника. Точное определение: будущий этап."""
     category = (source.get("category") or "").lower()
     if any(marker in category for marker in ("рф", "снг", "россий", "telegram")):
         return "ru"
@@ -43,9 +43,9 @@ def extract_articles_from_feed(
 ) -> tuple[list[dict], dict]:
     """Распарсить байты ленты в список article-rec'ов (без вставки в БД).
 
-    Чистая функция — переиспользуется и локальным `parse_source` (вставляет сам),
+    Чистая функция: переиспользуется и локальным `parse_source` (вставляет сам),
     и внешним фетчем `external_fetch._process_rss` (статьи едут на core, там и
-    вставляются). Возвращает (recs, stats), где stats — skipped_old/irrelevant.
+    вставляются). Возвращает (recs, stats), где stats: skipped_old/irrelevant.
     """
     recs: list[dict] = []
     stats = {"skipped_old": 0, "skipped_irrelevant": 0}
@@ -63,8 +63,8 @@ def feed_entry_steps(source: dict, content: bytes, max_age_days: int | None = No
     """Рубежи сбора по каждому пункту ленты, в порядке ленты: OLD, PREFILTER или READY.
 
     Единственная реализация: extract_articles_from_feed берёт из READY записи для
-    вставки, проба источника (`source-probe`) — вердикты. Пункт без заголовка или
-    ссылки сбор пропускает молча — шага у него нет.
+    вставки, проба источника (`source-probe`): вердикты. Пункт без заголовка или
+    ссылки сбор пропускает молча: шага у него нет.
     """
     feed = feedparser.parse(content)
     cutoff = verdicts.old_cutoff(source, max_age_days)
@@ -146,9 +146,9 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
     sources = repository.get_enabled_sources()
     sources = [s for s in sources if s.get("parse_strategy") in {"rss", "request", "telegram", "playwright"}]
     # Гео-роутинг: при включённом внешнем фетч-контуре источники с
-    # network_region='external' парсятся не здесь (с РФ-сервера к ним нет доступа —
+    # network_region='external' парсятся не здесь (с РФ-сервера к ним нет доступа:
     # WAF/таймаут), а на зарубежном воркере через enqueue-external-scrape. Чтобы не
-    # дублировать работу и не засорять логи их 403/таймаутами — выкидываем из локального
+    # дублировать работу и не засорять логи их 403/таймаутами: выкидываем из локального
     # прогона. Флаг выключен → ведём себя как раньше (всё локально).
     sources = [s for s in sources if not collected_externally(s)]
     if source_id is not None:

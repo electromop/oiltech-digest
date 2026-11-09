@@ -1,11 +1,11 @@
 """Перенос личных отметок и черновиков в общие (#111): шов команд на сервере.
 
-Основа — учётка эксперта: её отметки и черновики становятся общими; проверочные отметки
+Основа, учётка эксперта: её отметки и черновики становятся общими; проверочные отметки
 других учёток не переносятся. Перенос сам сверяет состав выпуска закрытых месяцев до и после
-и при расхождении ничего не пишет; повторный запуск ничего не меняет; сверка после переноса —
-только чтением. Здесь же — команды сборки выпуска (digest-content, digest-save).
+и при расхождении ничего не пишет; повторный запуск ничего не меняет; сверка после переноса:
+только чтением. Здесь же: команды сборки выпуска (digest-content, digest-save).
 
-Часы окна — 19.10.2026: октябрь открыт, сентябрь и август закрыты.
+Часы окна: 19.10.2026: октябрь открыт, сентябрь и август закрыты.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from oiltech_digest import cli, feed_window, signal_feedback
 from oiltech_digest.db import connection, marks, repository
 from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
 from tests.digest_user_path_support import SEPT, add_article, add_signal, issue_key, msk, utc
-from tests.digest_user_path_support import issue  # noqa: F401 — фикстура выпуска
+from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
 
 
 def _state(conn, user_id: int, table: str, column: str, row_id: int, status: str) -> None:
@@ -85,7 +85,7 @@ def base(isolated_db, monkeypatch):
         _state(conn, tester, "user_signal_states", "signal_id", test_signal, "digest")
         _draft(conn, expert, "2026-09", [a["mid"], a["hi"]], updated_at=utc(2026, 10, 2, 9))
         _draft(conn, tester, "2026-09", [a["test"]])
-        # Общий черновик месяца, у которого нет черновика основы, — не трогается.
+        # Общий черновик месяца, у которого нет черновика основы,: не трогается.
         _draft(conn, None, "2026-08", [a["aug"]], title="Август, общий")
         conn.commit()
     return {"expert": expert, "tester": tester, "a": a, "signal": signal, "test_signal": test_signal}
@@ -144,7 +144,7 @@ def test_write_makes_the_expert_state_shared_and_keeps_closed_issues(base):
         ("2026-08", "Август, общий", [a["aug"]]),
         ("2026-09", "Черновик", [a["mid"], a["hi"]]),
     ]
-    # Состав закрытого сентября — прежний выпуск эксперта, без проверочных отметок.
+    # Состав закрытого сентября: прежний выпуск эксперта, без проверочных отметок.
     assert repository.issue_composition("2026-09") == {
         "article_ids": sorted([a["hi"], a["mid"]]), "signal_ids": [base["signal"]],
     }
@@ -153,7 +153,7 @@ def test_write_makes_the_expert_state_shared_and_keeps_closed_issues(base):
 def test_expert_draft_replaces_an_older_shared_draft_even_if_that_one_is_newer(base):
     """До #111 команда digest-save писала общий черновик (строку без учётки), и на проде такие есть.
     Выпуск эксперта собирался по его черновику, а общий был запасным: черновик эксперта заменяет
-    общий своего месяца, даже если общий сохранён позже, — иначе состав разошёлся бы."""
+    общий своего месяца, даже если общий сохранён позже,: иначе состав разошёлся бы."""
     a = base["a"]
     with connection.get_connection() as conn:
         _draft(conn, None, "2026-09", [a["test"]], title="Сентябрь, старый общий", updated_at=utc(2026, 10, 3, 9))
@@ -181,7 +181,7 @@ def test_second_run_changes_nothing(base):
 
 def test_mismatch_in_a_closed_month_stops_without_writing(base):
     """Подстроенное расхождение: в общих уже стоит «шум» на статье сентябрьского выпуска эксперта
-    (общая отметка не перезаписывается) — перенос изменил бы закрытый выпуск и ничего не пишет."""
+    (общая отметка не перезаписывается): перенос изменил бы закрытый выпуск и ничего не пишет."""
     with connection.get_connection() as conn:
         conn.execute(
             "INSERT INTO article_marks (article_id, status, set_by_user_id) VALUES (%s, 'noise', %s)",
@@ -203,7 +203,7 @@ def test_mismatch_in_a_closed_month_stops_without_writing(base):
 
 
 def test_examples_of_other_accounts_go_out_with_their_marks(base):
-    """Пример «выбран в дайджест» — один на карточку и только у отмеченной: примеры проверочных
+    """Пример «выбран в дайджест», один на карточку и только у отмеченной: примеры проверочных
     учёток, чьи отметки не переносятся, гаснут; пример эксперта остаётся."""
     _example(base["signal"], base["expert"])
     _example(base["signal"], base["tester"])
@@ -216,12 +216,12 @@ def test_examples_of_other_accounts_go_out_with_their_marks(base):
 
 
 def test_check_after_the_switch_reads_only_the_months_closed_at_the_switch(base, monkeypatch):
-    """Сверка на проде — только чтением и по месяцам, закрытым на момент переноса: октябрь закроется
+    """Сверка на проде, только чтением и по месяцам, закрытым на момент переноса: октябрь закроется
     позже, его отметки ставят уже все, и с замороженным архивом эксперта он сойтись не обязан."""
     with pytest.raises(ValueError, match="ещё не сделан"):
         check_shared_marks()
     migrate_shared_marks(base["expert"], write=True)
-    # Сентябрь закрыт, в API был бы 409; здесь — подделка «правки задним числом», её сверка ловит.
+    # Сентябрь закрыт, в API был бы 409; здесь: подделка «правки задним числом», её сверка ловит.
     marks.set_article_mark(base["a"]["hi"], status="noise", user_id=base["tester"])
     assert not check_shared_marks()["ok"]
     marks.set_article_mark(base["a"]["hi"], status="digest", user_id=base["tester"])

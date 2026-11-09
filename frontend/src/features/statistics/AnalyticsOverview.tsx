@@ -1,5 +1,5 @@
-// Обзор экрана «Статистика»: что платформа дала за месяц — глазами заказчика.
-// Опора — презентация ГД (июль 2026): сквозной пайплайн (слайд 4), >120 источников
+// Обзор экрана «Статистика»: что платформа дала за месяц: глазами заказчика.
+// Опора, презентация ГД (июль 2026): сквозной пайплайн (слайд 4), >120 источников
 // (слайд 5), раннее выявление (слайды 3, 10), бюджет ИИ ~10 000 ₽/мес (слайд 7).
 import type { AnalyticsCost, AnalyticsMonth, MonthlyAnalytics } from "../../api/types";
 import {
@@ -34,9 +34,9 @@ export function AnalyticsOverview({ data, months, month }: Props) {
   const partial = !row.complete;
   const cost = data.ai_cost?.find((c) => c.month === row.month);
   const costBase = partial ? data.ai_cost_previous_same_period : data.ai_cost?.find((c) => c.month === base?.row.month);
-  // Рубли — по курсу ЦБ своего месяца (приходит с сервера у каждой строки затрат).
+  // Рубли: по курсу ЦБ своего месяца (приходит с сервера у каждой строки затрат).
   const rubOf = (c?: AnalyticsCost) => (c ? c.cost_usd * c.usd_rub : null);
-  // Радар — без статей: его расход в «₽ за статью» ленты не входит.
+  // Радар, без статей: его расход в «₽ за статью» ленты не входит.
   const feedUsd = (c: AnalyticsCost) => c.cost_usd - Number(c.radar_cost_usd ?? 0);
   const radarRubOf = (c?: AnalyticsCost) => (c ? Number(c.radar_cost_usd ?? 0) * c.usd_rub : 0);
   const rubPerArticleOf = (c?: AnalyticsCost) => (c && c.articles ? (feedUsd(c) * c.usd_rub) / c.articles : null);

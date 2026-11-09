@@ -1,13 +1,13 @@
-"""Экзамен «Карточки» (#133, спека #128), шов 2 — атрибуты основного вызова того же прогона против разметки экзамена
+"""Экзамен «Карточки» (#133, спека #128), шов 2: атрибуты основного вызова того же прогона против разметки экзамена
 карточки (#98), без новых порогов: только строки его экзаменационной части (на строках настройки #98 правили
-инструкцию) и тексты те же, что видел эксперт. Пакет #98 по строкам прежней разметки — card_scores_exam_support.
+инструкцию) и тексты те же, что видел эксперт. Пакет #98 по строкам прежней разметки: card_scores_exam_support.
 """
 
 import pytest
 
 from tests.card_scores_exam_support import LUNA, card_exam_pack, oracle_card, oracle_scores, part_rows, run_exam
-from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
-from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
+from tests.card_scores_exam_support import scores_pack  # noqa: F401: фикстура
+from tests.otbor_pack_support import pack  # noqa: F401: фикстура
 
 
 def test_main_call_attributes_are_scored_on_the_card_exam_rows_with_its_thresholds(scores_pack, monkeypatch):
@@ -20,7 +20,7 @@ def test_main_call_attributes_are_scored_on_the_card_exam_rows_with_its_threshol
     compared = [number for number in part_rows(report, scores_pack) if number in card_exam]
     assert compared and attributes["rows"] == sorted(compared)
     metrics = attributes["lenient"]
-    assert metrics["event_type"]["agent"] == 1.0  # тип события основного вызова — как у эксперта #98
+    assert metrics["event_type"]["agent"] == 1.0  # тип события основного вызова: как у эксперта #98
     assert metrics["region"]["agent"] == 0.0  # регион основной вызов не определил, у эксперта «Ближний Восток»
     assert metrics["region"]["passed"] is False and metrics["event_type"]["passed"] is True  # пороги #98
     assert attributes["markup"]["file"] == str(scores_pack["card_markup"])

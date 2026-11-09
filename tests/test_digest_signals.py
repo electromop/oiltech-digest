@@ -1,4 +1,4 @@
-"""Сигнал радара в месячном выпуске — не статья (баг до 28.09).
+"""Сигнал радара в месячном выпуске: не статья (баг до 28.09).
 
 Номер сигнала уезжал в article_id: сохранение черновика падало на внешнем ключе
 monthly_digest_items.article_id → articles или молча цепляло чужую статью с тем же
@@ -13,7 +13,7 @@ from oiltech_digest.processing.digest import build_digest_content, save_digest_d
 
 @pytest.fixture(autouse=True)
 def _no_item_kinds_lookup(monkeypatch):
-    """Категорию элементов (плашка «Технология / Бизнес») и поля материала PDF (#161) берёт база; эти проверки — без
+    """Категорию элементов (плашка «Технология / Бизнес») и поля материала PDF (#161) берёт база; эти проверки: без
     базы."""
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
     monkeypatch.setattr(digest.repository, "issue_material_fields", lambda articles, signals: ({}, {}))
@@ -64,7 +64,7 @@ def test_signal_item_carries_signal_id_not_article_id(monkeypatch):
 
     by_type = {item["item_type"]: item for item in content["news"]}
     assert by_type["article"]["article_id"] == 10 and by_type["article"]["signal_id"] is None
-    # Номер 10 у сигнала и у статьи совпадает — связь больше не путается.
+    # Номер 10 у сигнала и у статьи совпадает: связь больше не путается.
     assert by_type["signal"]["article_id"] is None and by_type["signal"]["signal_id"] == 10
 
 
@@ -99,7 +99,7 @@ def test_draft_save_stores_articles_only(monkeypatch):
 
 
 def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
-    # Все статьи черновика с тех пор скрыты (перепечатка, удаление) — выпуск как раньше
+    # Все статьи черновика с тех пор скрыты (перепечатка, удаление): выпуск как раньше
     # берёт текущую подборку, а не одни сигналы.
     _patch(monkeypatch, saved_items=[{"article_id": 11}], candidates=[_row(12), _row(7, item_type="signal")])
     monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, month=None: [])

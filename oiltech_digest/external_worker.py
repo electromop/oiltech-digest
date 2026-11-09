@@ -45,7 +45,7 @@ def run_loop(
     if once:
         _claim_loop(ExternalWorkerClient(worker_id=base_id, **settings), sleep_seconds, once=True)
         return
-    # Потоки полосы: у каждого свой клиент (своя сессия requests) и своё имя в claimed_by —
+    # Потоки полосы: у каждого свой клиент (своя сессия requests) и своё имя в claimed_by:
     # по нему видно, какой поток держит задачу. Выдача под SKIP LOCKED: одну задачу
     # два потока не получат. Главный поток задач не берёт: он ждёт сигнала остановки и
     # возвращает ядру то, что не успело закончиться (worker_shutdown.supervise).
@@ -86,7 +86,7 @@ def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: b
             if once:
                 return
             _pause(idle)
-            # Пусто — следующий вопрос реже: 3 → 6 → … → 30 с, на первой задаче снова 3.
+            # Пусто, следующий вопрос реже: 3 → 6 → … → 30 с, на первой задаче снова 3.
             # 21.09 постоянные 3 с на шести потоках NL давали 582 claim за 5 мин простоя.
             idle = min(idle * 2, max(sleep_seconds, config.EXTERNAL_WORKER_POLL_MAX_SECONDS))
             continue
@@ -168,7 +168,7 @@ class ExternalWorkerClient:
         response.raise_for_status()
 
     def fork(self) -> "ExternalWorkerClient":
-        """Тот же воркер со своей сессией — для фонового продления аренды из другого потока."""
+        """Тот же воркер со своей сессией: для фонового продления аренды из другого потока."""
         clone = ExternalWorkerClient.__new__(ExternalWorkerClient)
         clone.core_api_url = self.core_api_url
         clone.worker_id = self.worker_id
@@ -188,9 +188,9 @@ class ExternalWorkerClient:
 
     def fail(self, job: dict[str, Any], error: str, *, retryable: bool = True, retry_after_seconds: int = 300,
              result: dict[str, Any] | None = None) -> None:
-        """Задача не удалась: попытка списывается. result — сделанная часть пакета (partial, так
+        """Задача не удалась: попытка списывается. result: сделанная часть пакета (partial, так
         отдаёт зависшую задачу сторож аренды): ядро запишет её и вычтет из задачи, как при
-        release. Ядро до 28.09 поле не знает и молча пропускает — тогда это прежний fail."""
+        release. Ядро до 28.09 поле не знает и молча пропускает: тогда это прежний fail."""
         response = self.session.post(
             f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/fail",
             json={
@@ -207,7 +207,7 @@ class ExternalWorkerClient:
     def release(self, job: dict[str, Any], *, reason: str, result: dict[str, Any] | None = None) -> None:
         """Вернуть задачу ядру на остановке: сразу в очередь, попытка не списывается.
 
-        result — сделанная часть пакета (partial): ядро запишет её и вычтет из задачи,
+        result, сделанная часть пакета (partial): ядро запишет её и вычтет из задачи,
         чтобы при следующей выдаче модель не звалась за уже оплаченное."""
         response = self.session.post(
             f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/release",
@@ -236,11 +236,11 @@ def _json_default(value: Any) -> Any:
 
 
 def json_ready(result: Any) -> Any:
-    """Итог уходит ядру JSON-ом: дата — строкой ISO, число из базы — float.
+    """Итог уходит ядру JSON-ом: дата: строкой ISO, число из базы: float.
 
     Без этого дата в любом поле итога роняла отправку уже сделанной (и оплаченной)
-    работы: 18.09 — сбор (c858539), 21.09 — радар агентов; задача уходила в повтор и
-    падала снова. Прочее непривычное по-прежнему — громкая ошибка, а не молчаливая строка."""
+    работы: 18.09: сбор (c858539), 21.09: радар агентов; задача уходила в повтор и
+    падала снова. Прочее непривычное по-прежнему: громкая ошибка, а не молчаливая строка."""
     return json.loads(json.dumps(result, default=_json_default))
 
 
@@ -269,11 +269,11 @@ def _release(client: "ExternalWorkerClient", job: dict[str, Any], reason: str,
         logger.exception("external_job_release_failed job_id=%s — вернётся по истечении аренды", job.get("id"))
 
 
-# Сколько задача может не подавать признаков продвижения (heartbeat обработчика —
+# Сколько задача может не подавать признаков продвижения (heartbeat обработчика:
 # по статье, кандидату, куску документа), прежде чем её сочтут зависшей, с. Не общее
-# время: пачка в 500 статей с шагом ~20 с идёт часами и должна дойти (ревью 21.09 —
-# потолок на всё время трижды выбросил бы её оплаченную работу). Шаг ИИ — до нескольких
-# минут на длинном рассуждении модели, шаг сбора — до ~1,5 мин на браузерной странице.
+# время: пачка в 500 статей с шагом ~20 с идёт часами и должна дойти (ревью 21.09:
+# потолок на всё время трижды выбросил бы её оплаченную работу). Шаг ИИ: до нескольких
+# минут на длинном рассуждении модели, шаг сбора: до ~1,5 мин на браузерной странице.
 _JOB_STALL_SECONDS = {
     "process_articles": 1200,
     "translate_titles": 1200,
@@ -281,11 +281,11 @@ _JOB_STALL_SECONDS = {
     "reprint_review": 1200,
     "scrape_source": 600,
     "refetch_text": 600,
-    # Радар подаёт beat на каждую тему, кластер, запрос поиска, страницу и пару дедупа —
+    # Радар подаёт beat на каждую тему, кластер, запрос поиска, страницу и пару дедупа:
     # между ними один вызов модели или одна страница, как у ИИ-видов.
     "signal_discovery": 1200,
-    # Карточка сигнала: шаг — один вызов модели на сигнал; «Отбор» — один-два на публикацию; «Суть и перевод»
-    # сигналов — суть и перевод заголовка на сигнал; баллы «Карточки» — один вызов на сигнал.
+    # Карточка сигнала: шаг: один вызов модели на сигнал; «Отбор»: один-два на публикацию; «Суть и перевод»
+    # сигналов: суть и перевод заголовка на сигнал; баллы «Карточки»: один вызов на сигнал.
     "signal_card": 1200,
     "otbor": 1200,
     "signal_summary": 1200,
@@ -308,16 +308,16 @@ def _exit_for_restart() -> None:
 
 
 class LeaseKeeper:
-    """Продлевает аренду задачи, пока та выполняется, — фоновым потоком.
+    """Продлевает аренду задачи, пока та выполняется,: фоновым потоком.
 
     Раньше аренду продлевал только код обработчика, и новый код его забывал: 24.07
     (петля переотдачи и двойная оплата), 17.09 (загрузчики), 21.09 (докачка радара).
-    Здесь это не зависит от обработчика. 409 от ядра — аренда отозвана: помечаем, и
+    Здесь это не зависит от обработчика. 409 от ядра, аренда отозвана: помечаем, и
     ближайший heartbeat обработчика прерывает работу (LeaseLost), чтобы не платить за
     выброшенный результат. Если обработчик перестал подавать признаки продвижения
-    (touch), задача возвращается в очередь — ИИ-пакет со снимком сделанного, чтобы
-    оплаченное не оплачивалось второй раз, — процесс перестаёт брать новые, ждёт
-    соседние потоки и перезапускается — зависание лечится само, а не держит полосу."""
+    (touch), задача возвращается в очередь: ИИ-пакет со снимком сделанного, чтобы
+    оплаченное не оплачивалось второй раз,: процесс перестаёт брать новые, ждёт
+    соседние потоки и перезапускается: зависание лечится само, а не держит полосу."""
 
     def __init__(
         self,
@@ -368,7 +368,7 @@ class LeaseKeeper:
                 logger.warning("external_heartbeat_failed job_id=%s", self.job.get("id"))
 
     def _restart_stalled(self) -> None:
-        # Отчёт забираем у обработчика: проснувшись, он уже не отчитается второй раз. Снимок —
+        # Отчёт забираем у обработчика: проснувшись, он уже не отчитается второй раз. Снимок:
         # сделанное на последней границе шага (worker_shutdown), как у остановки по SIGTERM.
         mine, done = worker_shutdown.SHUTDOWN.take(self.job)
         if not mine:
@@ -378,14 +378,14 @@ class LeaseKeeper:
                            self.job.get("id"))
             return
         if str(self.job.get("kind") or "") not in contract.PARTIAL_KINDS:
-            done = None  # сбор и документ частичного итога не отдают — уходят целиком, как раньше
+            done = None  # сбор и документ частичного итога не отдают: уходят целиком, как раньше
         logger.error(
             "external_job_stalled job_id=%s kind=%s — нет продвижения %ss: в очередь (сделано: %s), процесс на перезапуск",
             self.job.get("id"), self.job.get("kind"), int(self.stall_seconds), contract.done_count(done),
         )
         try:
             # fail, а не release: попытка списывается. Зависание может сидеть в самой задаче (вечный
-            # вызов, регулярка по тексту статьи) — с release такая задача крутилась бы без конца,
+            # вызов, регулярка по тексту статьи): с release такая задача крутилась бы без конца,
             # каждые 20 минут перезапуская процесс (класс 24.07, задача 1181).
             self.client.fail(self.job, f"нет продвижения {int(self.stall_seconds)} с", retryable=True,
                              retry_after_seconds=60, result=done)
@@ -393,7 +393,7 @@ class LeaseKeeper:
             logger.warning("external_job_stall_fail_report_failed job_id=%s", self.job.get("id"))
         _DRAINING.set()
         deadline = time.monotonic() + self.drain_seconds
-        # Соседей — без своей задачи: проснись зависший обработчик во время ожидания и выйди из
+        # Соседей, без своей задачи: проснись зависший обработчик во время ожидания и выйди из
         # реестра, «> 1» упало бы до числа соседей и os._exit оборвал бы здоровую (ревью #73).
         while worker_shutdown.SHUTDOWN.in_work(exclude=self.job) > 0 and time.monotonic() < deadline:
             time.sleep(1.0)
@@ -407,9 +407,9 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     keeper: LeaseKeeper | None = None
 
     def beat(done: dict[str, Any] | None = None) -> None:
-        # done — итог пакета на границе шага: его отдаст главный поток, если следующий шаг
+        # done, итог пакета на границе шага: его отдаст главный поток, если следующий шаг
         # зависнет дольше срока остановки, или сторож аренды, если шаг завис дольше своего срока
-        # (ИИ-пакет: шаг — статья, до пяти вызовов модели).
+        # (ИИ-пакет: шаг: статья, до пяти вызовов модели).
         if keeper.lost.is_set():
             raise external_ai.LeaseLost(f"lease lost for job {job.get('id')}")
         if done is not None:
@@ -446,7 +446,7 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "otbor": (otbor, "process_payload"),
     # «Суть и перевод» находок и материалов, принятых «Отбором» (#131, контракт 5).
     "signal_summary": (signal_summary, "process_payload"),
-    # Второй вызов «Карточки» — баллы по профилю категории (#132, контракт 6).
+    # Второй вызов «Карточки»: баллы по профилю категории (#132, контракт 6).
     "signal_scores": (signal_scores, "process_payload"),
     # Код допуска в чат подтверждающих (#113, контракт 3): воркер сбора, полоса external-notify.
     "admission_notify": (admission, "send_notification"),
@@ -462,10 +462,10 @@ def _handler(kind: str) -> Callable[..., dict[str, Any]]:
 
 
 def _claim_report(job: dict[str, Any]) -> bool:
-    """Отчитаться о задаче может один: этот поток — если её ещё не вернул главный поток."""
+    """Отчитаться о задаче может один: этот поток: если её ещё не вернул главный поток."""
     if worker_shutdown.SHUTDOWN.begin_report(job):
         return True
-    # Вернуть мог главный поток (остановка по SIGTERM) или сторож (зависание) — не гадаем.
+    # Вернуть мог главный поток (остановка по SIGTERM) или сторож (зависание): не гадаем.
     logger.warning("external_job_report_skipped job_id=%s — о задаче уже отчитался другой поток "
                    "(остановка или сторож зависания)", job.get("id"))
     return False
@@ -477,7 +477,7 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
     try:
         handler = _handler(kind)
         client.progress(job, 20)
-        # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease —
+        # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease:
         # большой батч на медленной модели не истекает по аренде и не уходит в ретрай-петлю.
         # Сбор на РФ (добор находок радара): страницу, которую воркер не открыл, качает ядро в аренде этой задачи.
         with publisher_page.core_pages(lambda url: core_page.ask(client, job, url)):
@@ -488,7 +488,7 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
             _release(client, job, "остановка воркера до конца задачи")
         return
     except external_ai.LeaseLost:
-        # Ни complete, ни fail слать нельзя — оба вернут 409. Просто выходим: задача уже
+        # Ни complete, ни fail слать нельзя: оба вернут 409. Просто выходим: задача уже
         # в очереди у core и будет выдана заново (возможно, этому же воркеру).
         logger.warning("external_job_abandoned job_id=%s — lease отозван, беру следующую", job.get("id"))
         return
@@ -497,7 +497,7 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
         if _claim_report(job):
             _fail_quietly(client, job, exc)
         return
-    # Итог готов — отчёт забираем сразу, до первого запроса к ядру: иначе главный поток на
+    # Итог готов, отчёт забираем сразу, до первого запроса к ядру: иначе главный поток на
     # остановке мог бы отдать задачу пустой, пока идёт progress (ревью 23.09).
     if not _claim_report(job):
         return
@@ -505,7 +505,7 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
         _release(client, job, "остановка воркера: возвращаю сделанное", result=result)
         return
     try:
-        # Отметка прогресса — для экрана; её сбой не повод выбрасывать оплаченный итог.
+        # Отметка прогресса: для экрана; её сбой не повод выбрасывать оплаченный итог.
         client.progress(job, 90)
     except Exception:  # noqa: BLE001 - complete ниже скажет, жива ли аренда
         logger.warning("external_progress_failed job_id=%s — отправляю итог всё равно", job.get("id"))

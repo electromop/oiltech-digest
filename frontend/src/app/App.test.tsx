@@ -158,7 +158,7 @@ const maintenanceStatus = {
         mismatch: true,
       },
       {
-        // Давно пропавший воркер со старым контрактом: ядро его не отмечает — экран не красит.
+        // Давно пропавший воркер со старым контрактом: ядро его не отмечает: экран не красит.
         consumer: "external-worker-1",
         queues: ["external-ai"],
         build: null,
@@ -313,7 +313,7 @@ const processingDocument = {
 };
 
 // Список, который отдаёт мок GET /api/documents. Тест меняет его ДО входа в приложение,
-// чтобы проверить оба состояния опроса: есть документ в работе — и нет ни одного.
+// чтобы проверить оба состояния опроса: есть документ в работе: и нет ни одного.
 let documentsFixture: unknown[] = [];
 
 // Документ в детальном ответе тесты подменяют: карточка рисуется ИМЕННО из него,
@@ -332,7 +332,7 @@ const uploadedDocumentDetails = {
     summary_json: ["Спрос на ГРП вырос", "Импорт оборудования снизился"],
     claims_json: ["Доля отечественного оборудования достигнет 80 процентов"],
   },
-  // Один факт сверен с текстом, второй — нет: карточка обязана показать их ПО-РАЗНОМУ.
+  // Один факт сверен с текстом, второй, нет: карточка обязана показать их ПО-РАЗНОМУ.
   facts: [
     { value: "1200", unit: "скважин", context: "введено в эксплуатацию", anchor: 14, verified: true },
     { value: "80", unit: "%", context: "доля отечественного оборудования", anchor: 21, verified: false },
@@ -678,7 +678,7 @@ describe("App smoke", () => {
     // Сторож полос: тревога видна на экране, а не только в логе планировщика.
     expect(screen.getByRole("alert")).toHaveTextContent("208 задач ждут");
     expect(screen.getByText("external-ai", { selector: "strong" })).toBeInTheDocument();
-    // Контракт версий: сборка каждого воркера NL видна, старый — подсвечен и в тревогах.
+    // Контракт версий: сборка каждого воркера NL видна, старый: подсвечен и в тревогах.
     expect(screen.getByRole("alert")).toHaveTextContent("nl-browser-1: не сообщил номер");
     expect(screen.getByTestId("consumer-nl-ai-1")).toHaveTextContent("сборка abc1234");
     expect(screen.getByTestId("consumer-nl-ai-1")).not.toHaveClass("contractMismatch");
@@ -719,12 +719,12 @@ describe("App smoke", () => {
     await user.click(within(sidebar).getByRole("button", { name: "Технологический радар" }));
 
     expect(await screen.findByRole("heading", { name: "Технологический радар" })).toBeInTheDocument();
-    // Свой экран — свои фильтры: поиск ленты на радар не переехал, витрина — технологии.
+    // Свой экран, свои фильтры: поиск ленты на радар не переехал, витрина: технологии.
     expect(screen.getByRole("textbox", { name: /^Поиск/ })).toHaveValue("");
     await waitFor(() => expect(lastSignalsUrl()).not.toContain("showcase="));
   });
 
-  // Окно месяца (ADR 0001, п. 6): прошлый месяц — архив, только просмотр.
+  // Окно месяца (ADR 0001, п. 6): прошлый месяц: архив, только просмотр.
   function withArchiveMocks() {
     const augustArticle = { ...article, id: 801, title: "August drilling story", date: "2026-08-20", published_at: "2026-08-20", collected: "2026-08-20" };
     const baseImpl = fetchMock.getMockImplementation();
@@ -762,7 +762,7 @@ describe("App smoke", () => {
     expect(screen.queryByRole("combobox", { name: "Выпуск" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeInTheDocument();
 
-    // Прошлый выпуск — во вкладке архива, только на просмотр.
+    // Прошлый выпуск: во вкладке архива, только на просмотр.
     await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
     const august = screen.getByRole("rowheader", { name: "август 2026" }).closest("tr") as HTMLElement;
     await user.click(within(august).getByRole("button", { name: "Открыть" }));
@@ -773,7 +773,7 @@ describe("App smoke", () => {
     expect(screen.getByRole("button", { name: "Скачать PDF" })).toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
-    // Предпросмотр прошлого выпуска — его же PDF.
+    // Предпросмотр прошлого выпуска: его же PDF.
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/digest-preview.pdf?month=2026-08&"))).toBe(true),
     );
@@ -817,7 +817,7 @@ describe("App smoke", () => {
       fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
     await waitFor(() => expect(digestListCalls()).toBe(1));
 
-    // Наступило 5-е, человек вернулся на вкладку: окно другое — список выбранного перечитан.
+    // Наступило 5-е, человек вернулся на вкладку: окно другое: список выбранного перечитан.
     months = ["2026-10"];
     document.dispatchEvent(new Event("visibilitychange"));
     await waitFor(() => expect(digestListCalls()).toBe(2));
@@ -847,7 +847,7 @@ describe("App smoke", () => {
     });
   });
 
-  // Документы с 23.10 — в общем разделе «Материалы»: вносятся подокном «Внести материал», разбор открывается
+  // Документы с 23.10, в общем разделе «Материалы»: вносятся подокном «Внести материал», разбор открывается
   // подокном «Разбор документа». Прежняя ссылка на раздел документов ведёт туда же.
   async function openDocumentsScreen() {
     window.history.replaceState(null, "", "/?screen=documents");
@@ -971,7 +971,7 @@ describe("App smoke", () => {
     // Реальное ожидание, а не проверка «таймер создан»: интересует именно повторный запрос.
     await new Promise((resolve) => setTimeout(resolve, 5400));
     await waitFor(() => expect(listCalls()).toBeGreaterThan(1));
-    // Ждём дольше стандартных 5с vitest: интервал опроса по условию задачи — ровно 5 секунд.
+    // Ждём дольше стандартных 5с vitest: интервал опроса по условию задачи: ровно 5 секунд.
   }, 15000);
 
   it("не опрашивает список, когда ни один материал не в работе", async () => {

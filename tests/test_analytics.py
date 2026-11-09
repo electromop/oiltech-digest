@@ -9,7 +9,7 @@ from oiltech_digest import api
 from oiltech_digest.db import analytics, repository
 
 MSK = ZoneInfo("Europe/Moscow")
-# Опорные моменты — от начала текущего и прошлого месяца по Москве, чтобы тест не
+# Опорные моменты: от начала текущего и прошлого месяца по Москве, чтобы тест не
 # зависел от даты запуска: «сейчас минус час» первого числа попал бы в прошлый месяц.
 THIS_MONTH = "(date_trunc('month', now() AT TIME ZONE 'Europe/Moscow') + interval '2 hours') AT TIME ZONE 'Europe/Moscow'"
 PREV_DAY1 = "(date_trunc('month', now() AT TIME ZONE 'Europe/Moscow') - interval '1 month' + interval '2 hours') AT TIME ZONE 'Europe/Moscow'"
@@ -35,7 +35,7 @@ def _article(source_id, url, collected_sql, *, language="ru", relevant=True, sco
     _exec("INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, %s, %s)",
           (article_id, "суть" if relevant else "", relevant))
     if score is not None:
-        # Балл готов через 2 часа после сбора — от публикации это published_hours_before + 2.
+        # Балл готов через 2 часа после сбора: от публикации это published_hours_before + 2.
         _exec(f"INSERT INTO article_scores (article_id, total_score, created_at) VALUES (%s, %s, {collected_sql} + interval '2 hours')",
               (article_id, score))
     if tag_id is not None:
@@ -70,13 +70,13 @@ def test_monthly_analytics_funnel_same_period_themes_and_sources(isolated_db, mo
     assert (current["reprints"], current["sources_active"], current["sources_relevant"], current["sources_strong"]) == (1, 2, 2, 1)
     assert round(current["speed_p50_hours"]) == 6  # публикация → балл: 4 ч до сбора + 2 ч обработки
 
-    # Прошлый месяц целиком и «те же дни» — честная база для незаконченного текущего.
+    # Прошлый месяц целиком и «те же дни»: честная база для незаконченного текущего.
     day = datetime.now(MSK).day
     assert data["months"][-2]["collected"] == 2
     assert data["previous_same_period"]["collected"] == (2 if day >= 28 else 1)
     assert data["previous_same_period"]["days"] == min(day, data["previous_same_period"]["days"])
 
-    # Темы — по корню действующей таксономии; старое направление не подмешивается.
+    # Темы: по корню действующей таксономии; старое направление не подмешивается.
     themes = [(row["tag"], row["relevant"], row["strong"]) for row in data["themes"] if row["month"] == current["month"]]
     assert themes == [("Бурение", 1, 1)]
     top = [row["source"] for row in data["top_sources"] if row["month"] == current["month"]]
@@ -143,7 +143,7 @@ def test_statistics_read_the_feed_signal_and_strong_and_top_follow_its_bands(iso
 
 
 def test_analytics_is_admin_only(monkeypatch):
-    """Решение владельца 19.09: «показываем только админам» — гейт на API."""
+    """Решение владельца 19.09: «показываем только админам»: гейт на API."""
     seen = []
     monkeypatch.setattr(api.analytics, "monthly_analytics",
                         lambda months, include_cost=False: seen.append(include_cost) or {"months": []})
@@ -167,9 +167,9 @@ def test_cost_months_use_cbr_rate_of_their_own_last_day(isolated_db, monkeypatch
 
     now = datetime.now(MSK).date()
     current, previous = data["ai_cost"][-1], data["ai_cost"][-2]
-    assert current["usd_rub_date"] == now.isoformat()  # текущий месяц — по курсу на сегодня
+    assert current["usd_rub_date"] == now.isoformat()  # текущий месяц: по курсу на сегодня
     prev_last = datetime.strptime(previous["month"] + "-01", "%Y-%m-%d").date()
     assert previous["usd_rub_date"].startswith(previous["month"]) and previous["usd_rub_date"] >= prev_last.isoformat()
     assert previous["usd_rub"] == 80.0 + int(previous["month"][5:])
     same = data["ai_cost_previous_same_period"]
-    assert same["usd_rub_date"] == f"{same['month']}-{same['days']:02d}"  # база «те же дни» — по курсу её последнего дня
+    assert same["usd_rub_date"] == f"{same['month']}-{same['days']:02d}"  # база «те же дни»: по курсу её последнего дня

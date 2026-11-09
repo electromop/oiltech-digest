@@ -1,6 +1,6 @@
 """Общее для тестов радара и материалов коллег через «Отбор» (#131, спека #128): прогон радара через настоящий клиент
 воркера NL с подставным поиском GPT и страницами издателей, «Суть и перевод» сигналов на подставной модели. Шаг
-«Отбора» и его подставная модель — tests/otbor_support.py. Сами тесты — test_otbor_radar.py (находки поиска) и
+«Отбора» и его подставная модель: tests/otbor_support.py. Сами тесты: test_otbor_radar.py (находки поиска) и
 test_otbor_materials.py (материалы коллег).
 """
 
@@ -11,14 +11,14 @@ from tests.signal_card_support import DRILLING, run_worker, tag
 # Черновые данные модели поиска: в решения агентов они не идут (спека #128).
 DRAFT_SUMMARY = "Сводка модели поиска: событие найдено поиском"
 DRAFT_WHY = "Почему важно по версии модели поиска"
-# Текст страницы издателя длиннее прежних 1 500 знаков: вход «Отбора» — до 6 000, как у статьи сбора.
+# Текст страницы издателя длиннее прежних 1 500 знаков: вход «Отбора»: до 6 000, как у статьи сбора.
 PAGE_TEXT = " ".join(f"Абзац {number}: ADNOC Drilling will drill 40 wells for the Hail and Ghasha project with SLB "
                      f"automation, the operator said." for number in range(1, 41))
 NO_PAGE = {"ok": False, "error": "http_403", "raw_text": "", "title": "", "published_at": None}
 
 
 class SearchModel:
-    """Подставной поиск GPT: события темы — заготовка; адреса из найденного — все события, если не сказано иначе.
+    """Подставной поиск GPT: события темы: заготовка; адреса из найденного: все события, если не сказано иначе.
     Вызовы и докачанные страницы (fetched) запоминает."""
 
     def __init__(self, events, cited=None):
@@ -34,7 +34,7 @@ class SearchModel:
 
 
 def event(title, url, **overrides):
-    """Событие из ответа поиска GPT — с черновыми данными: тип, компания, суть, «почему важно»."""
+    """Событие из ответа поиска GPT, с черновыми данными: тип, компания, суть, «почему важно»."""
     return {"title": title, "company": "ADNOC", "event_date": "2026-10-20", "summary": DRAFT_SUMMARY,
             "why_important": DRAFT_WHY, "source_url": url, "publisher": "ADNOC", "source_kind": "primary",
             "technology": "", "event_kind": "technology_contract", **overrides}
@@ -46,7 +46,7 @@ def page(title, text=PAGE_TEXT):
 
 
 class _DedupJudge:
-    """Подставной судья «Дедупа»: любая пара — одно событие (same) или разные."""
+    """Подставной судья «Дедупа»: любая пара: одно событие (same) или разные."""
 
     def __init__(self, same):
         self.same = same
@@ -57,9 +57,9 @@ class _DedupJudge:
 
 
 def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, before_worker=None, on_fetch=None):
-    """Ежедневная задача радара (тема — тематика бурения) → воркер NL полосы агентов с подставным поиском и
+    """Ежедневная задача радара (тема: тематика бурения) → воркер NL полосы агентов с подставным поиском и
     страницами → ядро. before_worker: что меняется между постановкой задачи и её выдачей (.env NL), on_fetch:
-    что происходит, пока воркер докачивает страницу (сбор успел собрать её же). pages=None — докачка настоящая
+    что происходит, пока воркер докачивает страницу (сбор успел собрать её же). pages=None: докачка настоящая
     (запрос, ядро РФ, браузер; сеть подменяет сам тест, tests/test_signal_search_pages.py). Возвращает подставной
     поиск: его вызовы и докачанные страницы."""
     tag(DRILLING)
@@ -83,7 +83,7 @@ def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, befor
 
 
 class SummaryModel:
-    """Подставная модель «Суть и перевод»: по заголовку публикации — (русский заголовок, суть). Вызовы запоминает."""
+    """Подставная модель «Суть и перевод»: по заголовку публикации: (русский заголовок, суть). Вызовы запоминает."""
 
     def __init__(self, answers):
         self.answers = answers

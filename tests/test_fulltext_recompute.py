@@ -25,7 +25,7 @@ from oiltech_digest.processing.openai_client import AIResponse
 AUTH = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}
 STAGES = ["summary"]
 TITLE = "Aker BP starts drilling campaign at Yggdrasil field in the North Sea"
-# Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09 — 183).
+# Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09-183).
 TEASER = ("Aker BP has started a drilling campaign at the Yggdrasil field. The operator plans "
           "several wells this year, the company said in a statement on Monday, without details.")
 FULL = (
@@ -38,7 +38,7 @@ FULL = (
 
 
 def _freeze_window(monkeypatch) -> None:
-    # 29.09 по МСК: открыт только сентябрь, август — архив.
+    # 29.09 по МСК: открыт только сентябрь, август: архив.
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 9, 29, 12, 0, tzinfo=feed_window.MSK))
 
 
@@ -175,7 +175,7 @@ def _core(monkeypatch) -> TestClient:
         pytest.param("т" * 450, "т" * 850, False, id="меньше-чем-вдвое"),
         pytest.param(FULL, FULL, False, id="то-же-тело"),
         pytest.param(FULL, FULL.replace(". ", ".\n\n"), False, id="то-же-тело-другие-пробелы"),
-        # Модель читает первые 6000 знаков: 4000 → 20 000 для неё — 4000 → 6000.
+        # Модель читает первые 6000 знаков: 4000 → 20 000 для неё: 4000 → 6000.
         pytest.param("т" * 4000, "т" * 20_000, False, id="дальше-6000-модель-не-читает"),
         pytest.param("т" * 2500, "т" * 20_000, True, id="2500-в-6000-видимых"),
         pytest.param(TEASER, "", False, id="нового-тела-нет"),
@@ -254,7 +254,7 @@ def test_intermediate_too_short_body_counts_once_from_the_teaser(isolated_db, mo
     """Ревью PR #87: путь NL пишет тело и при too_short, а в пересчёт брал только ok и мерил прирост
     от уже промежуточного тела. Анонс 167 → too_short 440 → too_short 440 → ok 850 давало ноль
     пересчётов, и суть оставалась по анонсу. Теперь прирост к анонсу срабатывает один раз, а
-    следующий — только если тело снова вдвое длиннее (850 от 440 — нет)."""
+    следующий: только если тело снова вдвое длиннее (850 от 440: нет)."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
     article_id = _article(_source(), 0)
@@ -273,7 +273,7 @@ def test_intermediate_too_short_body_counts_once_from_the_teaser(isolated_db, mo
 
 def test_shorter_refetch_never_overwrites_the_stored_body(isolated_db, monkeypatch):
     """Как _is_better_text у локальной дозагрузки: текст с NL короче сохранённого тело не
-    затирает и пересчёт не ставит — ни полное тело, ни анонс."""
+    затирает и пересчёт не ставит: ни полное тело, ни анонс."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
     source_id = _source()
@@ -292,7 +292,7 @@ def test_shorter_refetch_never_overwrites_the_stored_body(isolated_db, monkeypat
 
 
 def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(isolated_db, monkeypatch):
-    """Архив — только просмотр: статья закрытого месяца, выбранная людьми в дайджест, не меняется.
+    """Архив, только просмотр: статья закрытого месяца, выбранная людьми в дайджест, не меняется.
     Отклонённую (здесь гейтом до «Отбора») и скрытую не пересчитываем, а ещё не решённую возьмёт обычный пакет после
     решения «Отбора», уже по полному тексту."""
     _freeze_window(monkeypatch)
@@ -318,7 +318,7 @@ def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(iso
 
 def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_rejected(isolated_db, monkeypatch):
     """Главный случай зарубежных источников: пакет дня выдан с анонсом (резерв при выдаче), а
-    refetch_text той же минуты кладёт полное тело. Суть ляжет по анонсу уже после замены тела —
+    refetch_text той же минуты кладёт полное тело. Суть ляжет по анонсу уже после замены тела:
     пересчёт ставится сразу и ждёт, пока пакет не допишет. Кого за это время отклонили, тот
     пересчёта не получает: модель за него не платится."""
     _freeze_window(monkeypatch)
@@ -363,7 +363,7 @@ def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_rejec
 def test_articles_marked_for_digest_are_not_recomputed_at_enqueue_or_claim(isolated_db, monkeypatch):
     """Решение координатора (ревью PR #87): статью, которую кто-либо отметил «В дайджест», не
     пересчитываем ни при постановке, ни при выдаче. 04.10 сентябрь ещё открыт, выпуск за него
-    собирается, и суть с баллом не должны меняться под редактором. Так же — статья сохранённого
+    собирается, и суть с баллом не должны меняться под редактором. Так же: статья сохранённого
     черновика выпуска: его состав приходит и списком из черновика, без отметки."""
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
     _external_ai(monkeypatch)
@@ -388,7 +388,7 @@ def test_articles_marked_for_digest_are_not_recomputed_at_enqueue_or_claim(isola
 
 
 def test_month_closed_while_recompute_waited_drops_article_at_claim(isolated_db, monkeypatch):
-    """04.10 сентябрь ещё открыт (зазор до 5-го), и пересчёт ставится. Выдали задачу 05.10 —
+    """04.10 сентябрь ещё открыт (зазор до 5-го), и пересчёт ставится. Выдали задачу 05.10:
     сентябрь уже архив, только просмотр: статья отброшена, модель за неё не зовётся."""
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
     _external_ai(monkeypatch)
@@ -423,7 +423,7 @@ def test_local_fetch_full_text_step_enqueues_recompute_once(isolated_db, monkeyp
     assert "обновлено=1" in (out := capsys.readouterr().out) and "пересчёт ИИ=1" in out
     ((_, queue, _, payload),) = _jobs()
     assert queue == "external-ai-bulk" and payload["article_ids"] == [article_id] and payload["only"] == STAGES
-    # Статья с полным текстом в дозагрузку больше не выбирается — второго пересчёта нет.
+    # Статья с полным текстом в дозагрузку больше не выбирается: второго пересчёта нет.
     cli.cmd_fetch_full_text(step)
     assert "проверено=0" in (out := capsys.readouterr().out) and "пересчёт ИИ=0" in out
     assert len(_jobs()) == 1

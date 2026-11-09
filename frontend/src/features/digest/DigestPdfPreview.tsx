@@ -13,8 +13,8 @@ export type PdfPreviewFilters = {
 
 type Props = {
   filters: PdfPreviewFilters;
-  // Число растёт — PDF собирается заново (открытие экрана, смена выпуска, сохранённый черновик, «Обновить PDF»);
-  // 0 — ещё не собирать.
+  // Число растёт: PDF собирается заново (открытие экрана, смена выпуска, сохранённый черновик, «Обновить PDF»);
+  // 0: ещё не собирать.
   refreshToken: number;
   // PDF показывает прежнее состояние: состав очереди изменён и не сохранён (PDF собирается из сохранённого черновика)
   // или фильтры сменились после сборки. Порядок черновика PDF не задаёт (#161).
@@ -25,7 +25,7 @@ type Props = {
 
 // Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же документ, что уйдёт выгрузкой. PDF собирается
 // на сервере 5-20 секунд, поэтому не на каждое нажатие: при открытии, смене выпуска, сохранении черновика и по кнопке.
-// Пока собирается новый — виден прежний, сверху плашка «Собираем PDF…».
+// Пока собирается новый: виден прежний, сверху плашка «Собираем PDF…».
 export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh, onError }: Props) {
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -39,7 +39,7 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
 
   useEffect(() => {
     let cancelled = false;
-    // 0 — экран ещё не знает выпуск (окно месяца не пришло): собирать нечего. В окружении без object URL
+    // 0, экран ещё не знает выпуск (окно месяца не пришло): собирать нечего. В окружении без object URL
     // (тесты) предпросмотр просто не строится.
     if (refreshToken === 0 || typeof URL.createObjectURL !== "function") return;
     setLoading(true);

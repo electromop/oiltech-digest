@@ -26,8 +26,8 @@ _DROP_XPATH = (
     ".//script", ".//style", ".//noscript", ".//svg", ".//iframe",
     ".//nav", ".//footer", ".//header", ".//aside",
 )
-# <form> выбрасывается, только если в ней есть поля ввода: поиск, подписка, комментарий —
-# их подписи и подсказки не текст статьи. Форма БЕЗ полей — обёртка вёрстки: CMS VSB
+# <form> выбрасывается, только если в ней есть поля ввода: поиск, подписка, комментарий:
+# их подписи и подсказки не текст статьи. Форма БЕЗ полей, обёртка вёрстки: CMS VSB
 # (китайские университеты) кладёт новость в <form name="_newscontent_fromname">. Пока
 # чистка выбрасывала любую <form>, у SWPU с каждой страницы извлекалось меню сайта
 # (549 знаков), и рубеж «то же тело» отбивал все новые статьи после первой (25.09).
@@ -83,10 +83,10 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
     retry_too_short=True re-attempts articles previously marked too_short or
     no_gain, useful after adding a new extraction backend (e.g. trafilatura).
     """
-    # mismatch — отдельно от failed: это не сбой сети, а сработавшая защита от подмены
+    # mismatch, отдельно от failed: это не сбой сети, а сработавшая защита от подмены
     # текста (№24). Смешивать их нельзя, иначе не видно, работает ли страж.
     stats: dict = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0,
-                   "no_gain": 0, "mismatch": 0, "replaced": []}  # (id, прежнее тело, новое) — для пересчёта ИИ
+                   "no_gain": 0, "mismatch": 0, "replaced": []}  # (id, прежнее тело, новое): для пересчёта ИИ
     articles = repository.get_articles_needing_full_text(limit=limit, retry_too_short=retry_too_short)
     for article in articles:
         stats["processed"] += 1
@@ -130,7 +130,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
 
 
 def backfill_images(limit: int = 200) -> dict:
-    """Дозаполнить image_url (og:image) у статей без картинки — для дайджеста.
+    """Дозаполнить image_url (og:image) у статей без картинки: для дайджеста.
 
     fetch-full-text обрабатывает только статьи без полного текста; уже обработанные
     остаются без картинки. Здесь перефетчим страницу и берём og:image/twitter:image.
@@ -178,7 +178,7 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
         rejection = _ownership_rejection(article, title, extracted)
         if rejection is None:
             return ExtractionResult(extracted, "ok", method="lxml", image_url=image_url)
-        # Текст не принадлежит статье — НЕ пишем его, но пробуем вторую ветку извлечения.
+        # Текст не принадлежит статье: НЕ пишем его, но пробуем вторую ветку извлечения.
         logger.warning("full_text_rejected article=%s method=lxml reason=%s",
                        article.get("id"), rejection)
         rejected_reason, extracted = rejection, ""
@@ -202,13 +202,13 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
 
     best = traf if len(traf) > len(extracted) else extracted
     # Сюда попадают ДВА разных исхода, и раньше оба назывались too_short:
-    #   1) страница действительно куцая — извлекли меньше min_chars;
+    #   1) страница действительно куцая: извлекли меньше min_chars;
     #   2) извлекли нормально, но не вдвое больше уже сохранённого (MIN_GAIN_RATIO),
-    #      то есть текст у статьи ЕСТЬ и он не хуже — перезаписывать нечем.
-    # Второе — не проблема, а штатный отказ от бесполезной перезаписи. Общее имя
+    #      то есть текст у статьи ЕСТЬ и он не хуже: перезаписывать нечем.
+    # Второе: не проблема, а штатный отказ от бесполезной перезаписи. Общее имя
     # too_short заставляло читать «у статьи нет текста» там, где текст на месте:
     # при ручном импорте 24.08 четыре статьи из пяти выглядели сломанными, хотя
-    # в базе лежали их полные тела (у одной — 40 297 знаков).
+    # в базе лежали их полные тела (у одной: 40 297 знаков).
     status = "no_gain" if len(best) >= min_chars else "too_short"
     return ExtractionResult(
         best,
@@ -236,11 +236,11 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
     removes navigation/ads, and returns a clean text block only when there is
     enough paragraph-like content.
 
-    title — заголовок статьи, которую мы ищем. Новостные сайты с подгрузкой ленты
+    title: заголовок статьи, которую мы ищем. Новостные сайты с подгрузкой ленты
     отдают на одной странице НЕСКОЛЬКО статей: у Neftegaz.ru на странице новости ОДК
     стояли ещё пять, каждая со своим <h1>, и побеждал самый длинный блок. Так 14.09
     пять новостей подряд (ОДК, Chevron, Казахстан, Трамп, Италия) получили текст
-    закреплённой «Гидры» СибБурМаша, а «Трамп» — 83 балла за технологию. С заголовком
+    закреплённой «Гидры» СибБурМаша, а «Трамп»: 83 балла за технологию. С заголовком
     текст ищется только внутри блока своей статьи.
     """
     if not content:
@@ -251,7 +251,7 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
         return ""
 
     structured_text = _json_ld_article_text(doc, title=title)
-    # Якорь — ДО чистки: <h1> статьи часто лежит в <header>, который чистка выбросит.
+    # Якорь, ДО чистки: <h1> статьи часто лежит в <header>, который чистка выбросит.
     scope = _own_article_block(doc, title) if title else None
 
     for xpath in _DROP_XPATH:
@@ -307,9 +307,9 @@ def _title_share_in(title_words: set[str], text: str) -> float:
 
 
 def _own_article_block(doc, title: str):
-    """Блок страницы, где заголовок ЭТОЙ статьи — единственный заголовок своего уровня.
+    """Блок страницы, где заголовок ЭТОЙ статьи: единственный заголовок своего уровня.
 
-    None — якоря нет (заголовок не нашёлся или он на странице один): тогда извлечение
+    None, якоря нет (заголовок не нашёлся или он на странице один): тогда извлечение
     идёт по всей странице, как раньше."""
     title_words = set(_heading_words(title))
     if len(title_words) < _ANCHOR_MIN_WORDS:
@@ -323,20 +323,20 @@ def _own_article_block(doc, title: str):
         best_index = shares.index(best)
         runner_up = max((share for index, share in enumerate(shares) if index != best_index), default=0.0)
         # Заголовок в ленте и на странице расходится на опечатку («На Чукотку прибило
-        # третье судно» против «прибыло» на странице — 0,83 при пороге 0,85): 40 статей
-        # Neftegaz из-за этого остались с чужим телом. Явный лидер с отрывом — тоже якорь.
+        # третье судно» против «прибыло» на странице, 0,83 при пороге 0,85): 40 статей
+        # Neftegaz из-за этого остались с чужим телом. Явный лидер с отрывом: тоже якорь.
         if not (best >= _ANCHOR_MIN_SHARE
                 or (best >= _ANCHOR_CLEAR_LEADER and best - runner_up >= _ANCHOR_CLEAR_MARGIN)):
             continue
         anchor = headings[best_index]
         if len(headings) < 2:
-            return None  # статья на странице одна — ограничивать нечего
+            return None  # статья на странице одна: ограничивать нечего
         block = anchor
         parent = block.getparent()
         while parent is not None and len(parent.xpath(f".//{tag}")) == 1:
             block, parent = parent, parent.getparent()
         if len(normalize.clean_html(block.text_content())) < _ANCHOR_MIN_BLOCK_CHARS:
-            return None  # блок — один заголовок без текста (плоская вёрстка ленты)
+            return None  # блок: один заголовок без текста (плоская вёрстка ленты)
         return block
     return None
 
@@ -344,9 +344,9 @@ def _own_article_block(doc, title: str):
 def _json_ld_article_text(doc, title: str = "") -> str:
     """Extract articleBody/text from JSON-LD structured data when present.
 
-    С заголовком — только тело, чей headline совпадает со статьёй. Раньше бралось
+    С заголовком: только тело, чей headline совпадает со статьёй. Раньше бралось
     «самое длинное» из всех, и закреплённый материал из разметки побеждал свою
-    статью (дефект №24, 28.07). Несколько тел, и ни одно не наше, — разметке не верим."""
+    статью (дефект №24, 28.07). Несколько тел, и ни одно не наше,: разметке не верим."""
     entries: list[tuple[str, str]] = []
     for node in doc.xpath("//script[contains(translate(@type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'ld+json')]"):
         raw = (node.text or "").strip()
@@ -405,12 +405,12 @@ def _node_text(node) -> str:
     text = "\n\n".join(_dedupe_preserve_order(chunks))
     # Текст, лежащий прямо в узле, а не во вложенных тегах: тело на <br> без <p>.
     # У Neftegaz.ru так свёрстана каждая новость, а <li> из вставок давали ~700 знаков
-    # «абзацев» — больше порога ниже, и 4,6 тыс. знаков самой новости терялись.
+    # «абзацев»: больше порога ниже, и 4,6 тыс. знаков самой новости терялись.
     direct_text = normalize.clean_html(
         " ".join([node.text or ""] + [child.tail or "" for child in node])
     )
     if len(text) < 200 or len(direct_text) >= 200:
-        # Вёрстка без значимых <p> (текст лежит в <div>/таблицах — частый случай
+        # Вёрстка без значимых <p> (текст лежит в <div>/таблицах: частый случай
         # у CMS вроде EnergyLand): берём очищенный текст самого узла-кандидата.
         node_text = normalize.clean_html(node.text_content())
         if len(node_text) > len(text):
@@ -431,7 +431,7 @@ def _score_node(node, text: str) -> float:
 def _ownership_rejection(article: dict, title: str, text: str) -> str | None:
     """Причина, по которой текст НЕ принадлежит этой статье, либо None если всё в порядке.
 
-    Два рубежа против подмены (задача №24, замер 28.07 — чужое тело у 10.4% видимой ленты,
+    Два рубежа против подмены (задача №24, замер 28.07: чужое тело у 10.4% видимой ленты,
     у Neftegaz.ru 37.7%):
 
     1. Заголовок не пересекается с текстом. Прежде принадлежность не проверялась ВООБЩЕ:
@@ -472,7 +472,7 @@ def _is_better_text(extracted: str, current: str, min_chars: int) -> bool:
 
 def _trafilatura_extract(content: bytes | str) -> str:
     try:
-        import trafilatura  # optional dep — not available in all envs
+        import trafilatura  # optional dep: not available in all envs
     except ImportError:
         return ""
     try:

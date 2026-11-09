@@ -9,7 +9,7 @@ export function colleagueMaterialFileUrl(materialId: number) {
   return `/api/materials/${materialId}/file`;
 }
 
-// Правка материала из бота на платформе (решение владельца 23.10): только админ, проверки полей — как у бота.
+// Правка материала из бота на платформе (решение владельца 23.10): только админ, проверки полей: как у бота.
 export type ColleagueMaterialPatch = {
   title?: string;
   description?: string;

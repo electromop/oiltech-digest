@@ -81,7 +81,7 @@ def diagnose_request_source(source: dict, limit: int = 5) -> dict:
             continue
 
         if request_parser._moved_to_home_page(candidate.url, article_probe.final_url):
-            # То же правило, что у сбора и source-probe (fetch_article): главная сайта — не статья.
+            # То же правило, что у сбора и source-probe (fetch_article): главная сайта: не статья.
             check.update({"verdict": "redirected_home", "final_url": article_probe.final_url})
             article_checks.append(check)
             continue
@@ -210,7 +210,7 @@ def diagnose_rss_source(source: dict, limit: int = 5) -> dict:
     for entry in feed.entries[:limit]:
         entries.append({"title": entry.get("title", ""), "url": entry.get("link", "")})
     # Дата свежайшего пункта: ленты умирают молча. У PETRONAS фид отдаёт пункты, но
-    # последний — от 07.05.2025, при живом сайте с релизами каждые 2–3 дня.
+    # последний: от 07.05.2025, при живом сайте с релизами каждые 2-3 дня.
     stamps = [e.get("published_parsed") or e.get("updated_parsed") for e in feed.entries]
     stamps = [datetime(*s[:6], tzinfo=timezone.utc) for s in stamps if s]
     return {
@@ -232,12 +232,12 @@ def probe_strategies(url: str, limit: int = 2) -> dict:
     """Попробовать к ссылке каждую стратегию по очереди: RSS → запрос → браузер.
 
     Только чтение. Раньше при ручном вводе ссылки искалась только RSS-лента, а без
-    неё источник молча получал `request` по введённому адресу — без проверки, что
+    неё источник молча получал `request` по введённому адресу: без проверки, что
     запрос даёт хоть одну статью, без браузера и без маршрута через зарубежный
     воркер. Так заводились источники, которые не дали ни одной статьи никогда.
 
     Возвращает отчёт по каждой попытке и выбор: `parse_strategy`, `rss_url`,
-    `listing_url`, `network_region`. `chosen = None` — сайт открылся, но статей не
+    `listing_url`, `network_region`. `chosen = None`: сайт открылся, но статей не
     нашла ни одна стратегия: заводить такой источник включённым нельзя.
     """
     from oiltech_digest.ingestion.rss_discovery import discover_feed
@@ -273,7 +273,7 @@ def probe_strategies(url: str, limit: int = 2) -> dict:
     listing_status = (request.get("listing_probe") or {}).get("status")
     if listing_status in _BLOCK_STATUSES and browser.get("verdict") == "no_candidates":
         # С РФ-ядра сайт не открылся ни запросом, ни браузером. Проверить отсюда, что
-        # он откроется из NL, нельзя — это покажет первый сбор воркера.
+        # он откроется из NL, нельзя это покажет первый сбор воркера.
         return {"url": url, "attempts": attempts,
                 "chosen": {"parse_strategy": "playwright", "listing_url": url, "network_region": "external",
                            "note": "с РФ-ядра не открылся — сбор пойдёт через зарубежный воркер, "

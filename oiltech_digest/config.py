@@ -34,7 +34,7 @@ HTTP_JITTER_SECONDS = float(os.environ.get("HTTP_JITTER_SECONDS", "0.4"))
 HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", "900"))
 # Хост, который МОЛЧИТ (таймаут), должен стоить столько же, сколько хост, который
 # отказал вслух (403). Пауза короче, чем при блокировке: таймаут бывает разовым,
-# а бан — нет. Ставится только после исчерпания всех попыток, т.е. когда хост не
+# а бан: нет. Ставится только после исчерпания всех попыток, т.е. когда хост не
 # ответил три раза подряд.
 HTTP_DEAD_HOST_COOLDOWN_SECONDS = int(os.environ.get("HTTP_DEAD_HOST_COOLDOWN_SECONDS", "300"))
 REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "12"))
@@ -51,7 +51,7 @@ BACKGROUND_JOB_INLINE = os.environ.get("BACKGROUND_JOB_INLINE", "1").lower() not
 BACKGROUND_JOB_POLL_SECONDS = float(os.environ.get("BACKGROUND_JOB_POLL_SECONDS", "2"))
 BACKGROUND_JOB_STALE_MINUTES = int(os.environ.get("BACKGROUND_JOB_STALE_MINUTES", "60"))
 # Залипший 'finalizing' (применение результата внешней задачи, баг T2) восстанавливаем по
-# своему, более короткому таймауту: apply длится секунды, а 60 мин — слишком долго. Благодаря
+# своему, более короткому таймауту: apply длится секунды, а 60 мин: слишком долго. Благодаря
 # идемпотентности биллинга (H1) даже ложная переотдача не двоит счёт, поэтому таймаут безопасен.
 FINALIZE_STALE_MINUTES = int(os.environ.get("FINALIZE_STALE_MINUTES", "10"))
 BACKGROUND_JOB_RETENTION_DAYS = int(os.environ.get("BACKGROUND_JOB_RETENTION_DAYS", "30"))
@@ -65,7 +65,7 @@ EXPORT_JOB_RETENTION_DAYS = int(os.environ.get("EXPORT_JOB_RETENTION_DAYS", "30"
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 # Сборка кода: git SHA, вшитый при сборке образа (Dockerfile, ARG GIT_SHA). Воркер NL
-# сообщает её ядру вместе с номером контракта (contract.py) — «пересобран ли NL» видно
+# сообщает её ядру вместе с номером контракта (contract.py): «пересобран ли NL» видно
 # в check-lanes, а не по косвенным полям.
 OILTECH_BUILD = os.environ.get("OILTECH_BUILD", "").strip() or "unknown"
 
@@ -74,10 +74,10 @@ OILTECH_BUILD = os.environ.get("OILTECH_BUILD", "").strip() or "unknown"
 # очереди, чтобы обновление кода не остановило текущий single-server deployment.
 EXTERNAL_WORKERS_ENABLED = os.environ.get("EXTERNAL_WORKERS_ENABLED", "0").lower() in {"1", "true", "yes"}
 AI_EXECUTION_REGION = os.environ.get("AI_EXECUTION_REGION", "ru").strip().lower()
-# Пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод заголовков) —
+# Пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод заголовков):
 # своей полосой external-ai-bulk, чтобы не стоять перед потоком дня (18.09: 28 пакетов
 # пересчёта задержали обычную обработку на 4,5 ч). Включать, только когда на NL поднят
-# воркер этой очереди, — иначе задачи будут ждать (сторож очередей это покажет).
+# воркер этой очереди,: иначе задачи будут ждать (сторож очередей это покажет).
 AI_BULK_LANE_ENABLED = os.environ.get("AI_BULK_LANE_ENABLED", "0").lower() in {"1", "true", "yes"}
 FETCH_EXTERNAL_ENABLED = os.environ.get("FETCH_EXTERNAL_ENABLED", "0").lower() in {"1", "true", "yes"}
 EXTERNAL_WORKER_TOKEN_HASH = os.environ.get("EXTERNAL_WORKER_TOKEN_HASH", "").strip()
@@ -96,16 +96,16 @@ EXTERNAL_WORKER_CAPABILITIES = [
     if item.strip()
 ]
 EXTERNAL_WORKER_POLL_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_SECONDS", "3"))
-# Пустая очередь — пауза растёт от EXTERNAL_WORKER_POLL_SECONDS вдвое до этого потолка и
+# Пустая очередь: пауза растёт от EXTERNAL_WORKER_POLL_SECONDS вдвое до этого потолка и
 # сбрасывается на первой задаче. 21.09 при постоянных 3 с шесть потоков NL слали ядру
-# 582 claim за 5 мин простоя; с потолком 30 с — около 60, новая задача ждёт не дольше 30 с.
+# 582 claim за 5 мин простоя; с потолком 30 с: около 60, новая задача ждёт не дольше 30 с.
 EXTERNAL_WORKER_POLL_MAX_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_MAX_SECONDS", "30"))
-# Потоков выдачи в одном процессе воркера: полоса сбора запросом — I/O, ей хватает
+# Потоков выдачи в одном процессе воркера: полоса сбора запросом: I/O, ей хватает
 # потоков (http_client потокобезопасен: пауза на хост под замком, сессия на поток).
-# Браузер и ИИ — по одному.
+# Браузер и ИИ: по одному.
 EXTERNAL_WORKER_CONCURRENCY = int(os.environ.get("EXTERNAL_WORKER_CONCURRENCY", "1"))
-# Аренду задачи продлевает фоновый поток раз в столько секунд — независимо от того,
-# зовёт ли код обработчика heartbeat (24.07, 17.09, 21.09 — трижды забывали).
+# Аренду задачи продлевает фоновый поток раз в столько секунд: независимо от того,
+# зовёт ли код обработчика heartbeat (24.07, 17.09, 21.09: трижды забывали).
 EXTERNAL_WORKER_HEARTBEAT_SECONDS = float(os.environ.get("EXTERNAL_WORKER_HEARTBEAT_SECONDS", "60"))
 # Сколько задача может не подавать признаков продвижения, если для её вида нет своего
 # предела (external_worker._JOB_STALL_SECONDS). Не общее время: большая пачка идёт долго.
@@ -114,17 +114,17 @@ EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "1200"
 # чтобы закончить. Дальше обработчик останавливается на ближайшем шаге (статья, страница,
 # кусок документа) и возвращает задачу ядру с тем, что успел.
 EXTERNAL_WORKER_STOP_GRACE_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_GRACE_SECONDS", "30"))
-# Сколько ещё ждать, пока шаг дойдёт до границы: не дошёл (висит в вызове модели) —
+# Сколько ещё ждать, пока шаг дойдёт до границы: не дошёл (висит в вызове модели):
 # задачу возвращает сам процесс, без частичного итога. stop_grace_period контейнеров в
 # docker-compose.external-worker.yml обязан покрывать оба срока с запасом на запросы к ядру.
 EXTERNAL_WORKER_STOP_STEP_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_STEP_SECONDS", "60"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
-# PROXY_URL — полная строка подключения: "http://user:pass@host:port"
+# PROXY_URL, полная строка подключения: "http://user:pass@host:port"
 # (у 2captcha HTTP/HTTPS-прокси с авторизацией порт обычно 8080).
 # Если переменная задана, ВЕСЬ парсинг (RSS discovery, ленты, full-text статей)
-# идёт через прокси. Пусто (по умолчанию) — прямые запросы, как при локальной
-# разработке. OpenAI через прокси НЕ ходит (у него отдельный клиент) — намеренно:
+# идёт через прокси. Пусто (по умолчанию): прямые запросы, как при локальной
+# разработке. OpenAI через прокси НЕ ходит (у него отдельный клиент), намеренно:
 # чтобы не жечь платный трафик и не ловить блок OpenAI за подозрительный IP.
 PROXY_URL = os.environ.get("PROXY_URL", "").strip()
 
@@ -160,30 +160,30 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "60"))
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
 
-# Переводчик заголовков — отдельная стадия. Ответ короткий (один заголовок), поэтому
+# Переводчик заголовков: отдельная стадия. Ответ короткий (один заголовок), поэтому
 # по умолчанию хватает основной (дешёвой) модели и минимального reasoning. Можно
 # переопределить в .env воркера, если потребуется качество посильнее.
 OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
-# Суть — своя модель (переезд с gpt-5 до 11.12.2026, как в ветке моста feat/explicit-stage-models): раньше она сидела
+# Суть: своя модель (переезд с gpt-5 до 11.12.2026, как в ветке моста feat/explicit-stage-models): раньше она сидела
 # на OPENAI_MODEL вместе с тегами и судьёй перепечаток. По проверке на эталоне выпуска
-# эксперта (#150, владелец 28.10) «Суть и перевод» — gpt-6.1-terra, low: строки в .env воркера NL. Пусто — откат на
+# эксперта (#150, владелец 28.10) «Суть и перевод»: gpt-6.1-terra, low: строки в .env воркера NL. Пусто: откат на
 # OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки.
 OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Гейт ленты, тег и балл статьи сняты 08.11 вместе со своими ключами (OPENAI_RELEVANCE_*, OPENAI_TAG_*,
 # OPENAI_SCORE_*): решает «Отбор», тему и баллы ставит «Карточка».
 
-# «Дедуп» ленты: судья перепечаток (processing/reprints.py). Модель — явная настройка без отката на модель ленты
-# (спека #128, история 48): пусто — задача перепечаток падает с понятной причиной до первого вызова, а не судит
+# «Дедуп» ленты: судья перепечаток (processing/reprints.py). Модель: явная настройка без отката на модель ленты
+# (спека #128, история 48): пусто: задача перепечаток падает с понятной причиной до первого вызова, а не судит
 # снимаемой 11.12.2026 gpt-5-mini. Читает воркер, который зовёт OpenAI (.env.external-worker на NL).
 OPENAI_REPRINT_MODEL = os.environ.get("OPENAI_REPRINT_MODEL", "").strip()
 OPENAI_REPRINT_REASONING = os.environ.get("OPENAI_REPRINT_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
 # Модель разбора ДОКУМЕНТОВ. Своя переменная, и намеренно БЕЗ отката на OPENAI_MODEL.
 # Пер-стадийные переменные читаются из окружения того процесса, который реально зовёт
-# модель, — это внешний воркер, чей .env не в git. Тихий откат на основную модель уже
+# модель, это внешний воркер, чей .env не в git. Тихий откат на основную модель уже
 # случался (инцидент 2026-06): дефолт был самой дешёвой моделью, она ЕСТЬ в таблице
 # ставок, поэтому счёт бы сошёлся, а корпус разобрала бы слабейшая модель, и никто
 # не заметил бы. Пусто → стадия падает с явной ошибкой, а не работает молча. На NL: gpt-6.1-terra, low
@@ -197,7 +197,7 @@ UPLOAD_MAX_FILE_BYTES = int(os.environ.get("UPLOAD_MAX_FILE_BYTES", str(25 * 102
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "").strip() or "/data/documents"
 
 # USD per 1M tokens. Fallback-ставки, если модель не найдена в таблице ниже.
-# Дефолт (0.05/0.40) — это прайс gpt-5-nano; для конкретных моделей берётся
+# Дефолт (0.05/0.40) это прайс gpt-5-nano; для конкретных моделей берётся
 # OPENAI_MODEL_PRICES, иначе экран «AI-затраты» занижает стоимость в разы.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
 OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", "0.40"))
@@ -209,7 +209,7 @@ OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", 
 # длинный/специфичный префикс выигрывает ("gpt-5-mini" раньше гипотетического "gpt-5").
 # Ставки сверены с прайс-листом OpenAI 21.08.2026 (developers.openai.com/api/docs/pricing).
 # Тогда же вскрылись две ошибки: gpt-5-mini стоял как 0.75/4.5 при публикуемых 0.25/2.00
-# (счёт завышался втрое), а gpt-5.4-mini и gpt-5.4-nano отсутствовали вовсе — и по
+# (счёт завышался втрое), а gpt-5.4-mini и gpt-5.4-nano отсутствовали вовсе: и по
 # префиксному матчингу попадали бы под "gpt-5.4" со ставкой 2.5/15, то есть mini
 # считался бы втрое дороже себя. Более длинный префикс выигрывает, поэтому обе
 # записи обязаны стоять здесь явно.
@@ -220,10 +220,10 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5.4": (2.5, 15.0),
     "gpt-5-mini": (0.25, 2.0),
     "gpt-5-nano": (0.05, 0.40),
-    # Без своей строки gpt-5 считался по ставке по умолчанию (nano) — занижение в ~25 раз.
-    # Ставка — публикуемая цена gpt-5; сверить с прайс-листом при следующей сверке.
+    # Без своей строки gpt-5 считался по ставке по умолчанию (nano): занижение в ~25 раз.
+    # Ставка: публикуемая цена gpt-5; сверить с прайс-листом при следующей сверке.
     "gpt-5": (1.25, 10.0),
-    # Новые семейства (прайс-лист OpenAI 26.10.2026, обычный тариф): кандидаты экзамена «Отбора» (#133) —
+    # Новые семейства (прайс-лист OpenAI 26.10.2026, обычный тариф): кандидаты экзамена «Отбора» (#133):
     # «самые дешёвые из новых»; без своих строк считались бы по ставке по умолчанию, а лестница экзамена шла бы
     # не по цене.
     "gpt-6-luna": (0.10, 0.50),
@@ -254,32 +254,32 @@ SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
 # «Отбора» не идёт, а аренду держит признак продвижения перед каждой страницей.
 SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS = int(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS", "8"))
 # Добор страниц находок (ingestion/publisher_page.py, поручение владельца 04.11): браузер на NL после
-# запроса и ядра РФ — выключатель на случай нехватки памяти NL (Chromium в контейнере агентов); предел размера
-# страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11 — 11 МБ).
+# запроса и ядра РФ: выключатель на случай нехватки памяти NL (Chromium в контейнере агентов); предел размера
+# страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11-11 МБ).
 SIGNAL_PAGE_BROWSER_ENABLED = os.environ.get("SIGNAL_PAGE_BROWSER_ENABLED", "1").lower() in {"1", "true", "yes"}
 SIGNAL_PAGE_MAX_BYTES = int(os.environ.get("SIGNAL_PAGE_MAX_BYTES", str(15 * 1024 * 1024)))
-# Откуда брать темы радара: tags — корневые тематики заказчика (пункт 12), table —
+# Откуда брать темы радара: tags, корневые тематики заказчика (пункт 12), table:
 # таблица signal_radar_topics (прежние 21 тема из сида).
 SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").strip().lower()
 # Сколько пар «одно ли событие» судит дедуп радара за прогон (signal_dedup). Едет
-# воркеру в снимке задачи — менять можно без пересборки NL. С сигналами ленты в снимке (04.11) пар
-# больше: замер прогона 51351 — 135 пар ленты на 24 находки; судья gpt-6-luna — $0,00011 за пару.
+# воркеру в снимке задачи: менять можно без пересборки NL. С сигналами ленты в снимке (04.11) пар
+# больше: замер прогона 51351-135 пар ленты на 24 находки; судья gpt-6-luna: $0,00011 за пару.
 SIGNAL_DEDUP_MAX_PAIRS = int(os.environ.get("SIGNAL_DEDUP_MAX_PAIRS", "1000"))
 # Карточка, чьё событие (дата судьи прежней цепочки или «Карточки») старше этого срока, на экран не выходит.
 # Хранится: срок можно поменять без пересчёта. 0: не скрывать по возрасту.
 SIGNAL_RADAR_MAX_EVENT_AGE_DAYS = int(os.environ.get("SIGNAL_RADAR_MAX_EVENT_AGE_DAYS", "180"))
-# «Дедуп» радара (signal_dedup.py) — модель явной настройкой без отката на модель ленты (спека #128, история 48):
-# пусто — прогон радара падает с понятной причиной до поиска, а не судит пары снимаемой 11.12.2026 gpt-5-mini.
+# «Дедуп» радара (signal_dedup.py), модель явной настройкой без отката на модель ленты (спека #128, история 48):
+# пусто: прогон радара падает с понятной причиной до поиска, а не судит пары снимаемой 11.12.2026 gpt-5-mini.
 SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip()
 SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Таймаут вызовов модели «Дедупа» радара: модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
 # Сколько вызовов судьи пар «Дедупа» идут одновременно: до 1000 пар за прогон по одному шли бы часами. 1: по одному.
 SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY", "4")))
-# Модель поиска GPT (#138, спека #128) — явная настройка ядра, без умолчания и без отката: едет в задаче прогона
+# Модель поиска GPT (#138, спека #128), явная настройка ядра, без умолчания и без отката: едет в задаче прогона
 # радара вместе с уровнем, потолком на тему и периодом, свои строки поиска NL не читает. Прежнее умолчание gpt-5
-# OpenAI снимает 11.12.2026 — его, gpt-5-mini и gpt-5-nano постановка отказывает (signal_discovery.research_settings).
-# Уровень рассуждения — тоже явный: у gpt-6.1-sol нет ни minimal, ни none, а без уровня клиент подставил бы minimal.
+# OpenAI снимает 11.12.2026: его, gpt-5-mini и gpt-5-nano постановка отказывает (signal_discovery.research_settings).
+# Уровень рассуждения, тоже явный: у gpt-6.1-sol нет ни minimal, ни none, а без уровня клиент подставил бы minimal.
 SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "").strip()
 SIGNAL_RESEARCH_REASONING = os.environ.get("SIGNAL_RESEARCH_REASONING", "low").strip()
 # 8 давали полноту 6 из 20 по сентябрьскому эталону заказчика (01.10): модель брала только
@@ -288,7 +288,7 @@ SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PE
 # За какой период искать события (дней до сегодня): режим рассчитан на еженедельный прогон.
 SIGNAL_RESEARCH_DAYS = int(os.environ.get("SIGNAL_RESEARCH_DAYS", "30"))
 SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_SECONDS", "480"))
-# Плата OpenAI за один вызов встроенного поиска (web_search), USD — сверх токенов. Сверить с
+# Плата OpenAI за один вызов встроенного поиска (web_search), USD: сверх токенов. Сверить с
 # прайс-листом: по умолчанию $10 за 1 000 вызовов.
 SIGNAL_WEB_SEARCH_USD_PER_CALL = float(os.environ.get("SIGNAL_WEB_SEARCH_USD_PER_CALL", "0.01"))
 # Сайт сбора, который широкий поиск (#138) получает как «уже есть, ищи дальше»: за период поиска у него столько
@@ -297,17 +297,17 @@ SIGNAL_WEB_SEARCH_USD_PER_CALL = float(os.environ.get("SIGNAL_WEB_SEARCH_USD_PER
 SIGNAL_RESEARCH_COVERED_MIN_ARTICLES = max(1, int(os.environ.get("SIGNAL_RESEARCH_COVERED_MIN_ARTICLES", "20")))
 
 # --- Агент «Карточка сигнала» (#96, спека #93) ---
-# Шаг планировщика «заполнить карточки»: новые сигналы без карточки — в задачу агента во внешний
+# Шаг планировщика «заполнить карточки»: новые сигналы без карточки: в задачу агента во внешний
 # контур. Включать после пересборки NL (контракт 2): старая сборка такую задачу отказывает.
 SIGNAL_CARD_ENABLED = os.environ.get("SIGNAL_CARD_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
-# Модель — своя настройка агента и намеренно без отката на OPENAI_MODEL (как у документов): пусто —
-# постановка отказывает с явной ошибкой. Кандидаты — gpt-5.4-nano и gpt-5.4-mini, выбирает экзамен
+# Модель, своя настройка агента и намеренно без отката на OPENAI_MODEL (как у документов): пусто:
+# постановка отказывает с явной ошибкой. Кандидаты: gpt-5.4-nano и gpt-5.4-mini, выбирает экзамен
 # (#98). Читает ядро: модель едет воркеру в задаче и попадает в рецепт карточки.
 SIGNAL_CARD_MODEL = os.environ.get("SIGNAL_CARD_MODEL", "").strip()
 SIGNAL_CARD_REASONING = os.environ.get("SIGNAL_CARD_REASONING", "").strip() or "low"
 # Сигналов в одной задаче.
 SIGNAL_CARD_BATCH = max(1, int(os.environ.get("SIGNAL_CARD_BATCH", "20")))
-# Новый сигнал для шага — заведён за столько дней; старые заполняет прогон по истории (#98).
+# Новый сигнал для шага: заведён за столько дней; старые заполняет прогон по истории (#98).
 SIGNAL_CARD_NEW_DAYS = max(1, int(os.environ.get("SIGNAL_CARD_NEW_DAYS", "2")))
 # Потолок сигналов за один шаг планировщика.
 SIGNAL_CARD_STEP_LIMIT = max(1, int(os.environ.get("SIGNAL_CARD_STEP_LIMIT", "200")))
@@ -316,21 +316,21 @@ SIGNAL_CARD_STEP_LIMIT = max(1, int(os.environ.get("SIGNAL_CARD_STEP_LIMIT", "20
 # Единственный решает «брать или нет»: каждая новая статья, находка поиска и материал коллеги идут через него, шаг
 # планировщика ставит их в задачу агента во внешний контур. Флаг OTBOR_ENABLED снят 08.11 вместе с гейтом ленты:
 # «Отбор» работает всегда, строка .env больше не читается.
-# Модель — своя настройка агента и намеренно без отката на OPENAI_MODEL: пусто — постановка отказывает с явной
+# Модель, своя настройка агента и намеренно без отката на OPENAI_MODEL: пусто: постановка отказывает с явной
 # ошибкой. Кандидатов выбирает экзамен (#133). Читает ядро: модель едет воркеру в задаче и попадает в рецепт.
 OTBOR_MODEL = os.environ.get("OTBOR_MODEL", "").strip()
 OTBOR_REASONING = os.environ.get("OTBOR_REASONING", "").strip() or "low"
 # Статей в одной задаче.
 OTBOR_BATCH = max(1, int(os.environ.get("OTBOR_BATCH", "20")))
-# Статья для шага — собрана за столько дней; старше — только командой с номерами.
+# Статья для шага: собрана за столько дней; старше: только командой с номерами.
 OTBOR_NEW_DAYS = max(1, int(os.environ.get("OTBOR_NEW_DAYS", "7")))
 # Потолок статей за один шаг планировщика.
 OTBOR_STEP_LIMIT = max(1, int(os.environ.get("OTBOR_STEP_LIMIT", "200")))
-# Сколько задач шаг ставит одной статье (решение владельца 23.10): технический сбой (модель не ответила) — до
+# Сколько задач шаг ставит одной статье (решение владельца 23.10): технический сбой (модель не ответила): до
 # трёх вызовов; ответ не по правилам (не по схеме, не из справочника) шаг не повторяет.
 OTBOR_ATTEMPTS = max(1, int(os.environ.get("OTBOR_ATTEMPTS", "3")))
-# Старое событие (#132, спека #128): «Карточка» нашла в тексте дату события старше стольких дней — принятая
-# «Отбором» публикация возвращается в «Отбор» с этим фактом, один раз. То же число — в причине «Старое событие»
+# Старое событие (#132, спека #128): «Карточка» нашла в тексте дату события старше стольких дней: принятая
+# «Отбором» публикация возвращается в «Отбор» с этим фактом, один раз. То же число: в причине «Старое событие»
 # справочника «Отбора».
 OTBOR_OLD_EVENT_DAYS = max(1, int(os.environ.get("OTBOR_OLD_EVENT_DAYS", "180")))
 
@@ -341,19 +341,19 @@ OTBOR_OLD_EVENT_DAYS = max(1, int(os.environ.get("OTBOR_OLD_EVENT_DAYS", "180"))
 SIGNAL_SCORES_MODEL = os.environ.get("SIGNAL_SCORES_MODEL", "").strip()
 SIGNAL_SCORES_REASONING = os.environ.get("SIGNAL_SCORES_REASONING", "").strip() or "low"
 # Ступени итога (решения 29 и 30 журнала гриля, 23.10: стартовые 80, 65, 40): нижние границы «сильного»,
-# «полезного» и «наблюдать», ниже — «слабый». Экзамен (#133) меряет совпадение ступени с оценкой эксперта.
+# «полезного» и «наблюдать», ниже: «слабый». Экзамен (#133) меряет совпадение ступени с оценкой эксперта.
 SIGNAL_SCORE_BANDS = tuple(int(value) for value in
                            os.environ.get("SIGNAL_SCORE_BANDS", "80,65,40").replace(" ", "").split(","))
-# «Решение платформы»: сильный сигнал с таким числом публикаций и больше — «подтверждено», меньше — «кандидат».
+# «Решение платформы»: сильный сигнал с таким числом публикаций и больше: «подтверждено», меньше: «кандидат».
 SIGNAL_CONFIRMED_PUBLICATIONS = max(1, int(os.environ.get("SIGNAL_CONFIRMED_PUBLICATIONS", "3")))
 # Подмешивание ключевых слов в балл критерия (signal_scoring.final_score): хранятся оба итога, в score этот
 # вариант; какой оставить, решает экзамен (#133) по близости к эксперту.
 SIGNAL_SCORES_KEYWORDS = os.environ.get("SIGNAL_SCORES_KEYWORDS", "1").strip().lower() in {"1", "true", "yes", "on"}
 
-# Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
-# (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке
+# Целевые показатели экрана «Статистика»: из презентации ГД «Нефтесервисный радар»
+# (июль 2026): >120 источников (слайды 4-5); бюджет ИИ ≈10 000 ₽/мес при потоке
 # 5 000 статей/мес (слайд 7). Курс для пересчёта cost_usd в рубли берётся у ЦБ РФ
-# (fx.py); ANALYTICS_USD_RUB — только запасной, если ЦБ недоступен, и на экране он
+# (fx.py); ANALYTICS_USD_RUB: только запасной, если ЦБ недоступен, и на экране он
 # подписан как допущение.
 ANALYTICS_TARGET_SOURCES = int(os.environ.get("ANALYTICS_TARGET_SOURCES", "120"))
 ANALYTICS_TARGET_ARTICLES_MONTH = int(os.environ.get("ANALYTICS_TARGET_ARTICLES_MONTH", "5000"))
@@ -370,9 +370,9 @@ def price_for_model(model: str | None) -> tuple[float, float]:
     return (OPENAI_INPUT_USD_PER_MTOK, OPENAI_OUTPUT_USD_PER_MTOK)
 
 # --- Брендинг дайджеста ---
-# Путь к digest_branding.json. Пусто — файл берётся из пакета (локальная разработка,
+# Путь к digest_branding.json. Пусто: файл берётся из пакета (локальная разработка,
 # тесты). На сервере ОБЯЗАН указывать на общий том, смонтированный во ВСЕ контейнеры.
-# Инцидент 03.08: файл лежал внутри образа, тома не было — админка (контейнер app)
+# Инцидент 03.08: файл лежал внутри образа, тома не было: админка (контейнер app)
 # записывала правки в свою копию, а выгрузку HTML/PDF делают воркеры и читали свою,
 # нетронутую. Пользователь видел изменения в превью и не видел в выгрузке. Плюс любая
 # пересборка образа возвращала git-версию поверх правок.
@@ -383,17 +383,17 @@ BRAND_FONTS_DIR = os.environ.get("BRAND_FONTS_DIR", "").strip()
 
 # --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
 # Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
-# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09 — 5; 05.10 —
-# 11: прошлый месяц открыт по 10-е число включительно (сентябрь — по 10 октября).
-# Держим в пределах 1..28: 1 — прошлый месяц не виден никогда, больше 28 — виден
+# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09-5; 05.10:
+# 11: прошлый месяц открыт по 10-е число включительно (сентябрь: по 10 октября).
+# Держим в пределах 1..28: 1: прошлый месяц не виден никогда, больше 28: виден
 # почти всегда, и окно перестаёт быть окном.
 FEED_ROLLOVER_DAY_DEFAULT = 11
 FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", str(FEED_ROLLOVER_DAY_DEFAULT)))))
 
 # --- Здоровье источников: «Требуют внимания» (вердикт stale) ---
 # Источник требует внимания, если последний материал собран столько и больше календарных
-# дней назад по Москве — как «N дн. назад» в колонке «Последняя загрузка»: при 7 «7 дн.
-# назад» уже требует внимания, «6 дн. назад» — ещё нет. Одно правило для всех источников —
+# дней назад по Москве: как «N дн. назад» в колонке «Последняя загрузка»: при 7 «7 дн.
+# назад» уже требует внимания, «6 дн. назад»: ещё нет. Одно правило для всех источников:
 # решение владельца 28.09: при 3 днях под порог попадали и редко пишущие, в плитке было
 # 58 из 129. Число живёт только здесь: отчёт source_health_report, /api/source-health
 # (экран «Источники») и CLI source-health / source-retry без явного порога берут его
@@ -407,7 +407,7 @@ AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))
 # Для локальной разработки по http:// выставить AUTH_COOKIE_SECURE=0, иначе браузер
 # не сохранит cookie и вход не сработает.
 # Открытая регистрация: по умолчанию ЗАКРЫТА. Платформа выходит на корпоративный
-# портал заказчика, и /api/auth/register позволял любому завести себе учётку —
+# портал заказчика, и /api/auth/register позволял любому завести себе учётку:
 # предусловие релиза #33. Пользователей заводит администратор: экран «Пользователи»
 # или CLI create-user. Первый администратор создаётся так же, до открытия доступа.
 AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
@@ -416,9 +416,9 @@ AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
 
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")
 
-# Допуск по коду (#113, admission.py). Отправка кода в чат подтверждающих — задача admission_notify
+# Допуск по коду (#113, admission.py). Отправка кода в чат подтверждающих: задача admission_notify
 # в очереди external-notify; включать на ядре после пересборки NL (контракт 3): старая сборка такую
-# задачу отказывает. Выключено — код выдаёт только команда admission-code.
+# задачу отказывает. Выключено: код выдаёт только команда admission-code.
 ADMISSION_NOTIFY_ENABLED = os.environ.get("ADMISSION_NOTIFY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 # Читает воркер NL (.env.external-worker): бот и закрытый чат подтверждающих.
 ADMISSION_TELEGRAM_BOT_TOKEN = os.environ.get("ADMISSION_TELEGRAM_BOT_TOKEN", "").strip()
@@ -426,14 +426,14 @@ ADMISSION_TELEGRAM_CHAT_ID = os.environ.get("ADMISSION_TELEGRAM_CHAT_ID", "").st
 
 # Бот «Материалы коллег» (tg_materials_bot.py): живёт на NL, с РФ-ядра Telegram недоступен.
 # Свой бот, не бот допуска: тот пишет в закрытый чат подтверждающих, этот слушает рабочую группу.
-# CHAT_IDS — группы, где бот принимает материалы (через запятую, -100…); в личке бот отвечает
-# только участникам этих групп. Пусто — бот никому не отвечает.
+# CHAT_IDS: группы, где бот принимает материалы (через запятую, -100…); в личке бот отвечает
+# только участникам этих групп. Пусто: бот никому не отвечает.
 TG_MATERIALS_BOT_TOKEN = os.environ.get("TG_MATERIALS_BOT_TOKEN", "").strip()
 TG_MATERIALS_CHAT_IDS = [
     int(item) for item in os.environ.get("TG_MATERIALS_CHAT_IDS", "").replace(" ", "").split(",")
     if item.lstrip("-").isdigit()
 ]
-# Bot API отдаёт боту файлы до 20 МБ (getFile) — больше бот скачать не может.
+# Bot API отдаёт боту файлы до 20 МБ (getFile): больше бот скачать не может.
 TG_MATERIALS_MAX_FILE_BYTES = int(os.environ.get("TG_MATERIALS_MAX_FILE_BYTES", str(20 * 1024 * 1024)))
 # Брошенный на полпути ввод забывается через столько минут.
 TG_MATERIALS_DIALOG_TTL_MINUTES = int(os.environ.get("TG_MATERIALS_DIALOG_TTL_MINUTES", "30"))

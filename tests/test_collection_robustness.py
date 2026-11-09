@@ -1,6 +1,6 @@
 """Одна плохая страница не роняет источник; внешняя очередь не исполняется на месте.
 
-21.09 у агентов пустое тело (200) дало lxml ParserError «Document is empty» — это не
+21.09 у агентов пустое тело (200) дало lxml ParserError «Document is empty» это не
 ValueError, и его не ловило ни одно место разбора. В MVP-1 тот же разбор: одна такая
 статья обрывала весь источник. Каждый тест здесь падает на коде до правки."""
 
@@ -106,7 +106,7 @@ def test_enqueue_never_runs_external_queue_inline(monkeypatch, isolated_db):
 def test_every_long_running_service_disables_inline_execution():
     services = yaml.safe_load((Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text())["services"]
     # Сервис приложения зовётся по-разному (app у основного стека, agents-app у агентного,
-    # чтобы не делить имя в общей сети) — проверяются все долгоживущие сервисы из образа.
+    # чтобы не делить имя в общей сети): проверяются все долгоживущие сервисы из образа.
     long_running = {
         name for name, service in services.items()
         if "build" in service and service.get("restart") == "unless-stopped"
@@ -118,8 +118,8 @@ def test_every_long_running_service_disables_inline_execution():
 
 
 def test_worker_sends_result_with_dates_to_core(monkeypatch):
-    """Граница с ядром: дата в любом поле итога — строкой ISO, а не падение отправки уже
-    сделанной работы (18.09 — сбор MVP-1, 21.09 — радар агентов: один класс дважды)."""
+    """Граница с ядром: дата в любом поле итога: строкой ISO, а не падение отправки уже
+    сделанной работы (18.09: сбор MVP-1, 21.09, радар агентов: один класс дважды)."""
     import json as jsonlib
     from decimal import Decimal
 

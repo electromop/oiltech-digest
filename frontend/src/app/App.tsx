@@ -22,13 +22,13 @@ type ScreenId =
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 const ADMIN_SCREENS = new Set<ScreenId>([
   "sources", "scoring", "tags", "users", "jobs", "maintenance",
-  // Список «дочка → мать» правят, как теги, только админы (сервер — require_admin).
+  // Список «дочка → мать» правят, как теги, только админы (сервер: require_admin).
   "company-parents",
   // Описание Компании для агента гипотезы (#162): права как у тегов (ADR 0004).
   "company-description",
-  // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
+  // Статистика сводная (видно работу КАЖДОГО пользователя), решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
-  // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
+  // require_admin: фронтовый гейт без серверного это дыра (аудит изоляции 24.07).
   "statistics",
 ]);
 
@@ -167,7 +167,7 @@ const DEFAULT_SCREEN: ScreenId = "business-feed";
 
 function screenFromUrl(): ScreenId | null {
   const value = new URLSearchParams(window.location.search).get("screen");
-  // Прежние «Материалы» (загрузка документов) — теперь часть общего раздела «Материалы».
+  // Прежние «Материалы» (загрузка документов): теперь часть общего раздела «Материалы».
   if (value === "documents") return "colleague-materials";
   return URL_ADDRESSABLE.find((id) => id === value) ?? null;
 }
@@ -188,7 +188,7 @@ export function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  // Шаг «код допуска» (#113): пароль верный, учётка ждёт допуска — пояснение сервера и поле кода.
+  // Шаг «код допуска» (#113): пароль верный, учётка ждёт допуска: пояснение сервера и поле кода.
   const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
   const [admissionCode, setAdmissionCode] = useState("");
   const [toast, setToast] = useState<{ text: string; tone: "default" | "error" } | null>(null);
@@ -249,7 +249,7 @@ export function App() {
     currentScreen = <MaterialsPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
-  // Лента и радар — один экран в двух витринах. Ключ — экран: при переходе между ними состояние
+  // Лента и радар: один экран в двух витринах. Ключ, экран: при переходе между ними состояние
   // (фильтры, выборка) не переезжает из одной витрины в другую.
   if (activeScreen === "signal-radar" || activeScreen === "business-feed") {
     currentScreen = (
@@ -492,7 +492,7 @@ export function App() {
           </form>
           {/* Переключателя «Зарегистрироваться» больше нет: самостоятельная
               регистрация закрыта (#33), и кнопка вела в 403. Учётки заводит
-              администратор — экран «Пользователи» или CLI create-user. */}
+              администратор: экран «Пользователи» или CLI create-user. */}
           <div className="authSwitchText">
             Нет доступа? Обратитесь к администратору платформы.
           </div>
@@ -585,7 +585,7 @@ export function App() {
       </aside>
 
       <main id="main-content" ref={mainRef} className="content" tabIndex={-1}>{currentScreen}</main>
-      {/* Мобильное меню — те же группы, что в боковой навигации. */}
+      {/* Мобильное меню: те же группы, что в боковой навигации. */}
       <nav id="mobile-nav" className="mobileNav" aria-label="Разделы">
         {navGroups.map((group) => {
           const visibleScreens = group.screens.filter(screenInMenu);
@@ -678,7 +678,7 @@ function ScreenIcon(props: { screenId: ScreenId }) {
   const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true };
 
   if (props.screenId === "business-feed") {
-    // Карточки событий стопкой: одна карточка — несколько публикаций.
+    // Карточки событий стопкой: одна карточка: несколько публикаций.
     return (
       <svg {...common}>
         <rect x="2.5" y="4.5" width="9" height="9" rx="1.8" />

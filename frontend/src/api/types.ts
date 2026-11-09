@@ -28,13 +28,13 @@ export type Source = {
   last_seen_article_url: string | null;
   last_seen_published_at: string | null;
   // Архив источника: не опрашивается И его статьи не показываются в ленте.
-  // NULL = активен. Отдельно от enabled — выключение ленту не чистило.
+  // NULL = активен. Отдельно от enabled: выключение ленту не чистило.
   archived_at: string | null;
 };
 
 export type SourceHealth = {
   id: number;
-  // archived — источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // archived, источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
   // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
   verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;
@@ -73,7 +73,7 @@ export type Signal = {
   maturity: "reject" | "watch" | "shortlist" | "proven" | string | null;
   confidence: number;
   score: number;
-  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов. У оценённого вторым
+  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label): как у бизнес-сигналов. У оценённого вторым
   // вызовом «Карточки» это подпись ступени, без баллов подписи нет (#132).
   score_label?: string | null;
   why_now: string | null;
@@ -87,67 +87,67 @@ export type Signal = {
   updated_at: string | null;
   user_status?: "watch" | "digest" | "archive" | "noise" | "duplicate" | string;
   selected_for_digest?: boolean;
-  // Месяц выпуска карточки (ГГГГ-ММ) — месяц поступления на радар по Москве, и закрыт ли он
+  // Месяц выпуска карточки (ГГГГ-ММ): месяц поступления на радар по Москве, и закрыт ли он
   // (окно месяца, решение владельца 29.09): в закрытом месяце «В дайджест» и «Убрать» не
-  // работают, сервер отвечает 409. Считает сервер — своей формулы у экрана нет.
+  // работают, сервер отвечает 409. Считает сервер: своей формулы у экрана нет.
   digest_month?: string;
   digest_locked?: boolean;
   user_comment?: string | null;
   user_status_updated_at?: string | null;
   feedback_count?: number;
   merged_count?: number;
-  // Тема — одна из 13 тематик заказчика; false — свободный текст первой партии радара (13.09).
+  // Тема: одна из 13 тематик заказчика; false: свободный текст первой партии радара (13.09).
   theme_is_topic?: boolean;
-  // Правки людей из ОС поверх текста модели: исходные — для справки.
+  // Правки людей из ОС поверх текста модели: исходные: для справки.
   original_title_ru?: string | null;
   original_summary?: string | null;
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
-  // Поля судьи (замечания эксперта заказчика 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
-  // поступления на радар; null — у карточки до правки или судья даты не нашёл.
+  // Поля судьи (замечания эксперта заказчика 29.09). event_date: дата самого события (ГГГГ-ММ-ДД), а не
+  // поступления на радар; null: у карточки до правки или судья даты не нашёл.
   event_date?: string | null;
   signal_category?: "technology" | "business" | "other" | string | null;
   mixed_events?: boolean | null;
   mixed_events_reason?: string | null;
-  // Применимость для нефтесервиса (судья): direct — событие в нефтегазе, transferable — перенос из
-  // другой отрасли, none — связи нет (на радар не выходит). oilfield_application — где применить.
+  // Применимость для нефтесервиса (судья): direct: событие в нефтегазе, transferable: перенос из
+  // другой отрасли, none: связи нет (на радар не выходит). oilfield_application: где применить.
   oilfield_relevance?: "direct" | "transferable" | "none" | string | null;
   oilfield_application?: string | null;
   // Балл по профилю «Технологический радар»: подпункты ссылаются на критерии снимка (имя и вес
-  // на момент оценки). Нет профиля — балл общий, судьи.
+  // на момент оценки). Нет профиля: балл общий, судьи.
   score_profile?: string | null;
   score_items_json?: SignalScoreItem[] | null;
   criteria_snapshot?: Array<{ id: number; name: string; weight: number }> | null;
-  // Почему карточка не на радаре — в выборке «Отсеянные и скрытые».
+  // Почему карточка не на радаре: в выборке «Отсеянные и скрытые».
   hidden_reason?: string | null;
   // Почему такое решение (судья) и ход решения по шагам: судья, ревью пачки, тематика, отсев.
   verdict_reason?: string | null;
   decision_log?: Array<{ stage: string; text: string }> | null;
-  // Происхождение (#95): radar — находка поиска, feed — статья ленты, принятая отбором.
+  // Происхождение (#95): radar: находка поиска, feed: статья ленты, принятая отбором.
   origin?: "radar" | "feed" | string;
   origin_article_id?: number | null;
   // Карточка сигнала (#96, агент «Карточка сигнала»): значения справочников или «не определено»;
-  // null — агент поле ещё не заполнял. technology_maturity — зрелость технологии, а maturity выше —
+  // null: агент поле ещё не заполнял. technology_maturity, зрелость технологии, а maturity выше:
   // решение радара (наблюдать / кандидат / подтверждено).
   event_type?: string | null;
   region?: string | null;
   technology_class?: string | null;
   technology_maturity?: string | null;
-  // Компании-участники — только с цитатой из текста публикации (проверено кодом); страна участника (#137) — имя
-  // справочника стран, null — агент её не знает (у карточек до #137 поля нет).
+  // Компании-участники: только с цитатой из текста публикации (проверено кодом); страна участника (#137): имя
+  // справочника стран, null: агент её не знает (у карточек до #137 поля нет).
   participants_json?: Array<{ name: string; quote: string; verified?: boolean; country?: string | null }> | null;
-  // Страны события (#137): до трёх имён справочника стран; null — агент поле ещё не заполнял.
+  // Страны события (#137): до трёх имён справочника стран; null: агент поле ещё не заполнял.
   event_countries?: string[] | null;
-  // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null — дата судьи радара.
+  // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null: дата судьи радара.
   event_date_source?: string | null;
-  // Точность даты события (#132): day, month или year; у месяца и года event_date — первый день периода, и как
+  // Точность даты события (#132): day, month или year; у месяца и года event_date: первый день периода, и как
   // день он не показывается.
   event_date_precision?: "day" | "month" | "year" | string | null;
   // Кто поставил значение поля карточки: agent, radar_judge или human.
   card_set_by?: Record<string, string> | null;
   card_recipe?: Record<string, unknown> | null;
-  // Агент «Отбор» (#130): отрасль, решение и код причины отказа; «спорное» — почему; сбой без решения.
+  // Агент «Отбор» (#130): отрасль, решение и код причины отказа; «спорное»: почему; сбой без решения.
   industry?: "oilfield_services" | "oil_gas" | "other_industry" | string | null;
   otbor_decision?: "accept" | "reject" | string | null;
   reject_reason?: string | null;
@@ -156,7 +156,7 @@ export type Signal = {
   otbor_failure_reason?: string | null;
   // Короткая причина публикации в разделе отклонённого «кто убрал → причина» (только админу).
   section_reason?: string | null;
-  // Второй вызов «Карточки» (#132): ступень балла (её подпись — score_label), баллы «пересчитываются» после
+  // Второй вызов «Карточки» (#132): ступень балла (её подпись: score_label), баллы «пересчитываются» после
   // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
   score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
   scores_pending?: boolean;
@@ -196,7 +196,7 @@ export type SignalFeedbackBlock = {
 
 export type SignalScoreItem = {
   criterion_id: number;
-  // У «Свежести» без даты события в тексте балла нет: в итог она не входит (excluded — почему).
+  // У «Свежести» без даты события в тексте балла нет: в итог она не входит (excluded: почему).
   final_score: number | null;
   ai_score?: number | null;
   rationale?: string;
@@ -227,7 +227,7 @@ export type SignalFeedbackPayload = {
     | "merge_duplicate"
     // «Не тот блок»: бизнес-сигнал в технологическом радаре (встреча с заказчиком 21.09).
     | "wrong_block"
-    // «Оценка завышена» (03.10): находка годная, балл выше, чем она стоит — учит судью.
+    // «Оценка завышена» (03.10): находка годная, балл выше, чем она стоит: учит судью.
     | "overrated"
     // Прежняя шкала: с экрана убрана, но в старых записях встречается.
     | "needs_better_source"
@@ -318,8 +318,8 @@ export type ScoreItem = {
   final_score: number;
   rationale?: string | null;
 };
-// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month — запрошенный
-// месяц; read_only — это архив прошлого месяца, только просмотр.
+// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month: запрошенный
+// месяц; read_only это архив прошлого месяца, только просмотр.
 export type FeedWindowInfo = {
   months: string[];
   month: string | null;
@@ -464,7 +464,7 @@ export type ArticlePatch = {
 };
 
 export type DigestContentItem = {
-  // Сигнал радара в выпуске — не статья: у него signal_id, а article_id пуст.
+  // Сигнал радара в выпуске, не статья: у него signal_id, а article_id пуст.
   item_type?: "article" | "signal";
   article_id?: number | null;
   signal_id?: number | null;
@@ -740,7 +740,7 @@ export type MonthlyPlatformRow = {
 export type MonthlyAiCostRow = {
   month: string;
   model: string;
-  // feed — лента (суть, теги, скоринг…), radar — технологический радар (стадии radar_*).
+  // feed: лента (суть, теги, скоринг…), radar: технологический радар (стадии radar_*).
   area?: "feed" | "radar" | string;
   runs: number;
   cost_usd: number;
@@ -791,10 +791,10 @@ export type AnalyticsCost = {
   calls: number;
   articles: number;
   cost_usd: number;
-  // Из cost_usd — технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
+  // Из cost_usd, технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
   // ленты он не входит.
   radar_cost_usd?: number;
-  // Курс ЦБ РФ на последний день месяца (у текущего — на сегодня); «допущение» — ЦБ недоступен.
+  // Курс ЦБ РФ на последний день месяца (у текущего: на сегодня); «допущение»: ЦБ недоступен.
   usd_rub: number;
   usd_rub_date: string | null;
   usd_rub_source: "ЦБ РФ" | "допущение" | string;
@@ -814,7 +814,7 @@ export type MonthlyAnalytics = {
   // С какого балла «сильный сигнал» и «топ» (с 08.11 ступени балла сигнала, db/analytics.score_thresholds): по ним
   // подписи плиток и графиков. Нет поля (сервер до 08.11): прежние 60 и 70.
   score_thresholds?: { strong: number; top: number };
-  // Только администратору: стоимость — коммерческая сторона.
+  // Только администратору: стоимость: коммерческая сторона.
   ai_cost?: AnalyticsCost[];
   ai_cost_previous_same_period?: AnalyticsCost & { days: number };
 };
@@ -841,7 +841,7 @@ export type UploadedDocument = {
 };
 
 // summary_json/claims_json приходят из БД как JSON: с сервера обещан список пунктов,
-// но тип здесь unknown НАМЕРЕННО — карточка не должна падать, если в поле окажется
+// но тип здесь unknown НАМЕРЕННО: карточка не должна падать, если в поле окажется
 // объект или строка, а не список (см. ErrorBoundary вокруг карточки).
 export type DocumentCard = {
   doc_type: string | null;
@@ -883,7 +883,7 @@ export type DocumentUploadResult = {
   job_id?: number;
 };
 
-// Обратная связь человека: оценки 1–5 + быстрая причина + комментарий.
+// Обратная связь человека: оценки 1-5 + быстрая причина + комментарий.
 // Поля выведены из того, как заказчик уже пишет ОС руками (чат 10.09):
 // корректировка заголовка, актуальность статьи, качество источника, правки перевода.
 export type FeedbackEntry = {

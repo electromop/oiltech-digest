@@ -1,6 +1,6 @@
 """Общее для тестов «Карточки» в конвейере «Отбора» (#132, спека #128): статья сбора проходит «Отбор» и обработку
 ленты (суть), затем оба вызова «Карточки» на подставной модели через настоящий клиент воркера NL
-(tests/signal_card_support.worker). Сами тесты — test_card_theme.py (основной вызов: тема, дата события, возврат в
+(tests/signal_card_support.worker). Сами тесты: test_card_theme.py (основной вызов: тема, дата события, возврат в
 «Отбор»), test_signal_scores.py (второй вызов: баллы, ступень, «Решение платформы», «не тот блок») и
 test_otbor_return.py (возврат отклонённого человеком).
 """
@@ -73,7 +73,7 @@ def fill_cards(monkeypatch, answers):
 
 
 class ScoresModel:
-    """Подставная модель второго вызова: ответ — заготовка по заголовку публикации; вызовы запоминает."""
+    """Подставная модель второго вызова: ответ: заготовка по заголовку публикации; вызовы запоминает."""
 
     def __init__(self, answers):
         self.answers = answers
@@ -93,7 +93,7 @@ class ScoresModel:
 
 
 def scores(points, *, named_customer=None, why="Так по линейке"):
-    """Ответ второго вызова: баллы по именам критериев (points: имя → балл); у профиля с «Зрелостью» — назван ли
+    """Ответ второго вызова: баллы по именам критериев (points: имя → балл); у профиля с «Зрелостью»: назван ли
     заказчик внедрения."""
     reply = {"scores": [{"criterion": name, "score": value, "why": why} for name, value in points.items()]}
     if named_customer is not None:
@@ -107,7 +107,7 @@ def profile_names(profile):
 
 
 def even(profile, value, **overrides):
-    """Баллы по всем критериям профиля, кроме «Свежести» (её считает код): value у каждого, overrides — по имени."""
+    """Баллы по всем критериям профиля, кроме «Свежести» (её считает код): value у каждого, overrides: по имени."""
     return {name: overrides.get(name, value) for name in profile_names(profile) if name != "Свежесть"}
 
 

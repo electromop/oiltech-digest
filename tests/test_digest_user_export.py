@@ -1,8 +1,8 @@
 """Сентябрьский выпуск собирают сами пользователи (решение владельца 29.09): выгрузка.
 
 Кнопки PDF / DOCX / HTML экрана выпуска: фоновая задача, файл, скачивание. HTML и DOCX
-рендерятся прямо в тесте; PDF — на настоящем Chromium (без него тест пропускается).
-Сборка выпуска — test_digest_user_path.py.
+рендерятся прямо в тесте; PDF: на настоящем Chromium (без него тест пропускается).
+Сборка выпуска: test_digest_user_path.py.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from oiltech_digest.db import connection
 from oiltech_digest.processing import digest as digest_module
 from oiltech_digest.processing import digest_pdf
 from tests.digest_user_path_support import SEPT, add_article, add_signal, issue_key, msk, pdf_content, utc
-from tests.digest_user_path_support import (  # noqa: F401 — фикстуры
+from tests.digest_user_path_support import (  # noqa: F401: фикстуры
     chromium,
     issue,
     refusing_image_host,
@@ -60,10 +60,10 @@ def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
     for item in preview:
         assert item["title"] in html
     # Chromium выбрасывает из PDF относительные ссылки (урок выпуска за август): у каждой
-    # карточки ссылка «Читать далее» — абсолютная.
+    # карточки ссылка «Читать далее»: абсолютная.
     links = re.findall(r'<a href="([^"]*)" style="color:#e83d08', html)
     assert len(links) == 45 and all(link.startswith("https://") for link in links)
-    # Порядок выгрузки — порядок превью (тот же сборщик).
+    # Порядок выгрузки: порядок превью (тот же сборщик).
     positions = [html.index(item["title"]) for item in preview]
     assert positions == sorted(positions)
 
@@ -91,7 +91,7 @@ def test_letter_and_docx_are_built_as_before_the_expert_pdf(issue):
     with ZipFile(BytesIO(analyst.export("docx"))) as archive:
         document_xml = archive.read("word/document.xml")
 
-    # Отпечаток разошёлся — изменилось письмо или DOCX (или данные этого теста). Намеренная правка их вида: снять
+    # Отпечаток разошёлся: изменилось письмо или DOCX (или данные этого теста). Намеренная правка их вида: снять
     # отпечаток заново и сказать об этом в PR; иначе это поломка письма.
     assert hashlib.sha256(letter.encode("utf-8")).hexdigest() == _LETTER_BEFORE_EXPERT_PDF, "письмо изменилось"
     assert hashlib.sha256(document_xml).hexdigest() == _DOCX_BEFORE_EXPERT_PDF, "DOCX изменился"
@@ -106,7 +106,7 @@ _DOCX_BEFORE_EXPERT_PDF = "a22e75104e8e8684dadbd7aec404fa9e40de279a180152969d287
 def test_issue_header_names_the_month_in_words(issue):
     """Дефект до 29.09. Заказчик 24.08 (#428915) в выпуске за август: «за 2026-08» → «за
     август 2026 г», и в заголовке выпуска. Август собирали скриптом с этой правкой, а продукт
-    так и писал «2026-09» — первый выпуск, собранный самими пользователями, повторил бы
+    так и писал «2026-09»: первый выпуск, собранный самими пользователями, повторил бы
     замечание."""
     analyst = issue["analyst"]
     analyst.mark(issue["a"]["hi"])
@@ -131,7 +131,7 @@ class _SameSecond(datetime):
 def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(issue, monkeypatch):
     """Дефект до 29.09 (п. 5). Файл выгрузки назывался digest-<месяц>-<секунда>:
     две выгрузки одного месяца в одну секунду (двадцать человек собирают сентябрь до 05.10,
-    HTML готовится за доли секунды) писали в один файл — и первый скачивал выпуск второго."""
+    HTML готовится за доли секунды) писали в один файл: и первый скачивал выпуск второго."""
     analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
     analyst.mark(a["hi"])
     colleague.mark(a["low"])
@@ -140,8 +140,8 @@ def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(is
     mine = analyst.start_export("html")
     theirs = colleague.start_export("html")
 
-    # Выпуск общий (#111): обе выгрузки — один выпуск, но каждая в своём файле.
-    # Список задач пока у каждого свой (общий — #114): свою задачу каждый читает сам.
+    # Выпуск общий (#111): обе выгрузки: один выпуск, но каждая в своём файле.
+    # Список задач пока у каждого свой (общий, #114): свою задачу каждый читает сам.
     paths = {job_id: person.get(f"/api/jobs/{job_id}").json()["result"]["path"]
              for person, job_id in ((analyst, mine), (colleague, theirs))}
     assert paths[mine] != paths[theirs]
@@ -153,10 +153,10 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(
     chromium, silent_image_host, monkeypatch, caplog,
 ):
     """Дефект до 29.09. Картинки статей Chromium грузит сам, с РФ-ядра. Замер 29.09: 40 позиций
-    без внешних картинок — PDF за 1,9 с; две «молчащие» картинки из сорока — set_content(
+    без внешних картинок: PDF за 1,9 с; две «молчащие» картинки из сорока: set_content(
     wait_until="load") ждал до потолка Playwright и через 30 с падал TimeoutError: выгрузка PDF
     не получалась ни с одной из трёх попыток задачи. Теперь картинки ждём ограниченное время,
-    недогрузившуюся меняем на заглушку темы — как у статьи без картинки."""
+    недогрузившуюся меняем на заглушку темы: как у статьи без картинки."""
     monkeypatch.setattr(digest_pdf, "IMAGES_WAIT_MS", 2000)
     content = pdf_content(40, {3: f"{silent_image_host}/a.jpg", 17: f"{silent_image_host}/b.jpg"})
 
@@ -186,7 +186,7 @@ def test_pdf_shows_the_theme_placeholder_instead_of_a_refused_image(chromium, re
 
 def test_docx_spends_a_bounded_time_on_silent_article_images(silent_image_host, monkeypatch):
     """Дефект до 29.09. Картинки для Word сервер тянет сам, по одной, с таймаутом 8 с на запрос:
-    замер 29.09 — 40 позиций без картинок 0,1 с, две молчащие картинки из сорока — 16,2 с.
+    замер 29.09-40 позиций без картинок 0,1 с, две молчащие картинки из сорока: 16,2 с.
     Экран ждёт документ не дольше 160 с: от двадцати молчащих картинок выгрузка на экране
     обрывалась. Теперь на все картинки общий бюджет, остальные карточки идут без картинки."""
     monkeypatch.setattr(digest_module, "_DOCX_IMAGES_BUDGET_SECONDS", 2.0)

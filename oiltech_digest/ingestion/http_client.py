@@ -56,7 +56,7 @@ _host_lock = threading.Lock()
 _host_next_allowed: dict[str, float] = {}
 _host_cooldown_until: dict[str, float] = {}
 
-# Подсчёт HTTP-ответов по статусам — для итоговой строки в конце процесса.
+# Подсчёт HTTP-ответов по статусам: для итоговой строки в конце процесса.
 # Помогает видеть реальное соотношение OK/403 в логах scheduler, а не только WARNING'и.
 _counts_lock = threading.Lock()
 _status_counts: dict[str, int] = {}
@@ -75,9 +75,9 @@ def probe(url: str, timeout: int = 10) -> bytes | None:
 def final_url_of(url: str) -> str | None:
     """Куда привели переадресации последний удачный `fetch(url)` в этом потоке.
 
-    None — не знаем: запрос был к другому адресу, не удался или ответ пришёл запасным
+    None, не знаем: запрос был к другому адресу, не удался или ответ пришёл запасным
     путём (SSL-фоллбэк). Нужен, чтобы отличить статью от главной, на которую сайт увёл со
-    статьи: у Сколково Energy любой адрес energy.skolkovo.ru — 301 на www.skolkovo.ru/.
+    статьи: у Сколково Energy любой адрес energy.skolkovo.ru: 301 на www.skolkovo.ru/.
     """
     requested, final = getattr(_last_response, "pair", (None, None))
     return final if requested == url else None
@@ -109,10 +109,10 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
             _tally(resp.status_code)
             if resp.status_code in {403, 429, 503}:
                 _register_block(host, resp)
-                # 403/429: хост сам попросил паузу — cooldown уже выставлен, поэтому
+                # 403/429: хост сам попросил паузу: cooldown уже выставлен, поэтому
                 # повторять в этом же запросе бессмысленно (иначе следующая попытка
                 # залипнет в _wait_for_host_slot на весь cooldown). 503 (временная
-                # ошибка сервера) — оставляем на обычные ретраи.
+                # ошибка сервера): оставляем на обычные ретраи.
                 if resp.status_code in {403, 429}:
                     return None
             resp.raise_for_status()
@@ -129,10 +129,10 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
             if attempt < retries:
                 time.sleep(_retry_delay(attempt))
 
-    # Хост не ответил НИ РАЗУ за все попытки — значит он недоступен отсюда, а не
+    # Хост не ответил НИ РАЗУ за все попытки: значит он недоступен отсюда, а не
     # занят именно этим адресом. Без этой паузы пакет из 25 статей одного издания
     # стоил 25x63 с: каждая статья заново выясняла то, что уже известно с первой.
-    # Громкий отказ (403) такую паузу получал всегда, молчаливый (таймаут) — нет,
+    # Громкий отказ (403) такую паузу получал всегда, молчаливый (таймаут): нет,
     # и эта асимметрия съедала lease внешней задачи целиком.
     #
     # Только для настоящей загрузки: probe ходит с retries=1, и одна неудачная
@@ -150,14 +150,14 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
 def _is_unreachable(err: Exception | None) -> bool:
     """Недоступность хоста, а не отказ по конкретному адресу.
 
-    404/500 прилетают как HTTPError и означают проблему со страницей — закрывать
+    404/500 прилетают как HTTPError и означают проблему со страницей: закрывать
     из-за них всё издание нельзя.
     """
     return isinstance(err, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
 
 
 _ext_bundle_lock = threading.Lock()
-# None = ещё не инициализирован; "" = extra_ca.pem отсутствует; иначе — путь к bundle.
+# None = ещё не инициализирован; "" = extra_ca.pem отсутствует; иначе: путь к bundle.
 _ext_bundle_path: str | None = None
 
 
@@ -166,7 +166,7 @@ def _extended_ca_bundle() -> str | None:
     extra_ca.pem). Нужен для серверов, присылающих неполную цепочку (leaf без
     intermediate): добавив недостающие промежуточные локально, мы достраиваем
     цепочку и проходим верификацию ЧЕСТНО, без verify=False. Создаётся один раз
-    во временном файле. None — если extra_ca.pem отсутствует/не читается."""
+    во временном файле. None: если extra_ca.pem отсутствует/не читается."""
     global _ext_bundle_path
     if _ext_bundle_path is not None:
         return _ext_bundle_path or None
@@ -203,9 +203,9 @@ def _fetch_insecure(
 ) -> bytes | None:
     """Fallback после SSLError на обычном пути.
 
-    Шаг 1 — повтор с расширенным CA-bundle (certifi + недостающие промежуточные).
-    Верификация остаётся ВКЛючённой — просто подсовываем промежуточные локально.
-    Шаг 2 — только если и это не помогло, идём через verify=False (крайний случай).
+    Шаг 1: повтор с расширенным CA-bundle (certifi + недостающие промежуточные).
+    Верификация остаётся ВКЛючённой: просто подсовываем промежуточные локально.
+    Шаг 2: только если и это не помогло, идём через verify=False (крайний случай).
     """
     bundle = _extended_ca_bundle()
     if bundle:
@@ -227,7 +227,7 @@ def _fetch_insecure(
         except requests.exceptions.SSLError:
             pass  # цепочка всё равно не строится → ниже verify=False
         except requests.RequestException as exc:
-            # не-SSL ошибка (таймаут/connreset) — verify=False не поможет
+            # не-SSL ошибка (таймаут/connreset): verify=False не поможет
             if not quiet:
                 logger.warning("HTTP %s — fallback (CA-bundle) не удался: %s", url, exc)
             return None
@@ -253,7 +253,7 @@ def _fetch_insecure(
     except requests.exceptions.SSLError:
         # verify=False НЕ лечит UNSAFE_LEGACY_RENEGOTIATION_DISABLED (это не сертификат,
         # а рукопожатие): OpenSSL 3 рвёт старые серверы без RFC 5746 (напр. belorusneft.by).
-        # Последний шаг — отдельная сессия с OP_LEGACY_SERVER_CONNECT.
+        # Последний шаг: отдельная сессия с OP_LEGACY_SERVER_CONNECT.
         content = _fetch_legacy_tls(url, timeout, proxies=proxies)
         if content is not None:
             return content
@@ -340,7 +340,7 @@ def _host(url: str) -> str:
 def _proxy_for(host: str) -> dict[str, str] | None:
     """requests-style proxies mapping for a host, or None for a direct request.
 
-    Per-host overrides win over the global PROXY_URL — this is the hook for the
+    Per-host overrides win over the global PROXY_URL: this is the hook for the
     future RU/INTL routing task (PROXY_HOST_OVERRIDES is empty for now).
     """
     url = ""
@@ -408,7 +408,7 @@ def _register_block(host: str, response: requests.Response) -> None:
 
 
 def _set_cooldown(host: str, seconds: int, why: str) -> None:
-    """Единственное место, где хост закрывается на паузу — чтобы правила для
+    """Единственное место, где хост закрывается на паузу: чтобы правила для
     громкого и молчаливого отказа не разъехались при следующей правке."""
     if not host:
         return

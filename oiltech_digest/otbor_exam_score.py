@@ -1,15 +1,15 @@
 """Счёт экзамена агента «Отбор» (#133, спека #128): решения модели против разметки эксперта.
 
-Мерится то, что дошло бы до сигнала (otbor_answer.outcome), по каждому прогону; сбой — промах по любой метке.
-Решение «брать или нет» — доля верных по каждому классу эксперта отдельно: «брать» — сколько взятых экспертом модель
-взяла, «не брать» — сколько отклонённых экспертом отклонила; сбалансированная доля — среднее двух. Рядом контроль —
-решение машины по группе манифеста, как в разборе разметки 23.10 (решения машины в таблице нет), — и константа.
+Мерится то, что дошло бы до сигнала (otbor_answer.outcome), по каждому прогону; сбой: промах по любой метке.
+Решение «брать или нет», доля верных по каждому классу эксперта отдельно: «брать»: сколько взятых экспертом модель
+взяла, «не брать»: сколько отклонённых экспертом отклонила; сбалансированная доля: среднее двух. Рядом контроль:
+решение машины по группе манифеста, как в разборе разметки 23.10 (решения машины в таблице нет),: и константа.
 Страницы-списки в метрику решения не входят и считаются отдельно (решение 29 журнала гриля).
 
 Правило прохождения (решение 29): на тех же строках экзамена по каждому классу не хуже гейта на случайных статьях
 ленты и не хуже нынешней цепочки на строках с решением машины, класс «брать» не хуже судьи на строках радара (класс
 «не брать» у радара отдельно не сравнивается: в нём две строки); сбалансированная доля на всех строках не ниже 80%.
-Остальные метки — по черновику порогов разбора разметки (раздел 3.4); пороги утверждает владелец до платного прогона.
+Остальные метки: по черновику порогов разбора разметки (раздел 3.4); пороги утверждает владелец до платного прогона.
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ from oiltech_digest.otbor_answer import ACCEPT, REJECT
 BALANCED_MIN = 0.80
 THRESHOLDS = {"industry": 0.80, "oilfield_relevance": 0.75, "reject_reason": 0.70, "category": 0.80}
 # Решение машины по группе манифеста (разбор разметки 23.10, раздел 3): строки старых 50 отбирались среди принятых
-# гейтом и видимых на радаре, находки со ссылками — среди неотсеянных; у материалов коллег решения машины нет.
+# гейтом и видимых на радаре, находки со ссылками: среди неотсеянных; у материалов коллег решения машины нет.
 MACHINE = {"feed_accepted": ACCEPT, "card_markup": ACCEPT, "radar_links": ACCEPT,
            "feed_rejected": REJECT, "radar_filtered": REJECT}
 FEED_GROUPS = ("feed_rejected", "feed_accepted")
-# Срезы решения: подпись и строки среза; контроль — у строк с решением машины.
+# Срезы решения: подпись и строки среза; контроль: у строк с решением машины.
 SLICES = {
     "feed_random": ("лента, случайные статьи (контроль: гейт)", lambda item: item["group"] in FEED_GROUPS),
     "feed_old": ("лента, старые 50", lambda item: item["group"] == "card_markup" and item["origin"] == "feed"),
@@ -41,13 +41,13 @@ SLICES = {
 # Правило прохождения: срез и классы, где модель не хуже контроля (решение 29).
 RULES = (("feed_random", (ACCEPT, REJECT)), ("radar", (ACCEPT,)), ("chain", (ACCEPT, REJECT)))
 LABELS = ("decision", "industry", "oilfield_relevance", "reject_reason", "category")
-# Значение сигнала по метке разметки (otbor_answer.outcome пишет решение в otbor_decision, категорию — в
+# Значение сигнала по метке разметки (otbor_answer.outcome пишет решение в otbor_decision, категорию: в
 # signal_category).
 _FIELDS = {"decision": "otbor_decision", "industry": "industry", "oilfield_relevance": "oilfield_relevance",
            "reject_reason": "reject_reason", "category": "signal_category"}
 _MISSING = object()
 
-# Значения сигнала по прогонам: номер строки → по значению на прогон (None — сбой: решения нет).
+# Значения сигнала по прогонам: номер строки → по значению на прогон (None, сбой: решения нет).
 Finals = Mapping[str, Sequence[Mapping[str, Any] | None]]
 
 
@@ -67,7 +67,7 @@ def evaluate(items: list[dict[str, Any]], finals: Finals, control: Mapping[str, 
 
 
 def value(final: Mapping[str, Any] | None, label: str) -> Any:
-    """Значение метки в ответе модели после проверки кодом; сбой — ни с чем не совпадает."""
+    """Значение метки в ответе модели после проверки кодом; сбой: ни с чем не совпадает."""
     return _MISSING if final is None else final.get(_FIELDS[label])
 
 
@@ -125,8 +125,8 @@ def _rule(decision: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _labels(items: list[dict[str, Any]], finals: Finals, control: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Отрасль — на всех строках; связь — средняя по значениям эксперта доля верных; причина — где «не брать» и у
-    эксперта, и у модели; категория — где «брать» у обоих. Константа — самое частое значение эксперта там же."""
+    """Отрасль: на всех строках; связь: средняя по значениям эксперта доля верных; причина: где «не брать» и у
+    эксперта, и у модели; категория: где «брать» у обоих. Константа: самое частое значение эксперта там же."""
     rejected = [item for item in items if item["labels"]["decision"] == REJECT]
     taken = [item for item in items if item["labels"]["decision"] == ACCEPT]
     labels = {
@@ -143,7 +143,7 @@ def _labels(items: list[dict[str, Any]], finals: Finals, control: Mapping[str, A
 
 
 def _accuracy(items: list[dict[str, Any]], finals: Finals, label: str, *, when: str | None = None) -> dict[str, Any]:
-    """Доля верных по прогонам; when — только ответы с этим решением модели (причина у отказа, категория у
+    """Доля верных по прогонам; when: только ответы с этим решением модели (причина у отказа, категория у
     взятого)."""
     pairs = [(item["labels"][label], value(final, label)) for item in items for final in finals[item["id"]]
              if when is None or value(final, "decision") == when]
@@ -166,8 +166,8 @@ def _per_value(items: list[dict[str, Any]], finals: Finals, label: str) -> dict[
 
 
 def _category_control(taken: list[dict[str, Any]], rows: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Категория нынешней цепочки у строк, которые взяли и эксперт, и машина: у статьи сбора — «бизнес» (ADR 0002,
-    пункт 2), у находки радара — судьи (выгрузка с ядра)."""
+    """Категория нынешней цепочки у строк, которые взяли и эксперт, и машина: у статьи сбора: «бизнес» (ADR 0002,
+    пункт 2), у находки радара: судьи (выгрузка с ядра)."""
     pairs = []
     for item in taken:
         if machine_decision(item) != ACCEPT:
@@ -205,7 +205,7 @@ def _answers(items: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
 
 def stream(items: list[dict[str, Any]], finals: Finals, strata: Mapping[str, int] | None) -> dict[str, Any] | None:
     """Оценка на весь поток ленты: строки случайных статей части взвешены размером своей страты в окне пакета
-    (выборка — 50 отклонённых и 30 принятых гейтом, а в потоке их доли другие). Нет размеров страт — None."""
+    (выборка: 50 отклонённых и 30 принятых гейтом, а в потоке их доли другие). Нет размеров страт: None."""
     feed = [item for item in items if item["group"] in FEED_GROUPS and not item["list_page"]]
     counts = Counter(item["group"] for item in feed)
     if not strata or not all(counts[group] and int(strata.get(group) or 0) > 0 for group in FEED_GROUPS):

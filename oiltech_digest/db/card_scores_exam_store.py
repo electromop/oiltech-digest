@@ -1,10 +1,10 @@
 """Чтение базы для экзамена «Карточки» (#133): контроль у строк пакета и «сильные сверх пакета».
 
-Экзамен идёт там, где доступна модель, а база — на ядре: card-scores-exam-control выгружает отсюда JSON
-(card_scores_exam.control_values). Здесь только запросы. Текст и издатель находки — по правилам пакета «Отбора»
+Экзамен идёт там, где доступна модель, а база, на ядре: card-scores-exam-control выгружает отсюда JSON
+(card_scores_exam.control_values). Здесь только запросы. Текст и издатель находки: по правилам пакета «Отбора»
 (otbor_pack_store): текст издателя (статья корпуса или докачанная страница), у ссылки «режима ChatGPT» нет даты.
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в signal_card_store):
 изоляция тестов держится на подмене этого атрибута.
 """
 
@@ -29,7 +29,7 @@ _URL_KEY_SQL = ("rtrim(regexp_replace(split_part(split_part(regexp_replace(lower
 
 
 def feed_control(article_ids: list[int]) -> dict[int, dict[str, Any]]:
-    """Тег и балл ленты у статей: тег — как его поставила лента (корень находит вызывающий), балл — итог профиля."""
+    """Тег и балл ленты у статей: тег: как его поставила лента (корень находит вызывающий), балл: итог профиля."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -66,9 +66,9 @@ def reference_urls() -> list[str]:
 
 def strong_radar(reference_keys: list[str]) -> list[dict[str, Any]]:
     """Находки радара (не дубли), которые человек выбрал «в дайджест» или которые входят в эталонный ТОП заказчика:
-    заведены по его списку или их ссылка — среди ссылок эталона в памяти радара (reference_keys — ключи адресов).
-    Главная публикация — самая сильная ссылка с текстом издателя; нет такой — поля публикации пустые (текст находки
-    без докачки — сводка модели поиска, не издателя)."""
+    заведены по его списку или их ссылка: среди ссылок эталона в памяти радара (reference_keys: ключи адресов).
+    Главная публикация: самая сильная ссылка с текстом издателя; нет такой: поля публикации пустые (текст находки
+    без докачки: сводка модели поиска, не издателя)."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     top = (f"EXISTS (SELECT 1 FROM signal_evidence x WHERE x.signal_id = s.id"
@@ -104,7 +104,7 @@ def strong_radar(reference_keys: list[str]) -> list[dict[str, Any]]:
 
 
 def strong_feed() -> list[dict[str, Any]]:
-    """Статьи ленты, выбранные «в дайджест», с текстом издателя; категория — их сигнала ленты, если он есть."""
+    """Статьи ленты, выбранные «в дайджест», с текстом издателя; категория: их сигнала ленты, если он есть."""
     digest = marks.article_marked_sql("a.id", "digest")
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

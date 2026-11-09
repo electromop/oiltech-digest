@@ -1,7 +1,7 @@
 """Читаемый отчёт экзамена агента «Карточка сигнала» (#98): Markdown рядом с JSON, вне репозитория.
 
-Пороги — по отчёту с допусками, строгий — для сравнения, константа и устойчивость — рядом. Доли набора,
-базовая линия без ИИ и судья радара — справочно: решения о модели они не меняют.
+Пороги: по отчёту с допусками, строгий: для сравнения, константа и устойчивость: рядом. Доли набора,
+базовая линия без ИИ и судья радара, справочно: решения о модели они не меняют.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 from oiltech_digest.signal_card_exam_score import THRESHOLDS
 from oiltech_digest.signal_card_pack import STRATUM_RU
 
-# Строка таблицы: метрика отчёта → подпись; порог — из THRESHOLDS счёта или правило без числа (спека, поправки 18.10).
+# Строка таблицы: метрика отчёта → подпись; порог: из THRESHOLDS счёта или правило без числа (спека, поправки 18.10).
 _ROWS = (
     ("companies_precision", "Компании — точность (по упоминаниям)"),
     ("companies_recall", "Компании — полнота (по упоминаниям)"),
@@ -34,7 +34,7 @@ REPORT_PREFIX = "signal_card_exam_report_"
 
 
 def reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
-    """Почему решение экзамена такое; сама модель — в decision["model"]."""
+    """Почему решение экзамена такое; сама модель: в decision["model"]."""
     if decision:
         return "самая дешёвая из прошедших пороги"
     return "ни одна модель не прошла пороги: " + "; ".join(
@@ -42,7 +42,7 @@ def reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
 
 
 def write(folder: Path, report: dict[str, Any]) -> tuple[Path, Path]:
-    """Отчёт рядом с манифестом: JSON с ответами и метриками и читаемый .md; имя — по времени записи, прежние
+    """Отчёт рядом с манифестом: JSON с ответами и метриками и читаемый .md; имя: по времени записи, прежние
     отчёты не перезаписываются."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     path, number = folder / f"{REPORT_PREFIX}{stamp}.json", 1
@@ -56,8 +56,8 @@ def write(folder: Path, report: dict[str, Any]) -> tuple[Path, Path]:
 
 
 def read(path: Path) -> dict[str, Any]:
-    """Сохранённый отчёт — для пересчёта без вызовов модели. Файл лежит на диске и его правят руками: устройство
-    проверяется до счёта, битый отчёт — ValueError с именем файла, а не трасса посреди пересчёта."""
+    """Сохранённый отчёт: для пересчёта без вызовов модели. Файл лежит на диске и его правят руками: устройство
+    проверяется до счёта, битый отчёт: ValueError с именем файла, а не трасса посреди пересчёта."""
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -158,7 +158,7 @@ def _model(model: dict[str, Any], runs: int) -> list[str]:
               f"| {_share(strict['companies_precision']['by_signal'])} / "
               f"{_share(strict['companies_recall']['by_signal'])} | — | — | |", ""]
     strata = model["lenient"]["by_stratum"]
-    # В скобках — строки доли: у каждой строки ровно runs ответов (без карточки — тоже ответ).
+    # В скобках, строки доли: у каждой строки ровно runs ответов (без карточки: тоже ответ).
     lines += ["По долям набора (с допусками, справочно — на экзамене в доле от 4 строк):", "",
               "| Атрибут | " + " | ".join(f"{STRATUM_RU.get(stratum, stratum)} ({strata[stratum]['region']['n'] // runs})"
                                          for stratum in strata) + " |",

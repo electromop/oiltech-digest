@@ -1,14 +1,14 @@
 """Счёт экзамена агента «Карточка сигнала» (#98): значения карточки против разметки эксперта.
 
 Мерится то, что дойдёт до карточки: ответ модели после проверок кодом (signal_card.card_values).
-Рядом с каждым атрибутом — результат константы: самое частое значение эксперта на тех же строках, для
-даты события — дата публикации. Пороги спеки (#93, поправки 18.10): компании — точность ≥ 90% и
+Рядом с каждым атрибутом, результат константы: самое частое значение эксперта на тех же строках, для
+даты события: дата публикации. Пороги спеки (#93, поправки 18.10): компании: точность ≥ 90% и
 полнота ≥ 80% по упоминаниям; регион ≥ 85%; тип события, класс технологии, зрелость ≥ 75%; дата
-события — ошибок не больше, чем у константы (дата с точностью до месяца или года верна, если дата эксперта в этом
-периоде); выдуманных компаний и дат — 0. Связь с нефтесервисом с #132
+события: ошибок не больше, чем у константы (дата с точностью до месяца или года верна, если дата эксперта в этом
+периоде); выдуманных компаний и дат: 0. Связь с нефтесервисом с #132
 ставит «Отбор»: метрики и порога по ней у экзамена карточки нет.
 
-Два вида отчёта: строго — по меткам эксперта; с допусками — в ячейке из списка допусков засчитывается и
+Два вида отчёта: строго: по меткам эксперта; с допусками: в ячейке из списка допусков засчитывается и
 законный второй ответ, а компания из списка допусков необязательна: её не требуют и за неё не штрафуют.
 """
 
@@ -26,7 +26,7 @@ from oiltech_digest.word_forms import Companies, named_among, words
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75}
 CHOICES = ("event_type", "region", "technology_class", "maturity")
-# Атрибут разметки → колонка карточки (signal_card.CHOICE_COLUMNS: зрелость — technology_maturity).
+# Атрибут разметки → колонка карточки (signal_card.CHOICE_COLUMNS: зрелость: technology_maturity).
 _CARD_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                  "maturity": "technology_maturity", "event_date": "event_date",
                  "event_date_source": "event_date_source"}
@@ -34,12 +34,12 @@ _CARD_COLUMNS = {"event_type": "event_type", "region": "region", "technology_cla
 _MISSING = object()
 
 
-# Значения карточки по прогонам: ID строки → по значению на прогон (None — карточки нет).
+# Значения карточки по прогонам: ID строки → по значению на прогон (None: карточки нет).
 Finals = Mapping[str, Sequence[Mapping[str, Any] | None]]
 
 
 def evaluate(items: list[dict[str, Any]], finals: Finals, names: CompanyNames, *, lenient: bool) -> dict[str, Any]:
-    """Метрики в целом (с порогами) и по долям набора. finals — значения карточки по прогонам."""
+    """Метрики в целом (с порогами) и по долям набора. finals: значения карточки по прогонам."""
     overall = _metrics(items, finals, names, lenient)
     for key, row in overall.items():
         row["passed"] = _passed(key, row)
@@ -66,7 +66,7 @@ def _metrics(items, finals, names, lenient) -> dict[str, dict[str, Any]]:
         "companies_precision": precision, "companies_recall": recall,
         **{key: _accuracy(items, finals, key, lenient) for key in CHOICES},
         "event_date": _event_date(items, finals, lenient),
-        # Источник даты — только где дата события не день публикации: иначе «из текста» и «по дате
+        # Источник даты, только где дата события не день публикации: иначе «из текста» и «по дате
         # публикации» дают одну и ту же дату, и расхождение ничего не значит.
         "event_date_source": _accuracy([item for item in items if item["labels"]["event_date"] != item["published"]],
                                        finals, "event_date_source", lenient),
@@ -120,7 +120,7 @@ def _mean(values: list[float | None]) -> float | None:
 
 
 def _date_right(final: Mapping[str, Any] | None, allowed: list[Any]) -> bool:
-    """Дата карточки верна: день из разметки или допусков; дата с точностью до месяца или года (#132) — если дата
+    """Дата карточки верна: день из разметки или допусков; дата с точностью до месяца или года (#132): если дата
     эксперта в этом периоде (решение владельца 26.10): так период понимает и ядро (event_dates.period_end)."""
     day = _card_value(final, "event_date")
     if day in allowed:
@@ -144,8 +144,8 @@ def _event_date(items, finals, lenient) -> dict[str, Any]:
 
 
 def _invented_dates(items, finals, lenient) -> dict[str, Any]:
-    """Выдуманная дата — «из текста», но её нет ни в разметке, ни в тексте, и это не день публикации
-    (с сутками допуска, как у проверки кодом). Месяц или год без дня (#132) — не день: выдуманным днём не считается."""
+    """Выдуманная дата: «из текста», но её нет ни в разметке, ни в тексте, и это не день публикации
+    (с сутками допуска, как у проверки кодом). Месяц или год без дня (#132), не день: выдуманным днём не считается."""
     invented = 0
     for item in items:
         allowed = _allowed(item, "event_date", lenient)
@@ -164,15 +164,15 @@ def _invented_dates(items, finals, lenient) -> dict[str, Any]:
 
 def baseline_metrics(items: list[dict[str, Any]], finals: Finals, names: CompanyNames, *,
                      lenient: bool) -> dict[str, float | None]:
-    """Базовая линия без ИИ (signal_card_exam_baseline) — те же метрики компаний и региона."""
+    """Базовая линия без ИИ (signal_card_exam_baseline): те же метрики компаний и региона."""
     precision, recall, _ = _companies(items, finals, names, lenient)
     return {"companies_precision": precision["agent"], "companies_recall": recall["agent"],
             "region": _accuracy(items, finals, "region", lenient)["agent"]}
 
 
 def judged(items: list[dict[str, Any]], values: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Судья радара против эксперта — на всех радарных строках набора (values — выгрузка судьи с ядра), без
-    вызовов модели; выгрузки нет — None."""
+    """Судья радара против эксперта: на всех радарных строках набора (values: выгрузка судьи с ядра), без
+    вызовов модели; выгрузки нет: None."""
     if values is None:
         return None
     radar = [item for item in items if item["origin"] == "radar" and item["id"] in values]
@@ -187,7 +187,7 @@ def judge_metrics(items: list[dict[str, Any]], finals: Finals, *, lenient: bool)
 
 
 def _companies(items, finals, names, lenient):
-    """Точность и полнота — по упоминаниям (с порогами) и по сигналам (среднее по прогонам сигналов); рядом —
+    """Точность и полнота, по упоминаниям (с порогами) и по сигналам (среднее по прогонам сигналов); рядом:
     константа: самая частая компания эксперта у каждого сигнала."""
     agent = _company_tally(items, finals, names, lenient)
     labels = [name for item in items for name in item["labels"]["companies"]]
@@ -233,22 +233,22 @@ def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
 # --- Имена компаний ------------------------------------------------------------------------------
 
 def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
-    """Слова имени или текста — те же, что сверяет ядро (word_forms.words): без различий «ё», дефисов, кавычек,
-    вида апострофа («КТК‑Р» — это «КТК-Р») и, кроме keep_case, регистра."""
+    """Слова имени или текста: те же, что сверяет ядро (word_forms.words): без различий «ё», дефисов, кавычек,
+    вида апострофа («КТК‑Р» это «КТК-Р») и, кроме keep_case, регистра."""
     return [word if keep_case else word.casefold() for word in words(text)]
 
 
 class CompanyNames:
-    """Сравнение имён агента и эксперта — по правилу «одна компания» ядра и фильтра ленты (word_forms.Companies)
-    со справочником компаний ядра и алиасами экзамена: форма собственности, регистр и падеж — не другая компания,
-    «Имя (АББР)» — и имя, и аббревиатура, другая скобка — пояснение. Компания — целиком: «Газпром» — не «Газпром
-    нефть». Имена хранятся как написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро — в цитате."""
+    """Сравнение имён агента и эксперта: по правилу «одна компания» ядра и фильтра ленты (word_forms.Companies)
+    со справочником компаний ядра и алиасами экзамена: форма собственности, регистр и падеж: не другая компания,
+    «Имя (АББР)»: и имя, и аббревиатура, другая скобка: пояснение. Компания, целиком: «Газпром»: не «Газпром
+    нефть». Имена хранятся как написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро: в цитате."""
 
     def __init__(self, entries: Sequence[dict[str, Any]], aliases: Sequence[dict[str, Any]] = ()):
-        """entries — справочник компаний ядра, aliases — алиасы экзамена (имена эксперта не как в тексте)."""
+        """entries: справочник компаний ядра, aliases: алиасы экзамена (имена эксперта не как в тексте)."""
         self.rule = Companies([*entries, *aliases])
         # Имена справочника ядра: длинное закрывает короткое в тексте так же, как у ядра в цитате. Алиасы экзамена
-        # не закрывают — ядро их не знает, и экзамен не был бы строже карточки.
+        # не закрывают: ядро их не знает, и экзамен не был бы строже карточки.
         self.dictionary = [tuple(text_tokens(name, keep_case=True)) for entry in entries
                            for name in (entry["name"], *entry["aliases"])]
 
@@ -263,8 +263,8 @@ class CompanyNames:
         return any(self.same(name, other) for other in others)
 
     def key(self, name: str) -> tuple[str, ...]:
-        """Одно написание на компанию — для устойчивости между прогонами и константы, по тому же правилу, что same:
-        «X Inc.» и «X» — одна компания (word_forms.Companies.key)."""
+        """Одно написание на компанию, для устойчивости между прогонами и константы, по тому же правилу, что same:
+        «X Inc.» и «X»: одна компания (word_forms.Companies.key)."""
         return self.rule.key(name)
 
     def matched(self, given: list[str], expected: list[str]) -> int:
@@ -278,9 +278,9 @@ class CompanyNames:
         return hits
 
     def in_text(self, name: str, text: list[str]) -> bool:
-        """Компания есть в тексте (его слова с регистром — text_tokens(keep_case=True)) — названа под любым своим
+        """Компания есть в тексте (его слова с регистром: text_tokens(keep_case=True)): названа под любым своим
         именем по правилу ядра (word_forms.named_among): все слова имени, кроме формы собственности, и не только
-        внутри длинного имени другой компании справочника. Выдуманной — нет."""
+        внутри длинного имени другой компании справочника. Выдуманной: нет."""
         forms = self.forms(name)
         return named_among(forms, text, [form for form in self.dictionary if form not in forms])
 

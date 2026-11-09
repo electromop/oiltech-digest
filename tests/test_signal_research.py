@@ -67,7 +67,7 @@ def test_events_become_radar_evidence_with_primary_source_strength():
 
     assert result["status"] == "ok" and result["events"] == 1 and result["web_search_calls"] == 7
     item = result["evidence"][0]
-    # utm_source=openai — не часть адреса события.
+    # utm_source=openai: не часть адреса события.
     assert item["source_url"] == "https://www.slb.com/newsroom/press-release/2026/pr-2026-0924-slb-aramco"
     assert item["published_at"] == "2026-09-24"
     assert item["strength"] == 0.9
@@ -186,7 +186,7 @@ def test_research_answer_without_any_json_is_an_error():
 
 
 class _Sequence:
-    """Клиент, отвечающий по очереди: ответ — список событий или исключение."""
+    """Клиент, отвечающий по очереди: ответ: список событий или исключение."""
 
     def __init__(self, *answers):
         self.answers = list(answers)
@@ -234,7 +234,7 @@ def test_two_failures_are_an_error():
 
 
 def test_research_client_collects_search_sources_as_grounding(monkeypatch):
-    # При строгом JSON сносок нет (30.09: 0 из 18) — подтверждение ссылки даёт список
+    # При строгом JSON сносок нет (30.09: 0 из 18): подтверждение ссылки даёт список
     # источников, которые поиск реально вернул (include web_search_call.action.sources).
     from oiltech_digest.processing import openai_client
 
@@ -304,11 +304,11 @@ def _recent_event(**overrides):
 
 
 def test_research_prompt_knows_topic_cards_seen_within_the_search_period(monkeypatch):
-    """Разовые прогоны идут реже, чем раз в 3 дня, — свежих (fresh) нет, и поиск не знал ничего.
+    """Разовые прогоны идут реже, чем раз в 3 дня,: свежих (fresh) нет, и поиск не знал ничего.
 
-    Прод 14.10 и 17.10: на старте свежих карточек — 0 из 243 и 0 из 264, список «уже на радаре»
-    пуст во всех темах; 15 и 20 находок — уже известные карточки (17.10 — 20 из 41). Среди них
-    WesCan (впервые 03.10) и Expro Velonix (впервые 08.09, снова — 14.10): обе видел радар за
+    Прод 14.10 и 17.10: на старте свежих карточек: 0 из 243 и 0 из 264, список «уже на радаре»
+    пуст во всех темах; 15 и 20 находок: уже известные карточки (17.10-20 из 41). Среди них
+    WesCan (впервые 03.10) и Expro Velonix (впервые 08.09, снова: 14.10): обе видел радар за
     период поиска, а в промпт они не попадали."""
     prompt = _known_cards_prompt(monkeypatch, [
         {"id": 176, "title_ru": "WesCan пробурила МЛТ‑скважину с 7 латералями в Rex/Mannville", "theme": TOPIC,
@@ -322,7 +322,7 @@ def test_research_prompt_knows_topic_cards_seen_within_the_search_period(monkeyp
     ])
 
     known = prompt.split("Уже есть на радаре по этой теме — не повторяй, ищи новое:\n", 1)[1]
-    # Свежие первыми: Velonix радар видел 3 дня назад, WesCan — 15.
+    # Свежие первыми: Velonix радар видел 3 дня назад, WesCan: 15.
     assert known.startswith("- Expro Velonix обеспечил первые ILI‑прогоны на водородном трубопроводе\n"
                             "- WesCan пробурила МЛТ‑скважину с 7 латералями в Rex/Mannville")
     assert "Событие прошлого квартала" not in prompt and "Чужая тема" not in prompt
@@ -343,8 +343,8 @@ def test_research_prompt_caps_known_cards_per_topic_keeping_the_latest(monkeypat
 
 
 def test_core_snapshot_lets_the_search_know_a_card_refound_within_the_period(isolated_db, monkeypatch):
-    """Ядро отдаёт день последней находки: карточку, впервые найденную 40 дней назад и снова —
-    5 дней назад, поиск темы знает (17.10 так повторились Expro Velonix и Aganova — впервые в сентябре)."""
+    """Ядро отдаёт день последней находки: карточку, впервые найденную 40 дней назад и снова:
+    5 дней назад, поиск темы знает (17.10 так повторились Expro Velonix и Aganova: впервые в сентябре)."""
     from oiltech_digest.db import repository
 
     card = repository.upsert_signal({"signal_key": "velonix", "title": "Expro Velonix first ILI runs",
@@ -373,7 +373,7 @@ def test_named_technology_stays_in_the_finding_as_draft_data():
 
 
 def test_research_asks_for_a_russian_title_by_the_title_rules():
-    """#150: правила заголовка «Сути и перевода» (prompts.TRANSLATE_INSTRUCTIONS) — строкой и в промпте поиска: его
+    """#150: правила заголовка «Сути и перевода» (prompts.TRANSLATE_INSTRUCTIONS), строкой и в промпте поиска: его
     заголовок остаётся у находки, если у страницы нет своего, и виден в отсеянном поиском. Предел длины один."""
     from oiltech_digest.processing.prompts import TRANSLATE_INSTRUCTIONS
 

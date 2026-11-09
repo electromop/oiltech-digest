@@ -20,8 +20,8 @@ def _ago(minutes: float) -> datetime:
 
 
 def test_external_queue_refuses_kind_its_worker_cannot_run(isolated_db):
-    # 13–17.09 радар ставили в external-ai, где его никто не умел исполнять: 134 падения.
-    # В едином контуре у радара своя полоса — туда его и переносит постановка
+    # 13-17.09 радар ставили в external-ai, где его никто не умел исполнять: 134 падения.
+    # В едином контуре у радара своя полоса: туда его и переносит постановка
     # (test_agents_lane.py); отказ остаётся для вида, которого NL не исполняет вовсе.
     with pytest.raises(ValueError, match="не обслуживает"):
         repository.create_background_job("diagnose_source", {"source_id": 1}, queue_name="external-ai", execution_region="external")
@@ -31,11 +31,11 @@ def test_external_queue_refuses_kind_its_worker_cannot_run(isolated_db):
         repository.create_background_job("scrape_source", {"source_id": 1}, queue_name="external-fetch2")
 
     assert repository.create_background_job("process_articles", {"limit": 5}, queue_name="external-ai-bulk")
-    assert repository.create_background_job("anything_local", {}, queue_name="default")  # местные — без таблицы
+    assert repository.create_background_job("anything_local", {}, queue_name="default")  # местные: без таблицы
 
 
 def test_bulk_lane_job_gets_articles_like_live_lane(monkeypatch):
-    """Раньше payload собирался только при queue_name == 'external-ai' — задача в новой
+    """Раньше payload собирался только при queue_name == 'external-ai': задача в новой
     полосе ушла бы воркеру сырым payload без статей."""
     built = []
     monkeypatch.setattr(
@@ -146,7 +146,7 @@ def test_recount_waits_for_job_holding_old_text_instead_of_dropping_article(isol
 
 
 def test_null_article_ids_in_running_job_do_not_break_claims(isolated_db):
-    """Ревью 21.09: "article_ids": null (так пишет /api/jobs/process) — jsonb null, а не SQL
+    """Ревью 21.09: "article_ids": null (так пишет /api/jobs/process): jsonb null, а не SQL
     NULL; пока такая задача выполнялась, любая выдача ИИ-пакета падала 500."""
     ids = _articles(3)
     _running_job({"article_ids": None, "limit": 5})  # выдана, резерв ещё не записан
@@ -251,11 +251,11 @@ def test_watchdog_flags_congested_live_ai_lane():
 def test_watchdog_keeps_quiet_on_fresh_burst_and_delayed_retries():
     alerts = lanes.lane_alerts(
         _status(
-            # пачка только что пришла после 40 мин тишины — норма
+            # пачка только что пришла после 40 мин тишины: норма
             _row("external-fetch", queued=21, ready_minutes=2, activity_minutes=40),
-            # отложенный повтор (run_after в будущем) — готовых задач нет
+            # отложенный повтор (run_after в будущем): готовых задач нет
             _row("external-playwright", queued=1, ready_minutes=None, activity_minutes=300),
-            # пересчёт ждёт 2 ч — для своей полосы это норма
+            # пересчёт ждёт 2 ч: для своей полосы это норма
             _row("external-ai-bulk", queued=5, ready_minutes=120, activity_minutes=3, running=1),
         ),
         now=NOW,

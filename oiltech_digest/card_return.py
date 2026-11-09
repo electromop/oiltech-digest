@@ -1,5 +1,5 @@
 """Возврат публикации из «Карточки» в «Отбор» (#132, спека #128): если «Карточка» нашла в тексте дату события старше
-OTBOR_OLD_EVENT_DAYS, принятая «Отбором» публикация возвращается ему с этим фактом, один раз; если он снова примет —
+OTBOR_OLD_EVENT_DAYS, принятая «Отбором» публикация возвращается ему с этим фактом, один раз; если он снова примет:
 пометка «спорное» (otbor_store.RETURN_DISPUTED). Без даты события в тексте возврата нет: дата публикации вместо неё не
 подставляется (event_dates).
 """
@@ -16,7 +16,7 @@ def old_event(signal_id: int, values: dict[str, Any], publication: dict[str, Any
     """Вернуть принятую «Отбором» публикацию в «Отбор», если «Карточка» нашла в тексте старое событие: решение
     снимается, факт ложится во вход «Отбора». Один раз; решение человека и выбор «в дайджест» не трогаются
     (signal_card_store.return_to_otbor). Без модели «Отбора» возврат не делается: решать было бы некому.
-    Номер публикации для «Отбора» (contract.article_ref или signal_ref); None — возврата нет."""
+    Номер публикации для «Отбора» (contract.article_ref или signal_ref); None: возврата нет."""
     fact = event_dates.old_event_fact(values, publication["published"], publication["received"],
                                       config.OTBOR_OLD_EVENT_DAYS)
     if fact is None or not config.OTBOR_MODEL:
@@ -27,7 +27,7 @@ def old_event(signal_id: int, values: dict[str, Any], publication: dict[str, Any
 
 
 def enqueue(refs: list[str]) -> None:
-    """Задачи «Отбора» о возвращённых публикациях — сразу, по полосе пересчётов: окно шага планировщика старую статью
+    """Задачи «Отбора» о возвращённых публикациях, сразу, по полосе пересчётов: окно шага планировщика старую статью
     уже не берёт."""
     from oiltech_digest import otbor
 

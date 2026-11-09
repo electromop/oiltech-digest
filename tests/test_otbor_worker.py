@@ -1,6 +1,6 @@
-"""Агент «Отбор» для ленты (#130, спека #128), шов 1 — воркер «Отбора» на подставной модели и контракт ядра с
+"""Агент «Отбор» для ленты (#130, спека #128), шов 1: воркер «Отбора» на подставной модели и контракт ядра с
 воркером: старая сборка отказывает явно, модель без отката на модель ленты, шаг планировщика каждого цикла, сбой по
-причине (технический повторяется до трёх задач, ответ не по правилам — нет), один повтор при конфликте шагов,
+причине (технический повторяется до трёх задач, ответ не по правилам: нет), один повтор при конфликте шагов,
 расход под именем агента, остановка воркера (tests/otbor_support.py).
 """
 
@@ -12,8 +12,8 @@ from oiltech_digest.db import connection, repository
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.otbor_support import MODEL, OtborModel, answer, article, decide, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, run_worker, user, worker  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import admin, api_get, run_worker, user, worker  # noqa: F401: фикстуры
 
 
 def _jobs(admin):
@@ -46,7 +46,7 @@ def test_old_worker_build_does_not_get_the_otbor_job_and_check_lanes_shows_the_m
 
 
 def test_build_before_131_refuses_the_signal_summary_job(user, contour, monkeypatch):
-    # Сборка NL контракта 4: «Суть и перевод» сигналов у неё нет — отказ явной ошибкой, а не тихий пропуск.
+    # Сборка NL контракта 4: «Суть и перевод» сигналов у неё нет: отказ явной ошибкой, а не тихий пропуск.
     repository.create_background_job("signal_summary", {"signal_ids": [1]}, queue_name="external-ai",
                                      execution_region="external", capability="openai")
     old_build = {kind: target for kind, target in external_worker._HANDLERS.items() if kind != "signal_summary"}
@@ -66,7 +66,7 @@ def test_no_model_no_fallback_to_the_feed_model(user, contour, monkeypatch):
     with pytest.raises(SystemExit, match="OTBOR_MODEL"):
         cli.main(["enqueue-otbor"])
 
-    # Задача без модели (поставлена в обход шага) — явная ошибка воркера, а не модель ленты.
+    # Задача без модели (поставлена в обход шага): явная ошибка воркера, а не модель ленты.
     repository.create_background_job("otbor", {"article_ids": [1]}, queue_name="external-ai",
                                      execution_region="external", capability="openai")
     model = OtborModel({})
@@ -98,7 +98,7 @@ def test_technical_failure_is_retried_up_to_three_tasks(user, admin, contour, mo
         cli.main(["enqueue-otbor"])
         run_worker("external-ai")
 
-    # API не ответил — до трёх вызовов (решение владельца 23.10), дальше — только командой с номером.
+    # API не ответил: до трёх вызовов (решение владельца 23.10), дальше: только командой с номером.
     assert len(_jobs(admin)) == 3
     answers["Модель молчит"] = answer()
     cli.main(["enqueue-otbor"])
@@ -146,7 +146,7 @@ def test_answer_off_rules_is_not_written_not_retried_and_does_not_drop_the_batch
               for item in api_get(f"/api/jobs/{job['id']}", admin)["result"]["applied"]["errors"]}
     assert errors == {off_schema: "ответ не по правилам: нет строки industry",
                       off_dictionary: "ответ не по правилам: значение не из справочника: category = «рынок»"}
-    # Повтор — только командой с номером, после разбора; статью гейта команда не трогает.
+    # Повтор: только командой с номером, после разбора; статью гейта команда не трогает.
     monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
     cli.main(["enqueue-otbor", "--ids", f"{off_schema},{gate_article}"])
     assert [(job["queue"], job["payload"]["article_ids"]) for job in _jobs(admin)
@@ -156,7 +156,7 @@ def test_answer_off_rules_is_not_written_not_retried_and_does_not_drop_the_batch
 def test_step_conflict_gets_one_retry_with_the_conflict_then_the_decision_stays_disputed(user, contour, monkeypatch):
     article("Исправился", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
     article("Упорствует", "Weatherford получила контракт на бурение 274 скважин в Омане.")
-    conflict = answer(industry="other_industry")  # прямая связь у другой отрасли — шаги не сошлись
+    conflict = answer(industry="other_industry")  # прямая связь у другой отрасли: шаги не сошлись
     model = decide(monkeypatch, {"Исправился": [conflict, answer()], "Упорствует": [conflict, conflict]})
 
     cards = showcase(user)
@@ -177,7 +177,7 @@ def test_step_conflict_gets_one_retry_with_the_conflict_then_the_decision_stays_
 def test_step_table_approved_23_10_allows_transfer_from_oil_gas_any_category_and_reject_without_one(
         user, admin, contour, monkeypatch):
     # Таблица конфликтов шагов утверждена владельцем 23.10 (решение 29 журнала гриля, раздел 5 разбора разметки):
-    # переносимая — и у нефтегаза, при любой категории; категория у «не брать» не обязательна.
+    # переносимая: и у нефтегаза, при любой категории; категория у «не брать» не обязательна.
     transfer = {"oilfield_relevance": "transferable", "oilfield_application": "Задача: осмотр без людей на высоте"}
     article("Экзоскелеты Башнефти", "Башнефть перенесла экзоскелеты с НПЗ на ремонт скважин.")
     article("Двойники верфей", "Akselos и UPTEC переносят цифровые двойники верфей на морские платформы.")
@@ -201,7 +201,7 @@ def test_step_table_approved_23_10_allows_transfer_from_oil_gas_any_category_and
     for call in model.calls:
         title = call["input"].splitlines()[0].removeprefix("Заголовок: ")
         calls.setdefault(title, []).append(call["input"])
-    # Повтор — только там, где таблица говорит «нет»: перенос у нефтесервиса, происшествие при прямой связи,
+    # Повтор, только там, где таблица говорит «нет»: перенос у нефтесервиса, происшествие при прямой связи,
     # старое событие без связи.
     assert {title: len(inputs) for title, inputs in calls.items()} == {
         "Экзоскелеты Башнефти": 1, "Двойники верфей": 1, "Перенос у нефтесервиса": 2, "Пожар на буровой": 2,
@@ -214,7 +214,7 @@ def test_step_table_approved_23_10_allows_transfer_from_oil_gas_any_category_and
             technology["Экзоскелеты Башнефти"]["otbor_disputed"]) == ("transferable", None)
     assert business["Двойники верфей"]["otbor_disputed"] is None
     assert technology["Перенос у нефтесервиса"]["oilfield_relevance"] == "direct"
-    # Отказ без категории — решение, а не «ответ не по правилам».
+    # Отказ без категории: решение, а не «ответ не по правилам».
     [no_category] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")
     assert (no_category["title"], no_category["signal_category"]) == ("Отказ без категории", None)
     assert api_get("/api/signals", admin, section="otbor_invalid") == []
@@ -279,7 +279,7 @@ def test_core_writes_decisions_only_for_the_articles_of_the_job(user, admin, con
     client = worker("external-ai")
     job = client.claim()
 
-    # Итог воркера — недоверенный ввод: в нём решение о статье, которой в задаче не было.
+    # Итог воркера, недоверенный ввод: в нём решение о статье, которой в задаче не было.
     result = otbor.process_payload(job["payload"])
     result["decisions"].append({"ref": f"article:{foreign}", "calls": [{"answer": reject("oil_gas_no_link")}],
                                 "model": MODEL, "input_tokens": 1, "output_tokens": 1})

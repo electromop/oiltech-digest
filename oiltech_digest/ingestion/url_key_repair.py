@@ -1,4 +1,4 @@
-"""Ключ адреса после 13.09: номер статьи из query — обратно в ключ, спрятанное склейкой — в ленту.
+"""Ключ адреса после 13.09: номер статьи из query: обратно в ключ, спрятанное склейкой: в ленту.
 
 13.09 ключ тождества статьи (`articles.url_key`) стал host+path БЕЗ query, и схема в тот же
 день спрятала (pending_deletion) все статьи с совпавшим ключом, кроме одной. У сайтов, где
@@ -6,13 +6,13 @@
 Минэнерго 90 из 91, у Новатэка 73 из 74, у EIA 50 из 51, у Лукойла 11 из 12 (замер 25.09).
 
 Склейка отличима точно: ручная и гейтовая пометка (`mark_article_for_deletion`) всегда
-ставит `marked_for_deletion_at`, схема 13.09 — ни его, ни причины. В ленту возвращаем только
+ставит `marked_for_deletion_at`, схема 13.09: ни его, ни причины. В ленту возвращаем только
 спрятанное схемой и только если по новому ключу статья действительно своя: номер в query
 есть, ключ не занят видимой статьёй, тело не повторяет видимую статью того же источника
-(рубеж №24 — иначе вернулись бы копии страниц навигации). Статья, которую убрал человек или
+(рубеж №24: иначе вернулись бы копии страниц навигации). Статья, которую убрал человек или
 гейт, блокирует и своих двойников: иначе она вернулась бы в ленту под другим написанием адреса.
 
-По умолчанию сухой прогон — план без записи. С apply план и запись идут в ОДНОЙ транзакции под
+По умолчанию сухой прогон: план без записи. С apply план и запись идут в ОДНОЙ транзакции под
 блокировкой таблицы от вставок: иначе вставка сбора между планом и записью роняла бы всё на
 уникальном индексе.
 """
@@ -24,12 +24,12 @@ from collections import Counter, defaultdict
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion import normalize
 
-# Спрятано схемой 13.09, а не человеком или гейтом. То же правило — в UPDATE возврата.
+# Спрятано схемой 13.09, а не человеком или гейтом. То же правило: в UPDATE возврата.
 _COLLAPSED_SQL = "pending_deletion AND marked_for_deletion_at IS NULL AND deletion_reason IS NULL"
 
 
 def _old_rule_key(key: str) -> str:
-    """Ключ по правилу 13.09 — без query: так их считала склейка."""
+    """Ключ по правилу 13.09, без query: так их считала склейка."""
     return key.split("?", 1)[0]
 
 
@@ -54,7 +54,7 @@ def plan_repair(conn) -> dict:
         if new_key == key:
             continue
         if new_key in held:
-            # Другое написание той же статьи уже в ленте под новым ключом — вставилось между
+            # Другое написание той же статьи уже в ленте под новым ключом: вставилось между
             # выкатом кода и этой починкой. Ключ не отдаём (упало бы на уникальном индексе),
             # показываем владельцу: это видимый дубль.
             key_conflicts.append({"id": article_id, "url": url, "holder_id": held[new_key]})
@@ -81,7 +81,7 @@ def plan_repair(conn) -> dict:
         if not collapsed:
             verdict = "marked_by_user"
         elif new_key == _old_rule_key(new_key):
-            verdict = "tracking_duplicate"  # в query только хвосты — склейка была верной
+            verdict = "tracking_duplicate"  # в query только хвосты: склейка была верной
         elif new_key in held:
             verdict = "key_taken"
         elif body_hash and (source_id, body_hash) in visible_bodies:
@@ -108,7 +108,7 @@ def plan_repair(conn) -> dict:
 
 
 def repair_url_keys(apply: bool = False) -> dict:
-    """Пересчитать ключи и вернуть спрятанное склейкой. Без apply — только отчёт."""
+    """Пересчитать ключи и вернуть спрятанное склейкой. Без apply: только отчёт."""
     with connection.get_connection() as conn:
         if apply:
             # Вставки ждут секунды починки; чтение ленты не блокируется.
@@ -117,7 +117,7 @@ def repair_url_keys(apply: bool = False) -> dict:
         if apply and (plan["key_updates"] or plan["unhide_ids"]):
             with conn.cursor() as cur:
                 # Сначала ключи видимых: каждый получает ещё свободный ключ (занятые ушли в
-                # key_conflicts), потом возврат — уникальный индекс проверит его по новым ключам.
+                # key_conflicts), потом возврат: уникальный индекс проверит его по новым ключам.
                 cur.executemany("UPDATE articles SET url_key = %s WHERE id = %s",
                                 [(key, article_id) for article_id, key in plan["key_updates"]])
             if plan["unhide_ids"]:

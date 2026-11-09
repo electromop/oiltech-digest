@@ -29,7 +29,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     print(f"БД инициализирована. Таблиц в схеме: {len(tables)}")
     for t in tables:
         print(f"  - {t}")
-    # Если админов нет, а пользователи есть — назначить админом первого (бутстрап #12).
+    # Если админов нет, а пользователи есть: назначить админом первого (бутстрап #12).
     admin_id = repository.ensure_admin_bootstrap()
     if admin_id is not None:
         print(f"Бутстрап ролей: пользователь id={admin_id} назначен администратором")
@@ -62,7 +62,7 @@ def cmd_list_users(args: argparse.Namespace) -> None:
 
 
 def cmd_admission_code(args: argparse.Namespace) -> None:
-    """Запасной путь допуска (#113): новый код учётке — при сбое отправки в Telegram или до
+    """Запасной путь допуска (#113): новый код учётке: при сбое отправки в Telegram или до
     включения отправки. Заменяет прежний код, интервал в 10 минут не действует."""
     from oiltech_digest import admission, auth
     from oiltech_digest.db import repository
@@ -204,7 +204,7 @@ def cmd_cleanup_future_dates(args: argparse.Namespace) -> None:
 
 
 def cmd_seed_tags(args: argparse.Namespace) -> None:
-    # 13.09: перешли с 18 направлений D01–D18 из xlsx на 13 тематик заказчика
+    # 13.09: перешли с 18 направлений D01-D18 из xlsx на 13 тематик заказчика
     # (data/seed/tags_13_tematik.md). Прежние теги выключаются, а не удаляются:
     # на них ссылается article_tags со всей историей классификации.
     from oiltech_digest.processing.seed import seed_tags_13
@@ -227,8 +227,8 @@ def cmd_seed_scoring(args: argparse.Namespace) -> None:
 def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
     """Поставить именованный набор критериев активным набором профиля (решение владельца 29.09).
 
-    Сид непустой профиль не трогает — на проде набор меняется только этой командой. По умолчанию
-    сухой прогон: «до» и «после»; --apply — одной транзакцией, критерии не удаляются."""
+    Сид непустой профиль не трогает: на проде набор меняется только этой командой. По умолчанию
+    сухой прогон: «до» и «после»; --apply: одной транзакцией, критерии не удаляются."""
     from oiltech_digest.db import repository
     from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
@@ -251,7 +251,7 @@ def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
     if not result["changed"]:
         print("  изменений нет — набор уже применён")
         return
-    # Прежний набор после записи выключен, не удалён: вернуть его — один UPDATE (ранбук ADR 0002).
+    # Прежний набор после записи выключен, не удалён: вернуть его: один UPDATE (ранбук ADR 0002).
     ids = ", ".join(str(item) for item in result["before_ids"]) or "—"
     print(f"  id прежнего набора: {ids}; откат после --apply: UPDATE scoring_criteria SET enabled = id IN "
           f"({ids}), updated_at = now() WHERE profile = '{result['profile']}';")
@@ -272,7 +272,7 @@ def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
     print(f"Оверрайды источников: изменено={stats['changed']}, без изменений={stats['unchanged']}, "
           f"не найдено={stats['not_found']}, неоднозначно={stats['ambiguous']}")
     # Промах по имени = «починил, а источник всё так же молчит». В bootstrap вызов обёрнут
-    # в `|| true`, поэтому кода возврата никто не увидит — единственный сигнал деплою это
+    # в `|| true`, поэтому кода возврата никто не увидит: единственный сигнал деплою это
     # напечатанное ИМЯ, а не счётчик, который легко прочитать как 0.
     problems = (
         [(name, "не найден в БД (проверьте sources.name)") for name in stats["missing_names"]]
@@ -341,13 +341,13 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
     if getattr(args, "scripts_only", False):
-        # Только алфавит буквы и пробел на стыке — безопасно по всему корпусу. Полный
+        # Только алфавит буквы и пробел на стыке: безопасно по всему корпусу. Полный
         # словарь по старым карточкам без ревью не гоняем: его замены ломали падеж.
         from oiltech_digest.processing import mixed_script
 
         report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
         if args.json:
-            # Полный список: по нему откатывают (ревью 27.09), --show — только для экрана.
+            # Полный список: по нему откатывают (ревью 27.09), --show: только для экрана.
             print(json.dumps(report, ensure_ascii=False, default=str))
             return
         suffix = " [dry-run]" if args.dry_run else ""
@@ -565,7 +565,7 @@ def cmd_enqueue_process(args: argparse.Namespace) -> None:
     """Поставить AI-обработку в очередь, НЕ выполняя её локально.
 
     route_ai_processing() решает куда: при AI_EXECUTION_REGION=external и включённом
-    внешнем контуре — в очередь external-ai (её разбирает зарубежный worker), иначе —
+    внешнем контуре, в очередь external-ai (её разбирает зарубежный worker), иначе:
     в локальную очередь ai. Пустой article_ids → worker берёт следующие N статей без
     суммы (выбор делается на стороне core в момент claim). Используется scheduler'ом,
     чтобы РФ-core не звал OpenAI напрямую.
@@ -635,7 +635,7 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
 
-    decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
+    decision = network_policy.route_ai_bulk()  # пересчёт: своя полоса (lanes.py)
     ids = repository.article_ids_needing_title_ru()
     if args.limit:
         ids = ids[: args.limit]
@@ -660,7 +660,7 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
 def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
     """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
 
-    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь — полуперевод
+    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь: полуперевод
     («управляego», «наshore»), который лечит только новый ответ модели. Ядро запишет только
     суть и перевод (прежние вердикт гейта, тег и балл статьи не трогаются). По умолчанию только выборка.
     """
@@ -687,8 +687,8 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
     """Правка русских заголовков, написанных до правки (решение владельца 03.11): принятые и отмеченные «в дайджест»
-    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию — сухой
-    прогон с N и ценой; задачи — только с --no-dry-run, после пересборки NL."""
+    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию: сухой
+    прогон с N и ценой; задачи: только с --no-dry-run, после пересборки NL."""
     from oiltech_digest.processing import rescore, title_edit
 
     selection = title_edit.selection()
@@ -721,13 +721,13 @@ def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
 
 
 def _utc_datetime(value: str) -> datetime:
-    """ISO-время из командной строки; без пояса — UTC (пояс сессии базы тут ни при чём)."""
+    """ISO-время из командной строки; без пояса: UTC (пояс сессии базы тут ни при чём)."""
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
-    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
+    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк): без сети."""
     from oiltech_digest.ingestion import telegram_titles
 
     if not args.dry_run and not args.before:
@@ -748,7 +748,7 @@ def cmd_reprints(args: argparse.Namespace) -> None:
     """Показать помеченные перепечатки или снять пометку.
 
     Снятие обязательно: решение принимает модель, и у человека должен быть способ
-    её отменить — иначе ошибка ИИ необратима так же, как удаление."""
+    её отменить: иначе ошибка ИИ необратима так же, как удаление."""
     from oiltech_digest.db import repository
 
     if args.unmark:
@@ -770,7 +770,7 @@ def cmd_reprints(args: argparse.Namespace) -> None:
 def cmd_find_reprints(args: argparse.Namespace) -> None:
     """Найти перепечатки: правило даёт кандидатов, модель решает (№21).
 
-    По умолчанию СУХОЙ прогон — ничего не помечается. Так задумано: схлопывание
+    По умолчанию СУХОЙ прогон: ничего не помечается. Так задумано: схлопывание
     убирает материал из ленты, а заказчик уже жаловался на исчезновение статей.
     Сначала он смотрит список, потом --apply."""
     from oiltech_digest.db import repository
@@ -783,7 +783,7 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         raise SystemExit("--max-overlap задаётся долей от 0 до 1 и не меньше --min-overlap")
     if args.days < 1 or args.limit < 1 or args.max_days_apart < 0:
         raise SystemExit("--days и --limit должны быть положительными, --max-days-apart неотрицательным")
-    # Для планировщика: срок — от прошлого прогона с записью в базе, а не от счётчика
+    # Для планировщика: срок: от прошлого прогона с записью в базе, а не от счётчика
     # циклов, который обнуляется при каждом перезапуске (19.09: 16,5 ч без прогона).
     min_interval = getattr(args, "min_interval_hours", 0) or 0
     if args.apply and min_interval > 0 and repository.has_recent_background_job(
@@ -809,10 +809,10 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
 
     # ЛЮБОЙ прогон с моделью идёт через контур, а не только --apply: сухой прогон
     # тоже зовёт OpenAI, и с РФ-адреса он ловит 403 по географии. Именно на этом
-    # первый прогон 17.09 дал 12 ошибок из 12 — а сухой прогон здесь умолчание,
+    # первый прогон 17.09 дал 12 ошибок из 12: а сухой прогон здесь умолчание,
     # то есть сломан был основной путь.
     if not args.local:
-        # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии —
+        # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии:
         # первый прогон 17.09 дал 12 ошибок из 12. Поэтому запись идёт через тот же
         # внешний контур, что и остальные ИИ-стадии, а не прямым вызовом.
         from oiltech_digest import network_policy
@@ -863,7 +863,7 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
 
     Перерасчёт ставится только статьям открытых месяцев окна ленты: у статьи закрытого месяца новая суть
     переписала бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
-    такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
+    такой статьи меняется (выпуск его не показывает); пропущенные: в отчёте."""
     from oiltech_digest import feed_window
     from oiltech_digest.db import repository
     from oiltech_digest.ingestion import body_repair
@@ -988,7 +988,7 @@ def cmd_repair_article_dates(args: argparse.Namespace) -> None:
 
 
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:
-    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
+    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер: в query
     (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
     По умолчанию сухой прогон: сколько ключей пересчитается и сколько статей вернётся."""
     from oiltech_digest.ingestion import url_key_repair
@@ -1011,7 +1011,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     """Дозаполнить тело статей-обрывков у источников зарубежного контура.
 
     Локальная дозагрузка их не берёт намеренно: с РФ-адреса эти сайты отдают 403, а
-    попытка там одна и навсегда. Замер 17.09 — у Oil & Gas Journal и Offshore Magazine
+    попытка там одна и навсегда. Замер 17.09: у Oil & Gas Journal и Offshore Magazine
     25 статей из 25 короче 600 знаков, средняя длина 183; у McKinsey 76 из 78.
 
     Ставится пакетами: воркер качает страницы, ядро записывает тела, пропуская
@@ -1031,7 +1031,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     ids = [int(r["id"]) for r in rows]
     # Маршрут спрашиваем как у ФЕТЧ-задачи, а не у ИИ: это скачивание страниц.
     # Раньше здесь стоял route_ai_processing и хардкод очереди, из-за чего при
-    # неexternal-решении задача уезжала в 'default' с execution_region='external' —
+    # неexternal-решении задача уезжала в 'default' с execution_region='external':
     # несогласованная пара, которую никто бы не разобрал.
     probe = {"parse_strategy": "request", "network_region": "external", "network_profile": "direct"}
     decision = network_policy.route_source_task(probe, task_kind="refetch")
@@ -1052,7 +1052,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
 def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
     """Поставить в очередь фетч источников network_region='external' через зарубежный воркер.
 
-    Эти источники недоступны с РФ-сервера (WAF/таймаут/гео-блок) — их рендер/фетч идёт
+    Эти источники недоступны с РФ-сервера (WAF/таймаут/гео-блок): их рендер/фетч идёт
     из NL. Действует ТОЛЬКО при EXTERNAL_WORKERS_ENABLED=1 и FETCH_EXTERNAL_ENABLED=1,
     иначе no-op (источники парсятся локально как обычно). Вызывается планировщиком
     каждый цикл; можно и руками для разового прогона."""
@@ -1107,10 +1107,10 @@ def cmd_set_source_region(args: argparse.Namespace) -> None:
 
 
 def cmd_source_dump_listing(args: argparse.Namespace) -> None:
-    """Выгрузить анкеры листинга источника — для подбора listing_selector у no_candidates.
+    """Выгрузить анкеры листинга источника: для подбора listing_selector у no_candidates.
 
     Уважает стратегию (playwright → рендер, иначе http_client.fetch с боевыми SSL-фоллбэками).
-    Печатает href + текст + контейнер (тег.class родителя) — этого достаточно, чтобы понять,
+    Печатает href + текст + контейнер (тег.class родителя): этого достаточно, чтобы понять,
     каким селектором цеплять ссылки на статьи."""
 
     from oiltech_digest.db import repository
@@ -1128,7 +1128,7 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
         from oiltech_digest.ingestion import playwright_parser
         if not playwright_parser.is_available():
             raise SystemExit("playwright недоступен в этом контейнере")
-        # больший settle — JS-SPA успевают дорисовать листинг
+        # больший settle: JS-SPA успевают дорисовать листинг
         content = playwright_parser.fetch_rendered(listing_url, settle_ms=8000)
     else:
         content = http_client.fetch(listing_url)
@@ -1139,7 +1139,7 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
     doc = normalize.parse_html(content)
     try:
         doc.make_links_absolute(listing_url)
-    except Exception:  # noqa: BLE001 — относительные ссылки тоже информативны
+    except Exception:  # noqa: BLE001: относительные ссылки тоже информативны
         pass
     anchors = doc.xpath("//a[@href]")
     print(f"всего <a> с href: {len(anchors)}; показываю до {args.limit} с непустым текстом:")
@@ -1224,7 +1224,7 @@ def cmd_source_health(args: argparse.Namespace) -> None:
     # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
     if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
         raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
-    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09 — 3 дня).
+    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09-3 дня).
     stale_days = config.SOURCE_STALE_DAYS if args.stale_days is None else args.stale_days
     rows = repository.source_health_report(stale_days=stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
@@ -1293,8 +1293,8 @@ def cmd_source_probe(args: argparse.Namespace) -> None:
 
     Отвечает на «почему источник молчит» там, где source-diagnose останавливается на
     «скачалось и прошло предфильтр»: ключ адреса занят той же или другой статьёй, то же
-    тело, адрес уже в базе. Рубежи — те же функции, что у вставки. Ничего не пишет: все
-    соединения процесса — только для чтения, запись отклонит сама база."""
+    тело, адрес уже в базе. Рубежи: те же функции, что у вставки. Ничего не пишет: все
+    соединения процесса: только для чтения, запись отклонит сама база."""
     from oiltech_digest.db import connection, repository
     from oiltech_digest.ingestion import source_probe
 
@@ -1340,7 +1340,7 @@ def _audit_row(source: dict, diag: dict) -> dict:
 def cmd_source_audit(args: argparse.Namespace) -> None:
     """Аудит ВСЕХ источников: какая ссылка установлена сейчас и почему не парсится.
 
-    По каждому источнику — read-only diagnose_source (живая проба + кандидаты). Запускать
+    По каждому источнику: read-only diagnose_source (живая проба + кандидаты). Запускать
     там, где правильное гео и установлен playwright (прод), иначе иностранные/JS-источники
     дадут ложные вердикты. Сетевые пробы идут параллельно."""
     from collections import Counter
@@ -1512,8 +1512,8 @@ def _print_issue_months(months: list[dict]) -> None:
 
 def cmd_migrate_shared_marks(args: argparse.Namespace) -> None:
     """Перенос личных отметок и черновиков учётки-основы в общие (#111). Пробный прогон по
-    умолчанию; --write — записать; --check — сверка после переноса только чтением. Расхождение
-    состава закрытого месяца — выход с кодом 1."""
+    умолчанию; --write: записать; --check: сверка после переноса только чтением. Расхождение
+    состава закрытого месяца: выход с кодом 1."""
     from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
 
     if args.check:
@@ -1642,14 +1642,14 @@ def cmd_external_queues_status(args: argparse.Namespace) -> None:
 def cmd_check_lanes(args: argparse.Namespace) -> None:
     """Сторож полос: застой очереди, очередь без живого воркера, истёкшие аренды.
 
-    Шаг планировщика каждый цикл. При тревоге — строки в лог и код 2: run_step пишет
+    Шаг планировщика каждый цикл. При тревоге, строки в лог и код 2: run_step пишет
     «FAIL check-lanes», цикл продолжается. 20.09 208 задач без потребителя было видно
-    только по последствиям через 8,5 ч; здесь — через ~15 мин."""
+    только по последствиям через 8,5 ч; здесь: через ~15 мин."""
     from oiltech_digest.db import repository
 
     logger = logging.getLogger(__name__)
     status = repository.external_queue_status()
-    # Версии потребителей — каждый цикл в лог: «пересобран ли NL» видно без раскопок.
+    # Версии потребителей, каждый цикл в лог: «пересобран ли NL» видно без раскопок.
     print(f"check-lanes: контракт ядра {status.get('contract')}")
     for line in _consumer_lines(status.get("consumers") or []):
         print(f"check-lanes: {line}")
@@ -1664,7 +1664,7 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
 
 
 def cmd_live_ai_leases(args: argparse.Namespace) -> None:
-    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, — scripts/deploy-core.sh
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть,: scripts/deploy-core.sh
     тогда отказывается перезапускать ядро без --force."""
     from oiltech_digest.db import repository
 
@@ -1711,7 +1711,7 @@ def _fetch_consumer_versions() -> dict:
 
 
 def cmd_worker_versions(args: argparse.Namespace) -> None:
-    """Версии контейнеров NL глазами ядра — на NL, где базы нет.
+    """Версии контейнеров NL глазами ядра: на NL, где базы нет.
 
     --self: этот контейнер обязан уже отметиться в ядре нужной сборкой и контрактом ядра
     (код 1, если нет). Так скрипт выката NL убеждается, что перезапущенный воркер жив и
@@ -1734,7 +1734,7 @@ def cmd_worker_versions(args: argparse.Namespace) -> None:
     else:
         if args.expect_build and row.get("build") != args.expect_build:
             problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
-        if row.get("mismatch"):  # правило одно — lanes.consumer_mismatch на ядре
+        if row.get("mismatch"):  # правило одно: lanes.consumer_mismatch на ядре
             problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
     for problem in problems:
         print(f"worker-versions: НЕ ГОТОВО — {problem}")
@@ -1814,7 +1814,7 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     try:
-        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        # Модель поиска GPT и прочие его настройки (#138): решение ядра, едут в задаче.
         research = signal_discovery.research_settings(offline=args.offline, days=args.days)
     except signal_discovery.SearchSetupError as exc:
         raise SystemExit(f"enqueue-signal-discovery: {exc}") from exc
@@ -1858,8 +1858,8 @@ def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
-    """Шаг планировщика «заполнить карточки» (#96): новые сигналы без карточки — в задачи агента
-    «Карточка сигнала» по полосе ежедневной обработки. За флагом SIGNAL_CARD_ENABLED. С --ids —
+    """Шаг планировщика «заполнить карточки» (#96): новые сигналы без карточки: в задачи агента
+    «Карточка сигнала» по полосе ежедневной обработки. За флагом SIGNAL_CARD_ENABLED. С --ids:
     пересчёт названных сигналов по полосе пересчётов (без флага: это решение оператора)."""
     from oiltech_digest import signal_card
 
@@ -1882,7 +1882,7 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
 def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
     """Шаг планировщика «Отбор» (#130, #131): новые статьи, находки поиска и материалы коллег, которые решает агент
     «Отбор», ставит в его задачи по полосе ежедневной обработки. С --ids (статьи) и
-    --signal-ids (находки и материалы) — названные публикации «Отбора» по полосе пересчётов: повтор после разбора
+    --signal-ids (находки и материалы), названные публикации «Отбора» по полосе пересчётов: повтор после разбора
     сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
     from oiltech_digest import otbor
     from oiltech_digest.db import otbor_store
@@ -1918,7 +1918,7 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
 
 def cmd_otbor_materials(args: argparse.Namespace) -> None:
     """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
-    один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
+    один раз. По умолчанию сухой прогон, сколько материалов и оценка цены «Отбора», ничего не пишет; --apply:
     сигналы материалов и задачи «Отбора» по полосе пересчётов; с --silent итог авторам
     бот не сообщает (решение владельца 04.11 для присланных до включения)."""
     from oiltech_digest import material_signals, otbor
@@ -1970,7 +1970,7 @@ def cmd_otbor_shadow(args: argparse.Namespace) -> None:
 
 def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
     """Отчёт по проверке «Отбора» на реальных данных (#134), только чтение: разделы отказа, категории, технологии из
-    сбора на радар, гейт против «Отбора» с примерами, повод публикации. --json — всё как есть."""
+    сбора на радар, гейт против «Отбора» с примерами, повод публикации. --json: всё как есть."""
     from oiltech_digest import otbor_shadow
 
     report = otbor_shadow.report(date.fromisoformat(args.since), examples=args.examples)
@@ -2003,7 +2003,7 @@ def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
 
 def cmd_otbor_switch(args: argparse.Namespace) -> None:
     """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных в сигналы, принятые идут дальше по
-    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json — то же с
+    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json: то же с
     номерами статей (поимённый список для дампа и согласования). --apply только при включённой «Карточке», когда задачи
     проверки дошли и у всех статей окна, решённых гейтом, есть решение проверки."""
     from oiltech_digest import otbor, otbor_shadow
@@ -2061,7 +2061,7 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
-    """Шаг планировщика «баллы» — второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
+    """Шаг планировщика «баллы», второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
     баллами, которые «пересчитываются» после «не тот блок», ставит в задачи по полосе ежедневной обработки. Модель:
     SIGNAL_SCORES_MODEL. С --ids: названные сигналы по полосе пересчётов."""
     from oiltech_digest import signal_scores
@@ -2083,7 +2083,7 @@ def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
-    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. --since
+    «Отбора»: только принятое им): по полосе пересчётов, сначала текущее окно ленты, радар и материалы. --since
     ставит одну границу всей истории. По умолчанию сухой прогон: число сигналов и цена."""
     from oiltech_digest import signal_card, signal_card_history
 
@@ -2249,8 +2249,8 @@ def cmd_radar_recall(args: argparse.Namespace) -> None:
 
 
 def cmd_radar_search_trial(args: argparse.Namespace) -> None:
-    """Пробный прогон широкого поиска (#138): сухой прогон по умолчанию — темы, вызовы и цена, ничего не пишет; --run —
-    один прогон, находки пройдут «Отбор», в витрины не попадёт ничего; --report N — отчёт по задаче N."""
+    """Пробный прогон широкого поиска (#138): сухой прогон по умолчанию, темы, вызовы и цена, ничего не пишет; --run:
+    один прогон, находки пройдут «Отбор», в витрины не попадёт ничего; --report N: отчёт по задаче N."""
     from oiltech_digest import config, signal_reference, signal_search_trial
 
     try:
@@ -2328,7 +2328,7 @@ def _print_search_trial_report(result: dict) -> None:
 
 
 def _iso_date(value: str) -> str:
-    """День ГГГГ-ММ-ДД из командной строки: опечатка — ошибка разбора, а не трассировка базы."""
+    """День ГГГГ-ММ-ДД из командной строки: опечатка: ошибка разбора, а не трассировка базы."""
     try:
         return date.fromisoformat(value).isoformat()
     except ValueError as exc:
@@ -2410,8 +2410,8 @@ def cmd_signal_card_exam(args: argparse.Namespace) -> None:
 
 
 def cmd_signal_card_exam_judge(args: argparse.Namespace) -> None:
-    """Значения судьи радара у радарных строк манифеста (#98) — JSON в stdout: экзамен идёт там, где есть
-    модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Значения судьи радара у радарных строк манифеста (#98), JSON в stdout: экзамен идёт там, где есть
+    модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import signal_card_exam
 
     try:
@@ -2450,7 +2450,7 @@ def cmd_otbor_expert_pack(args: argparse.Namespace) -> None:
 
 
 def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
-    """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения — код выхода не 0."""
+    """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения: код выхода не 0."""
     from oiltech_digest import otbor_markup
     from oiltech_digest.otbor_pack_format import PackError
 
@@ -2522,8 +2522,8 @@ def cmd_otbor_exam(args: argparse.Namespace) -> None:
 
 
 def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
-    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133) —
-    JSON в stdout: экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133):
+    JSON в stdout: экзамен идёт там, где есть модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import otbor_exam
 
     try:
@@ -2592,8 +2592,8 @@ def _print_scores_plan(plan: dict) -> None:
 
 
 def cmd_card_scores_exam_control(args: argparse.Namespace) -> None:
-    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета» — JSON в stdout:
-    экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета», JSON в stdout:
+    экзамен идёт там, где есть модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import card_scores_exam_control
 
     try:
@@ -2627,7 +2627,7 @@ def cmd_archive_signals(args: argparse.Namespace) -> None:
 
 
 def cmd_sync_feed_signals(args: argparse.Namespace) -> None:
-    """Сигналы ленты для принятых статей по дате сбора (#95) — без ИИ, повторный запуск
+    """Сигналы ленты для принятых статей по дате сбора (#95): без ИИ, повторный запуск
     дублей не создаёт. По умолчанию сухой прогон: те же числа, запись откатывается."""
     from oiltech_digest.db import feed_signals
 
@@ -3529,7 +3529,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
     p_digest.add_argument("--html-output", default=None, help="дополнительно собрать email-ready HTML")
-    # Умолчания — как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
+    # Умолчания, как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
     # собирает тот же выпуск, что экран (#111).
     p_digest.add_argument("--limit", type=int, default=500)
     p_digest.add_argument("--min-score", type=float, default=0)

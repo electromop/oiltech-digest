@@ -36,7 +36,7 @@ def _norm_url(raw) -> str | None:
 
 
 def _preliminary_strategy(source_type: str) -> str:
-    """Предварительная стратегия по типу. Telegram — отдельно (на RSS-этапе пропускается)."""
+    """Предварительная стратегия по типу. Telegram: отдельно (на RSS-этапе пропускается)."""
     if (source_type or "").strip().lower().startswith("telegram"):
         return "telegram"
     return "rss"  # кандидат; финально уточнит discover-rss

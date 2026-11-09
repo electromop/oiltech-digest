@@ -38,8 +38,8 @@ def test_archived_source_is_reused_instead_of_cloned(monkeypatch):
     """Поиск идёт среди ВСЕХ источников домена, не только включённых.
 
     С фильтром enabled = TRUE ссылка с заархивированного домена заводила ему дубль
-    с enabled=TRUE — домен, который осознанно убрали из работы, молча возвращался
-    в опрос. После архивации 28 источников 13–17.09 это было вопросом времени.
+    с enabled=TRUE: домен, который осознанно убрали из работы, молча возвращался
+    в опрос. После архивации 28 источников 13-17.09 это было вопросом времени.
     """
     rows = [{"id": 7, "name": "Архивный", "archived_at": "2026-09-13", "enabled": False}]
     captured: dict = {}
@@ -71,7 +71,7 @@ def test_archived_source_is_reused_instead_of_cloned(monkeypatch):
 
 
 def test_explicit_source_id_skips_lookup(monkeypatch):
-    """Явный source_id — единственный путь, который призрака не создаёт вовсе."""
+    """Явный source_id: единственный путь, который призрака не создаёт вовсе."""
     monkeypatch.setattr(manual_import.repository, "get_source", lambda sid: {"id": sid, "name": "n"})
     assert manual_import.find_or_create_source("https://x.example/a", 42)["id"] == 42
 

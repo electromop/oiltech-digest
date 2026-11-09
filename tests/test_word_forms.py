@@ -1,4 +1,4 @@
-"""Одно правило «одна ли это компания» (word_forms.Companies, разбор 20.10) — без базы.
+"""Одно правило «одна ли это компания» (word_forms.Companies, разбор 20.10): без базы.
 
 Одна таблица случаев прогоняется через три места: ядро (сколько участников останется в карточке, если модель
 назвала обе компании с верными цитатами), фильтр «всё про компанию» (найдёт ли клик по одному имени карточку с
@@ -18,14 +18,14 @@ from tests.signal_card_support import answer
 
 # Пара имён и ответ правила: одна ли это компания.
 CASES = [
-    # Форма собственности — не часть имени, и с точками.
+    # Форма собственности: не часть имени, и с точками.
     ("Atlas Energy Solutions Inc.", "Atlas Energy Solutions", True),
     ("Equinor ASA", "Equinor", True),
     ("ПАО «Газпром»", "Газпром", True),
     ("ПАО Газпром", "Газпром", True),
     ("ПАО «Татнефть»", "Татнефть", True),
     ("Petrobras S.A.", "Petrobras", True),
-    # «Имя (АББР)» и «АББР (Имя)» — два написания: имя и аббревиатура.
+    # «Имя (АББР)» и «АББР (Имя)», два написания: имя и аббревиатура.
     ("Petroleum Development Oman (PDO)", "PDO", True),
     ("Petroleum Development Oman (PDO)", "Petroleum Development Oman", True),
     ("DOE (Department of Energy)", "DOE", True),
@@ -33,14 +33,14 @@ CASES = [
     ("Libya’s National Oil Corporation (NOC)", "NOC", True),
     # Аббревиатуры между собой не сравниваются (решение #121): одна аббревиатура бывает у разных компаний.
     ("Petroleum Development Oman (PDO)", "Pipeline Development Organization (PDO)", False),
-    # Русское слово — в любом падеже.
+    # Русское слово: в любом падеже.
     ("Роснефтью", "Роснефть", True),
-    # Вид апострофа — не различие: буква-апостроф (ʻ U+02BB, ʿ U+02BF) делит слово, как ‘ и ’ (замер 21.10).
+    # Вид апострофа, не различие: буква-апостроф (ʻ U+02BB, ʿ U+02BF) делит слово, как ‘ и ’ (замер 21.10).
     ("O‘zbekneftgaz", "Oʻzbekneftgaz", True),
     ("Maʿaden", "Ma’aden", True),
-    # Компания — целиком: «Газпром» не «Газпром нефть», дочка не мать.
+    # Компания, целиком: «Газпром» не «Газпром нефть», дочка не мать.
     ("Газпром", "Газпром нефть", False),
-    # Любая другая скобка — пояснение, в имя не входит.
+    # Любая другая скобка: пояснение, в имя не входит.
     ("Газпром (ПАО)", "Татнефть (ПАО)", False),
     ("Halliburton (США)", "Chevron (США)", False),
     ("Нефтемаш (ПАО)", "Газпром (ПАО)", False),
@@ -55,7 +55,7 @@ PUBLISHED = date(2026, 9, 25)
 def test_spellings_of_a_name_are_the_name_and_its_abbreviation_never_an_explanation():
     assert word_forms.spellings(" Petroleum  Development Oman (PDO) ") == ["Petroleum Development Oman", "PDO"]
     assert word_forms.spellings("DOE (Department of Energy)") == ["Department of Energy", "DOE"]
-    # Слова имени аббревиатура может пропускать: ONGC — Oil and Natural Gas Corporation, DOE — U.S. Department of
+    # Слова имени аббревиатура может пропускать: ONGC: Oil and Natural Gas Corporation, DOE: U.S. Department of
     # Energy.
     assert word_forms.spellings("Oil and Natural Gas Corporation (ONGC)") == ["Oil and Natural Gas Corporation", "ONGC"]
     assert word_forms.spellings("U.S. Department of Energy (DOE)") == ["U.S. Department of Energy", "DOE"]
@@ -107,7 +107,7 @@ def test_exam_counts_one_company_by_the_same_rule(one, other, same):
 def test_exam_key_is_one_for_spellings_of_one_company_between_runs():
     # Ключ считает устойчивость экзамена между прогонами и его константу: «X Inc.» в одном прогоне и «X» в
     # другом дают один ключ; имя справочника или алиасов экзамена даёт ключ своей записи. Аббревиатура в скобках в
-    # ключ не входит (как у #121): «Petroleum Development Oman (PDO)» — ключ полного имени, одна «PDO» — свой.
+    # ключ не входит (как у #121): «Petroleum Development Oman (PDO)»: ключ полного имени, одна «PDO»: свой.
     names = CompanyNames(load_dictionaries()["companies"], [{"name": "Нефтемаш", "aliases": ["Neftemash"]}])
 
     assert names.key("Atlas Energy Solutions Inc.") == names.key("Atlas Energy Solutions") == (
@@ -133,7 +133,7 @@ TENDER = ("Petroleum Development Oman (PDO) объявила тендер. PDO s
 
 
 def test_quote_names_the_company_under_any_of_its_spellings():
-    # Цитата называет компанию аббревиатурой или именем без пояснения в скобках; имя участника — как дала модель.
+    # Цитата называет компанию аббревиатурой или именем без пояснения в скобках; имя участника: как дала модель.
     participants = _kept(TENDER, [
         {"name": "Petroleum Development Oman (PDO)", "quote": "PDO signed a contract"},
         {"name": "FleetRabbit (поставщик)", "quote": "FleetRabbit offers fleet software"},
@@ -174,6 +174,6 @@ def test_media_publisher_is_dropped_under_another_spelling_of_its_name():
 
     assert [item["name"] for item in _kept(text, companies, publisher="Нефтегаз", publisher_type="Media")] == [
         "Halliburton"]
-    # Компания, которая публикует свою новость, — участник.
+    # Компания, которая публикует свою новость,: участник.
     assert [item["name"] for item in _kept(text, companies, publisher="Нефтегаз", publisher_type="Company")] == [
         "ООО «Нефтегаз»", "Halliburton"]

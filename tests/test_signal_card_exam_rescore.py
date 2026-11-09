@@ -1,5 +1,5 @@
-"""Пересчёт отчёта экзамена агента «Карточка сигнала» без вызовов модели (#98, PR #121), шов 4 — команда
-экзамена на подставной модели. Пакет эксперту и подставная модель — tests/signal_card_support.py.
+"""Пересчёт отчёта экзамена агента «Карточка сигнала» без вызовов модели (#98, PR #121), шов 4: команда
+экзамена на подставной модели. Пакет эксперту и подставная модель: tests/signal_card_support.py.
 """
 
 import json
@@ -35,7 +35,7 @@ def test_rescore_counts_a_saved_report_again_without_model_calls(tmp_path, monke
     assert report["rescored_from"] == saved.name
     [before], [after] = first["models"], report["models"]
     assert after["answers"] == before["answers"]
-    assert after["cost_usd"] == before["cost_usd"]  # цена — исходного прогона по его ставкам, новых вызовов нет
+    assert after["cost_usd"] == before["cost_usd"]  # цена: исходного прогона по его ставкам, новых вызовов нет
     useful = (before["lenient"]["by_stratum"]["useful"], after["lenient"]["by_stratum"]["useful"])
     assert [one["region"]["agent"] for one in useful] == [0.0, 1.0]  # новые допуски
     assert [one["companies_recall"]["matched"] for one in useful] == [0, 17 * 3]  # новые алиасы
@@ -64,7 +64,7 @@ def test_rescore_refuses_a_broken_report_by_name_and_writes_nothing(tmp_path, mo
     [saved] = _reports(tmp_path)
     report = json.loads(saved.read_text(encoding="utf-8"))
     [model] = report["models"]
-    # Отчёт — файл на диске, его правят руками: битое устройство — отказ с именем файла, а не трасса.
+    # Отчёт, файл на диске, его правят руками: битое устройство: отказ с именем файла, а не трасса.
     broken = [{key: value for key, value in report.items() if key != "split"},
               {**report, "manifest": "signal_card_markup_manifest.json"},
               {**report, "models": [{"model": model["model"]}]},
@@ -91,9 +91,9 @@ def test_rescore_takes_models_runs_and_part_from_the_report(tmp_path, monkeypatc
 
 def test_rescore_says_when_the_markup_changed_and_dearer_models_were_not_tried(tmp_path, monkeypatch, strata):
     markup = write_pack(tmp_path, pack_rows())
-    run_exam(monkeypatch, markup, {NANO: by_stratum(strata)}, "--models", f"{NANO},{MINI}")  # nano прошла — стоп
+    run_exam(monkeypatch, markup, {NANO: by_stratum(strata)}, "--models", f"{NANO},{MINI}")  # nano прошла: стоп
     [saved] = _reports(tmp_path)
-    # Эксперт поправил разметку: у всех строк другой регион — nano не проходит, а mini в прогоне не было.
+    # Эксперт поправил разметку: у всех строк другой регион: nano не проходит, а mini в прогоне не было.
     write_pack(tmp_path, pack_rows(**{stratum: {"Регион": "Европа"} for stratum in STRATA}))
     monkeypatch.setattr(signal_card, "make_client", lambda: pytest.fail("пересчёт вызвал модель"))
 

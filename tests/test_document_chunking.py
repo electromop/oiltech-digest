@@ -154,7 +154,7 @@ def test_page_that_fits_is_not_cut_in_half():
 
 
 def test_realistic_document_is_fully_covered_with_correct_ranges():
-    # 60 страниц по 2000 знаков — тот случай, на котором обрезка в 6000 знаков
+    # 60 страниц по 2000 знаков: тот случай, на котором обрезка в 6000 знаков
     # молча теряла бы 95% документа.
     anchors = _pages([2000] * 60)
     chunks = chunk_anchors(anchors)

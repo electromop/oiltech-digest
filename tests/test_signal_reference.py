@@ -1,6 +1,6 @@
-"""Эталон заказчика (xlsx ТОП-сигналов) — в память радара и в замер полноты.
+"""Эталон заказчика (xlsx ТОП-сигналов): в память радара и в замер полноты.
 
-Таблица здесь синтетическая: настоящая — у заказчика, репозиторий публичный."""
+Таблица здесь синтетическая: настоящая: у заказчика, репозиторий публичный."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_import_is_a_dry_run_by_default_and_idempotent(isolated_db, reference_xl
     assert repository.list_signal_agent_memory(memory_type="signal_verdict") == []
 
     signal_reference.import_reference(rows, apply=True)
-    signal_reference.import_reference(rows, apply=True)  # повтор — та же память
+    signal_reference.import_reference(rows, apply=True)  # повтор: та же память
 
     memory = repository.list_signal_agent_memory(memory_type="signal_verdict")
     assert len(memory) == 1
@@ -67,7 +67,7 @@ def test_import_is_a_dry_run_by_default_and_idempotent(isolated_db, reference_xl
 def test_recall_matches_by_link_or_by_names_and_reports_misses(reference_xlsx):
     rows = signal_reference.read_reference(reference_xlsx, sheets=["Сентябрь_2026"])
     cards = [
-        # Ссылка та же, хвост utm и www — не помеха.
+        # Ссылка та же, хвост utm и www: не помеха.
         {"id": 17, "title_ru": "Цифровая платформа барьеров", "urls": ["https://expro.com/news/safewells-v5"], "visible": True},
         {"id": 40, "title_ru": "Hexagon VIS предотвращает столкновения на руднике", "urls": [], "visible": False},
     ]
@@ -80,7 +80,7 @@ def test_recall_matches_by_link_or_by_names_and_reports_misses(reference_xlsx):
 
 def test_recall_does_not_match_on_a_single_common_word(reference_xlsx):
     rows = signal_reference.read_reference(reference_xlsx, sheets=["Сентябрь_2026"])
-    # «Expro» есть, «SafeWells» — нет: это другой продукт той же компании.
+    # «Expro» есть, «SafeWells», нет: это другой продукт той же компании.
     cards = [{"id": 22, "title_ru": "Expro Velonix управляет скоростью поршня", "urls": [], "visible": True}]
 
     result = signal_reference.recall(rows, cards)

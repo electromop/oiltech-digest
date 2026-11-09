@@ -48,7 +48,7 @@ vi.mock("../../api/signals", () => ({
   createSignalFeedback: vi.fn(),
   returnSignal: vi.fn(),
   getSignalSearchHealth: vi.fn(),
-  // Справочники атрибутов карточки (#97) — тоже: списков атрибутов нет, остальное как было.
+  // Справочники атрибутов карточки (#97), тоже: списков атрибутов нет, остальное как было.
   getSignalDictionaries: vi.fn(() => Promise.reject(new Error("нет справочников"))),
 }));
 
@@ -83,7 +83,7 @@ function ordered(cards: Signal[], sort: SignalQuery["sort"]) {
 type Tiles = Omit<SignalSummary, "matching" | "themes">;
 
 function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
-  // Своя копия: «В дайджест» и отзывы меняют её, а не общие заготовки карточек; ответы —
+  // Своя копия: «В дайджест» и отзывы меняют её, а не общие заготовки карточек; ответы:
   // снимки на момент ответа, как у настоящего сервера.
   const state = cards.map((card) => ({ ...card }));
   vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => {
@@ -426,7 +426,7 @@ describe("SignalRadarPage", () => {
       // Блок выбранной темы раскрыт сам.
       expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
       expect(lastListQuery()).toMatchObject({ theme: "Бурение" });
-      // Список тем не сжимается до выбранной: он — со всего радара, а не с выборки.
+      // Список тем не сжимается до выбранной: он: со всего радара, а не с выборки.
       expect(screen.getByRole("option", { name: "Экология" })).toBeInTheDocument();
     });
 
@@ -550,7 +550,7 @@ describe("SignalRadarPage", () => {
         "С обратной связью": "12",
       };
       for (const [label, value] of Object.entries(tiles)) expect(tileValue(label)).toBe(value);
-      // Плитки «Объединено дублей» нет (решение владельца 23.10): число дублей — в раскрытой карточке.
+      // Плитки «Объединено дублей» нет (решение владельца 23.10): число дублей: в раскрытой карточке.
       expect(screen.queryByText("Объединено дублей")).not.toBeInTheDocument();
       // Строки-сводки «N сигналов · N в дайджесте · обратная связь: N» больше нет.
       expect(container.querySelector(".signalRadarHeaderStats")).toBeNull();
@@ -626,7 +626,7 @@ describe("SignalRadarPage", () => {
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "proven", sort: "score_asc" }));
       expect(screen.getByRole("button", { name: "Фильтры · 1" })).toHaveAttribute("aria-expanded", "true");
 
-      // Условие — чипом; крестик снимает его.
+      // Условие: чипом; крестик снимает его.
       fireEvent.click(screen.getByRole("button", { name: "Снять: Решение платформы: Подтверждено" }));
       await waitFor(() => expect(lastListQuery().maturity).toBeUndefined());
       expect(screen.getByRole("button", { name: "Фильтры" })).toBeInTheDocument();
@@ -749,16 +749,16 @@ describe("SignalRadarPage", () => {
       );
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
 
-      // Заголовок — ссылка на первую ссылку-доказательство, под ним — мета карточки.
+      // Заголовок: ссылка на первую ссылку-доказательство, под ним: мета карточки.
       const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
       expect(title).toHaveAttribute("href", "https://worldoil.com/a");
       expect(title).toHaveAttribute("target", "_blank");
-      // Под заголовком — только «о чём» (пересмотр 23.10): решение платформы, ссылки и поступление — в раскрытой.
+      // Под заголовком: только «о чём» (пересмотр 23.10): решение платформы, ссылки и поступление: в раскрытой.
       const line = container.querySelector(".signalCardLine") as HTMLElement;
       expect(line).toHaveTextContent("Бурение");
       expect(line).not.toHaveTextContent(/Решение платформы|ссылк|Поступил/);
       expect(screen.getByText("№21")).toBeInTheDocument();
-      // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
+      // Тело свёрнуто: суть, «Почему сейчас» и ссылки: только по раскрытию.
       expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
       expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Обратная связь" })).not.toBeInTheDocument();
@@ -776,7 +776,7 @@ describe("SignalRadarPage", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Свернуть сигнал" }));
       expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
-      // Надзаголовка «Signal Discovery» больше нет — экран по-русски.
+      // Надзаголовка «Signal Discovery» больше нет: экран по-русски.
       expect(screen.queryByText("Signal Discovery")).not.toBeInTheDocument();
       expect(container.querySelector(".signalRadarCard")).toBeNull();
     });
@@ -803,7 +803,7 @@ describe("SignalRadarPage", () => {
       serve([{
         ...drilling,
         evidence: [
-          // 24.09 08:00 UTC — 11:00 по Москве: дата та же, что и у издателя.
+          // 24.09 08:00 UTC, 11:00 по Москве: дата та же, что и у издателя.
           link(1, { source_url: "https://worldoil.com/a", title: "Robotic rig", title_ru: "Роботизированная буровая",
                     publisher: "worldoil.com", published_at: "2026-09-24T08:00:00Z" }),
           link(2, { source_url: "https://example.com/b", title: "Rig report", publisher: null, published_at: null }),
@@ -815,7 +815,7 @@ describe("SignalRadarPage", () => {
       const first = screen.getByText("worldoil.com · 24.09.2026").closest("a")!;
       expect(first).toHaveAttribute("href", "https://worldoil.com/a");
       expect(first).toHaveTextContent("Роботизированная буровая");
-      // Без издателя — по-русски, без даты — без пустого «·»; тип материала («article») не показываем.
+      // Без издателя: по-русски, без даты: без пустого «·»; тип материала («article») не показываем.
       expect(screen.getByText("источник").closest("a")).toHaveTextContent("Rig report");
       expect(screen.queryByText("source")).not.toBeInTheDocument();
       expect(screen.queryByText("article")).not.toBeInTheDocument();
@@ -835,7 +835,7 @@ describe("SignalRadarPage", () => {
     });
   });
 
-  // Решение владельца 29.09: у карточки закрытого месяца (месяц — по дате поступления на радар)
+  // Решение владельца 29.09: у карточки закрытого месяца (месяц: по дате поступления на радар)
   // отметку «в дайджест» не ставят и не снимают, как статус статьи в архиве ленты. Закрыт ли
   // месяц карточки, говорит сервер (digest_locked): своей формулы у экрана нет.
   describe("карточка закрытого месяца", () => {
@@ -887,7 +887,7 @@ describe("SignalRadarPage", () => {
       render(<SignalRadarPage onUnauthorized={() => undefined} showToast={showToast} />);
       const button = await screen.findByRole("button", { name: "В дайджест" });
       // 5-е число застало вкладку открытой: на экране кнопка ещё активна, а сервер месяц уже закрыл
-      // и отказывает настоящим ответом FastAPI — JSON {"detail": "…"} с кодом 409.
+      // и отказывает настоящим ответом FastAPI, JSON {"detail": "…"} с кодом 409.
       serve([{ ...september, digest_locked: true }]);
       const actual = await vi.importActual<typeof import("../../api/signals")>("../../api/signals");
       vi.mocked(updateSignal).mockImplementation(actual.updateSignal);
@@ -902,7 +902,7 @@ describe("SignalRadarPage", () => {
 
         await waitFor(() => expect(showToast).toHaveBeenCalledWith(detail, "error"));
         expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('"detail"'), expect.anything());
-        // Выборка перечитана: у карточки теперь признак сервера — кнопка неактивна, с подсказкой.
+        // Выборка перечитана: у карточки теперь признак сервера: кнопка неактивна, с подсказкой.
         await waitFor(() => expect(screen.getByRole("button", { name: "В дайджест" })).toBeDisabled());
         expect(screen.getByRole("button", { name: "В дайджест" })).toHaveAttribute(
           "title",
@@ -943,7 +943,7 @@ describe("качество радара на экране (эксперт зак
     hidden_reason: "бизнес-сигнал, не технология",
   };
 
-  // Разделы отклонённого «кто убрал → причина» (#130) — как их отдаёт сервер, с короткой причиной у публикаций.
+  // Разделы отклонённого «кто убрал → причина» (#130): как их отдаёт сервер, с короткой причиной у публикаций.
   const rejectedCard: Signal = {
     ...baseSignal,
     id: 602,
@@ -957,7 +957,7 @@ describe("качество радара на экране (эксперт зак
   };
 
   function serveWithHidden(visible: Signal[], hidden: Signal[], rejected: Signal[] = []) {
-    // Плашка «Отклонённые» (#130): все разделы одним списком, причина — «кто убрал → причина: коротко».
+    // Плашка «Отклонённые» (#130): все разделы одним списком, причина, «кто убрал → причина: коротко».
     const bySection: Record<string, Signal[]> = {
       all: [
         ...rejected.map((card) => ({
@@ -1029,17 +1029,17 @@ describe("качество радара на экране (эксперт зак
     expect(lastListQuery().section).toBe("all");
     expect(screen.getByRole("heading", { name: "Отклонённые" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Отклонённые: 2" })).toHaveAttribute("aria-pressed", "true");
-    // Кнопок разделов нет: причина — в самой карточке (решение владельца 23.10), с 24.10 — флагом раскрытой
+    // Кнопок разделов нет: причина: в самой карточке (решение владельца 23.10), с 24.10: флагом раскрытой
     // карточки, а не строкой под заголовком.
     expect(screen.queryByRole("group", { name: "Разделы отклонённого" })).not.toBeInTheDocument();
     expect(screen.queryByText(/^Причина:/)).not.toBeInTheDocument();
-    // Отклонённое «Отбором» — с «Решением платформы» «Отклонено» и без «В дайджест» (вернуть его — #132).
+    // Отклонённое «Отбором»: с «Решением платформы» «Отклонено» и без «В дайджест» (вернуть его: #132).
     const rejected = screen.getByText("Котировки нефти").closest("article") as HTMLElement;
     expect(within(rejected).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
     fireEvent.click(within(rejected).getByRole("button", { name: "Раскрыть сигнал" }));
     expect(attribute(rejected, "Решение платформы")).toBe("Отклонено");
     expect(attribute(rejected, "Причина")).toBe("«Отбор» → Нефтегаз без связи с нефтесервисом: Котировки нефти без связи с нефтесервисом");
-    // Скрытая прежними правилами — с «В дайджест», как раньше: выбранная, она выходит на радар.
+    // Скрытая прежними правилами, с «В дайджест», как раньше: выбранная, она выходит на радар.
     const hiddenRow = screen.getByText("SLB получила контракты Aramco").closest("article") as HTMLElement;
     expect(within(hiddenRow).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
     fireEvent.click(within(hiddenRow).getByRole("button", { name: "Раскрыть сигнал" }));
@@ -1093,7 +1093,7 @@ describe("качество радара на экране (эксперт зак
     }], []);
     renderRadar(false);
 
-    // Под заголовком — коротко (24.10): «спорный сигнал» и почему, без служебного зачина «Отбора».
+    // Под заголовком: коротко (24.10): «спорный сигнал» и почему, без служебного зачина «Отбора».
     expect(await screen.findByText("Спорный сигнал: прямая связь у другой отрасли")).toBeInTheDocument();
   });
 
@@ -1341,7 +1341,7 @@ describe("ход решения на карточке (03.10)", () => {
 
     const card = screen.getByText("Отсеянный обзор рынка").closest("article") as HTMLElement;
     expect(within(card).getByText("Почему такое решение:")).toBeInTheDocument();
-    // Шаги свёрнуты (пересмотр 23.10): причина видна сразу, ход — по кнопке.
+    // Шаги свёрнуты (пересмотр 23.10): причина видна сразу, ход: по кнопке.
     expect(within(card).queryAllByRole("listitem")).toHaveLength(0);
     const toggle = within(card).getByRole("button", { name: /Ход решения/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");

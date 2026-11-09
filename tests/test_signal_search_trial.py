@@ -14,7 +14,7 @@ from oiltech_digest import cli, config, otbor, signal_discovery, signal_research
 from oiltech_digest.db import repository
 from tests.otbor_radar_support import NO_PAGE, SearchModel, _DedupJudge, event, page
 from tests.otbor_support import OtborModel, answer, decide, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
+from tests.otbor_support import contour  # noqa: F401: фикстура
 from tests.signal_card_support import DRILLING, admin, api_get, radar_finding, run_worker, tag, user  # noqa: F401
 from tests.test_signal_search_broad import MARKET, collected
 
@@ -48,7 +48,7 @@ def signals_snapshot():
 
 def run_trial(monkeypatch, events, pages, answers, *args, cited=None, same_event=False, on_fetch=None, otbor_runs=True):
     """radar-search-trial --run за октябрь → воркер NL полосы агентов с подставными поиском и страницами → ядро ставит
-    «Отбор» находок → воркер с подставной моделью «Отбора» → ядро. same_event — ответ судьи «Дедупа», on_fetch — что
+    «Отбор» находок → воркер с подставной моделью «Отбора» → ядро. same_event: ответ судьи «Дедупа», on_fetch: что
     происходит, пока воркер докачивает страницу. Номер задачи прогона, поиск и модель «Отбора»."""
     search = SearchModel(events, cited)
     monkeypatch.setattr(signal_research, "make_client", lambda offline=False: search)
@@ -77,7 +77,7 @@ def test_dry_run_prints_calls_and_price_and_writes_nothing(user, contour, monkey
     cli.main(["radar-search-trial", *PERIOD, "--per-topic", "20", "--model", "gpt-6.1-sol", "--otbor-model", "gpt-6-sol"])
 
     out = capsys.readouterr().out
-    # Две темы (с рынком); «Отбор» — от половины до всего потолка. Цена — по ставкам config: вызов поиска 74 тыс. входа
+    # Две темы (с рынком); «Отбор»: от половины до всего потолка. Цена, по ставкам config: вызов поиска 74 тыс. входа
     # × $2/млн + 5,1 тыс. выхода × $10/млн + 15,6 поиска × $0,01, на тему 1,25 вызова (повтор пустого ответа), верхняя
     # граница растит выход и поиски в 20/12 раза; вызов «Отбора» 4 900 × $2/млн + 600 × $10/млн, с повтором ×1,1.
     assert "[сухой прогон]: тем 2, период с 2026-10-01 по 2026-10-31, поиск gpt-6.1-sol low, до 20" in out
@@ -129,7 +129,7 @@ def test_trial_run_passes_findings_through_otbor_and_changes_no_showcase_section
     # «Отбор» решил обе новые находки: та, что уже на платформе, и ссылка сбора в него не идут.
     assert sorted(line.split(":", 1)[1].strip() for one in model.calls for line in one["input"].splitlines()
                   if line.startswith("Заголовок:")) == sorted([DEAL, TECH])
-    # Витрины, разделы отклонённого и сигналы платформы — как до прогона.
+    # Витрины, разделы отклонённого и сигналы платформы: как до прогона.
     assert (showcase(user, "technology"), showcase(user, "business")) == showcases_before
     assert api_get("/api/signals", admin, section="all") == sections_before
     after = {row[0]: row for row in signals_snapshot()}
@@ -146,7 +146,7 @@ def test_trial_run_passes_findings_through_otbor_and_changes_no_showcase_section
     assert ("Материалов (ссылок после технических проверок) 4, уже в сборе 1 (25%), новых находок 2, сигналов "
             "платформы найдено снова 1") in out
     assert "«Отбор»: решил 2, принял 1 (50%), сбоев 0, ждут решения 0, спорных 0" in out
-    # База будущей ОС поиска: по теме — сколько нашёл поиск и сколько принял «Отбор».
+    # База будущей ОС поиска: по теме: сколько нашёл поиск и сколько принял «Отбор».
     assert f"  {DRILLING}: принёс поиск 5, технический отсев 1, ссылок 4, из них в сборе 1, новых находок 2, «Отбор» " \
            "принял 1, отклонил 1, найдено снова 1" in out
     assert "Принятое по категориям: business 1" in out and "Причины отказа: oil_gas_no_link 1" in out
@@ -172,7 +172,7 @@ def test_report_measures_recall_against_the_expert_reference(user, contour, monk
 
     tag(DRILLING)
     collected(COLLECTED_URL)
-    # Поиск принёс и сделку, и ссылку, которая уже есть в сборе: обе — его находки для полноты.
+    # Поиск принёс и сделку, и ссылку, которая уже есть в сборе: обе: его находки для полноты.
     job_id, _, _ = run_trial(monkeypatch, [event(DEAL, DEAL_URL), event("Upstream: rig contract in Kuwait",
                                                                          COLLECTED_URL)],
                              {DEAL_URL: page(DEAL)}, {DEAL: answer()})
@@ -213,7 +213,7 @@ def test_dates_of_the_period_are_whole_days(user, contour):
 
     trial = signal_search_trial.plan(since=date(2026, 10, 1), until=date(2026, 10, 31), otbor_model="gpt-6-sol")
 
-    # research_period отсчитывает days до period_end: 30 дней до 31.10 — с 01.10.
+    # research_period отсчитывает days до period_end: 30 дней до 31.10: с 01.10.
     assert (trial["days"], trial["until"]) == (30, "2026-10-31")
 
 
@@ -225,7 +225,7 @@ def test_duplicate_of_a_main_finding_collected_during_the_run_reaches_otbor_itse
         if url == TECH_URL:
             collected(url, source="SLB news", site="https://www.slb.example", days_ago=0)
 
-    # «Дедуп» склеил две ссылки одного события, а одну из них сбор собрал, пока шёл прогон: вторая ссылка — новая
+    # «Дедуп» склеил две ссылки одного события, а одну из них сбор собрал, пока шёл прогон: вторая ссылка: новая
     # находка и идёт в «Отбор», а не пропадает вместе с собранной.
     _, _, model = run_trial(monkeypatch, [event(TECH, TECH_URL), event(TECH + " this week", other_url)],
                             {TECH_URL: page(TECH), other_url: page(TECH + " this week")},

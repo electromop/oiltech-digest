@@ -1,11 +1,11 @@
 """Разбор загруженного файла в список якорей.
 
-Чистые функции: ни базы, ни сети, ни обращений к модели. На вход — байты файла,
-на выход — ParsedDocument из model.py. Всё, что не разобралось, поднимается
+Чистые функции: ни базы, ни сети, ни обращений к модели. На вход: байты файла,
+на выход: ParsedDocument из model.py. Всё, что не разобралось, поднимается
 как DocumentError с русским текстом, который можно показать пользователю.
 
 Формат определяется ПО СИГНАТУРЕ, а не по имени файла: имя приходит от браузера
-и ничего не гарантирует (переименованный .txt в .pdf — обычное дело).
+и ничего не гарантирует (переименованный .txt в .pdf: обычное дело).
 
 Библиотеки выбраны замером и зафиксированы: pypdf (35 МБ пик против 511 МБ
 у pdfplumber; pymupdf отпал по AGPL), python-pptx, python-docx.
@@ -39,10 +39,10 @@ __all__ = ["detect_kind", "parse_document", "looks_scanned"]
 _PDF_SIGNATURE = b"%PDF-"
 _ZIP_SIGNATURE = b"PK\x03\x04"
 # Старые бинарные форматы Office и файлы, защищённые паролем на открытие:
-# и то и другое — контейнер OLE2, снаружи неотличимы без сторонней библиотеки.
+# и то и другое: контейнер OLE2, снаружи неотличимы без сторонней библиотеки.
 _OLE2_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
-# Внутренние имена внутри OOXML-архива. Различают pptx и docx: снаружи оба — zip.
+# Внутренние имена внутри OOXML-архива. Различают pptx и docx: снаружи оба: zip.
 _PPTX_MARKER = "ppt/presentation.xml"
 _DOCX_MARKER = "word/document.xml"
 _XLSX_MARKER = "xl/workbook.xml"
@@ -58,18 +58,18 @@ _PDF_HEADER_WINDOW = 1024
 # Порог считается по ОБЪЁМУ добытого текста, а не по доле пустых якорей.
 # Замер, который это доказал: документ-полускан из калибровки (tests/test_document_parsing.py),
 # 107 страниц, текстовый слой есть только на 40 (37%), но это 104 431 знак
-# полезного текста. Любой критерий вида «пустых страниц больше половины —
+# полезного текста. Любой критерий вида «пустых страниц больше половины:
 # отклоняем» выбросил бы этот документ целиком. Он обязан разбираться.
 #
 # Настоящий скан выглядит иначе: текста нет НИГДЕ. Извлекатель либо возвращает
 # пустоту, либо крохи вроде колонцифры на каждой странице.
 
 # Якорь считается содержательным, если в нём есть хотя бы короткая строка.
-# 20 знаков — примерно «Отчёт за 2026 год»: меньше этого встречается у
+# 20 знаков, примерно «Отчёт за 2026 год»: меньше этого встречается у
 # колонтитулов и номеров страниц, то есть у артефактов скана.
 SCAN_MEANINGFUL_ANCHOR_CHARS = 20
 
-# Второй критерий — плотность: если якорей много, а знаков на якорь почти нет,
+# Второй критерий, плотность: если якорей много, а знаков на якорь почти нет,
 # это скан с редкими вкраплениями текста (водяной знак, штамп, колонцифра).
 # Нужен, потому что первого критерия мало: одна страница с текстом среди сотни
 # пустых иначе прошла бы как полноценный документ.
@@ -110,7 +110,7 @@ def _detect_ooxml_kind(data: bytes) -> str:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             names = set(archive.namelist())
     except zipfile.BadZipFile as exc:
-        # Сигнатура zip есть, а содержимое не читается — это битый файл,
+        # Сигнатура zip есть, а содержимое не читается это битый файл,
         # а не «неизвестный формат»: пользователю надо перезалить, а не конвертировать.
         raise UnreadableDocumentError(
             "Файл повреждён: архив документа не читается. Попробуйте пересохранить "
@@ -132,7 +132,7 @@ def _detect_ooxml_kind(data: bytes) -> str:
 
 
 def parse_document(data: bytes, kind: str | None = None) -> ParsedDocument:
-    """Разобрать файл в якоря. kind=None — определить формат самостоятельно."""
+    """Разобрать файл в якоря. kind=None: определить формат самостоятельно."""
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError("parse_document ожидает байты файла")
     data = bytes(data)
@@ -171,11 +171,11 @@ def _parse_pdf(data: bytes) -> list[Anchor]:
     try:
         reader = PdfReader(io.BytesIO(data), strict=False)
         if reader.is_encrypted:
-            # Часть PDF зашифрована пустым паролем (запрет печати/копирования) —
+            # Часть PDF зашифрована пустым паролем (запрет печати/копирования):
             # такие читаются. Настоящий пароль на открытие вернёт ложь.
             try:
                 opened = reader.decrypt("")
-            except Exception:  # noqa: BLE001 — pypdf кидает разное на битой криптографии
+            except Exception:  # noqa: BLE001: pypdf кидает разное на битой криптографии
                 opened = 0
             if not opened:
                 raise UnreadableDocumentError(
@@ -184,7 +184,7 @@ def _parse_pdf(data: bytes) -> list[Anchor]:
         page_count = len(reader.pages)
     except UnreadableDocumentError:
         raise
-    except Exception as exc:  # noqa: BLE001 — pypdf кидает десяток разных классов
+    except Exception as exc:  # noqa: BLE001: pypdf кидает десяток разных классов
         raise UnreadableDocumentError(
             "Не удалось прочитать PDF: файл повреждён. Попробуйте пересохранить "
             "и загрузить снова."
@@ -223,7 +223,7 @@ def _parse_pptx(data: bytes) -> list[Anchor]:
             notes = _slide_notes(slide)
             if notes:
                 parts.append(notes)
-        except Exception:  # noqa: BLE001 — битый слайд не роняет презентацию
+        except Exception:  # noqa: BLE001: битый слайд не роняет презентацию
             pass
         text = "\n".join(part.strip() for part in parts if part and part.strip())
         anchors.append(Anchor(number=number, text=text.strip()))
@@ -243,7 +243,7 @@ def _collect_shapes(shapes, parts: list[str]) -> None:
                 continue
             if getattr(shape, "has_text_frame", False):
                 parts.append(shape.text_frame.text)
-        except Exception:  # noqa: BLE001 — одна фигура не роняет слайд
+        except Exception:  # noqa: BLE001: одна фигура не роняет слайд
             continue
 
 
@@ -260,7 +260,7 @@ def _slide_notes(slide) -> str:
 def _parse_docx(data: bytes) -> list[Anchor]:
     """Якорь = порядковый номер НЕПУСТОГО блока.
 
-    Страниц в docx нет — разбиение на страницы делает Word при вёрстке, в файле
+    Страниц в docx нет: разбиение на страницы делает Word при вёрстке, в файле
     его не хранится. Поэтому нумеруем блоки: абзац или таблица целиком.
     Идём по телу документа в исходном порядке, иначе таблицы уехали бы в конец
     и ссылка «блок 12» перестала бы соответствовать глазу читателя.
@@ -283,7 +283,7 @@ def _parse_docx(data: bytes) -> list[Anchor]:
                 text = _table_text(_DocxTable(child, document))
             else:
                 continue
-        except Exception:  # noqa: BLE001 — битый блок пропускаем, документ читаем
+        except Exception:  # noqa: BLE001: битый блок пропускаем, документ читаем
             continue
         text = text.strip()
         if not text:
@@ -318,7 +318,7 @@ def looks_scanned(anchors: list[Anchor], kind: str) -> bool:
         # Нигде в документе не нашлось даже одной короткой строки.
         return True
 
-    # Плотность меряем только там, где якорь — физическая страница или слайд.
+    # Плотность меряем только там, где якорь: физическая страница или слайд.
     # У docx пустые блоки в якоря не попадают вовсе, там эта метрика бессмысленна.
     if kind in ("pdf", "pptx") and len(anchors) >= SCAN_DENSITY_MIN_ANCHORS:
         total_chars = sum(len(anchor.text) for anchor in anchors)

@@ -1,5 +1,5 @@
 /* Дизайн-система v2: общие компоненты (Carbon productive).
-   Прямоугольные кнопки и поля, метки-пилюли, глубина — слоями фона, тени только у плавающего.
+   Прямоугольные кнопки и поля, метки-пилюли, глубина: слоями фона, тени только у плавающего.
    Экранные правила в globals.css идут после этого файла и уточняют компоненты под экран. */
 
 /* --- Заголовок экрана --- */
@@ -82,7 +82,7 @@
   flex-wrap: wrap;
 }
 
-/* --- Метки (Carbon tag): пилюля 24px, смысл всегда подписью, цвет — второй канал --- */
+/* --- Метки (Carbon tag): пилюля 24px, смысл всегда подписью, цвет: второй канал --- */
 .statusPill,
 .badge,
 .miniPill,
@@ -149,8 +149,8 @@
   letter-spacing: var(--ot-tracking-caption);
 }
 
-/* --- Кнопки: primary — синяя заливка, ghostButton — Carbon tertiary (синий контур),
-   опасные — красный контур, при наведении заливка. Высота 40px, в карточках 32px. --- */
+/* --- Кнопки: primary: синяя заливка, ghostButton: Carbon tertiary (синий контур),
+   опасные: красный контур, при наведении заливка. Высота 40px, в карточках 32px. --- */
 .primaryButton,
 .ghostButton,
 .dangerButton {
@@ -246,7 +246,7 @@
   margin-top: var(--ot-space-04);
 }
 
-/* Вкладки и переключатели режима (role="tab", «Все / Со статусом», период статистики) — Carbon content switcher:
+/* Вкладки и переключатели режима (role="tab", «Все / Со статусом», период статистики), Carbon content switcher:
    выбранный пункт тёмный, остальные с рамкой; выбор виден не только цветом. */
 :is(.scoringProfileTabs, .viewTabs, .periodSwitch) {
   display: flex;
@@ -440,7 +440,7 @@ input[type="radio"] {
   font-weight: var(--ot-weight-regular);
 }
 
-/* Цвет у .documentAlert — только у вариантов: «хорошо» задаёт CSS-модуль экрана (fineAlert),
+/* Цвет у .documentAlert, только у вариантов: «хорошо» задаёт CSS-модуль экрана (fineAlert),
    а модули стоят в сборке раньше этого файла. */
 .archiveNotice,
 .documentAlert.warn {
@@ -593,7 +593,7 @@ input[type="radio"] {
 }
 
 /* --- Всплывающее уведомление (Carbon toast): тёмное, справа под шапкой.
-   Область всегда в DOM — чтение с экрана объявляет каждое новое сообщение. --- */
+   Область всегда в DOM: чтение с экрана объявляет каждое новое сообщение. --- */
 .toastRegion {
   position: fixed;
   top: calc(var(--ot-header-height) + var(--ot-space-05));
@@ -664,7 +664,7 @@ input[type="radio"] {
   }
 }
 
-/* --- Балл (Carbon tag): число крупно, оценка подписью; тон — по той же шкале, что у меток --- */
+/* --- Балл (Carbon tag): число крупно, оценка подписью; тон: по той же шкале, что у меток --- */
 .scoreBadge {
   display: inline-flex;
   align-items: center;
@@ -747,7 +747,7 @@ input[type="radio"] {
   width: min(64rem, calc(100vw - 2rem));
 }
 
-/* ::backdrop не везде наследует переменные :root — цвет затемнения задан значением (--ot-overlay). */
+/* :backdrop не везде наследует переменные :root: цвет затемнения задан значением (--ot-overlay). */
 .dialog::backdrop {
   background: rgba(4, 39, 70, 0.5);
 }
@@ -810,7 +810,7 @@ input[type="radio"] {
   margin-top: var(--ot-space-05);
 }
 
-/* --- Скелет загрузки: заготовки строк на месте списка; перелив — в motion.css --- */
+/* --- Скелет загрузки: заготовки строк на месте списка; перелив: в motion.css --- */
 .skeletonList {
   display: grid;
   gap: var(--ot-space-03);

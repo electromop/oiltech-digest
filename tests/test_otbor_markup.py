@@ -1,7 +1,7 @@
 """Загрузка разметки эксперта для «Отбора» (#129, шов 2 спеки #128): проверка целостности и отчёт о нарушениях.
 
-Шов — команда `otbor-markup-check` по пакету, который выгрузила `otbor-expert-pack` на изолированной базе
-(синтетика — otbor_pack_support)."""
+Шов: команда `otbor-markup-check` по пакету, который выгрузила `otbor-expert-pack` на изолированной базе
+(синтетика: otbor_pack_support)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 from oiltech_digest import otbor_markup, otbor_pack_format as pack_format
 from tests.otbor_pack_support import BUSINESS, RUBRICS, TAKEN, TECH, business, fill, rejected, run_check, technology
-from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
+from tests.otbor_pack_support import pack  # noqa: F401: фикстура
 
 
 def by_the_rules(items):
@@ -23,7 +23,7 @@ def by_the_rules(items):
                                {**TAKEN, "Категория": "другое", "Почему такой балл": None}][number % 4]
     links = next(item["id"] for item in items if item["group"] == "radar_links")
     answers[links] = rejected(**{"Причина отказа": "Разные события в одной находке", "Отрасль": "нефтесервис"})
-    # «Свежесть» — число, если дата события в тексте есть.
+    # «Свежесть»: число, если дата события в тексте есть.
     first_tech = next(item_id for item_id, answer in answers.items() if answer.get("Категория") == "технология")
     answers[first_tech] = technology(**{TECH[-1]: 90})
     return answers
@@ -37,7 +37,7 @@ def test_a_markup_by_the_rules_passes(pack, capsys):
     printed = capsys.readouterr().out
     assert "строк 116, нарушений 0" in printed
     assert "Утверждение: «да» 0, правки 0, без решения 18" in printed
-    # Строки с метками в кодах справочников — вход экзамена (#133).
+    # Строки с метками в кодах справочников: вход экзамена (#133).
     labels = {item["id"]: item for item in otbor_markup.check(path)["items"]}
     answers = by_the_rules(pack["items"])
     refused = next(item_id for item_id, answer in answers.items()
@@ -74,7 +74,7 @@ def test_every_violation_is_reported_at_once_and_the_check_fails(pack, capsys):
         fresh_empty: technology(**{TECH[-1]: None}),
         blank: {"Брать или нет": None, "Отрасль": None, "Связь с нефтесервисом": None, "Категория": None},
         other_scored: {**TAKEN, "Категория": "другое", TECH[0]: 60},
-        # Категория выбирает витрину: у взятой строки она обязательна, у отклонённой — нет.
+        # Категория выбирает витрину: у взятой строки она обязательна, у отклонённой: нет.
         taken_uncategorized: {**TAKEN, "Категория": None},
     })
 

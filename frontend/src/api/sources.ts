@@ -16,7 +16,7 @@ export function listSources() {
 }
 
 // Порог «Требуют внимания» (stale_days) не передаём намеренно: правило одно, его держит
-// сервер — config.SOURCE_STALE_DAYS. Своя копия числа здесь разошлась бы с CLI и замерами.
+// сервер: config.SOURCE_STALE_DAYS. Своя копия числа здесь разошлась бы с CLI и замерами.
 export function listSourceHealth() {
   return apiFetch<SourceHealth[]>("/api/source-health?limit=500");
 }
@@ -69,7 +69,7 @@ export function importArticleByUrl(payload: ManualArticleImportPayload) {
 }
 
 // Архив источника: не опрашивается И его статьи уходят из ленты. Жёсткого удаления нет
-// намеренно — articles.source_id ссылается на sources БЕЗ ON DELETE, Postgres откажет.
+// намеренно: articles.source_id ссылается на sources БЕЗ ON DELETE, Postgres откажет.
 export function archiveSource(sourceId: number) {
   return apiFetch<{ ok: boolean; id: number; name: string; archived: boolean }>(
     `/api/sources/${sourceId}/archive`,

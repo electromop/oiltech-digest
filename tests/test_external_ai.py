@@ -48,7 +48,7 @@ def test_external_ai_process_payload_heartbeats_per_article():
         "articles": [dict(article, id=1), dict(article, id=2), dict(article, id=3)],
     }
     beats = []
-    # Колбэк, который один раз бросает — обработка не должна падать (heartbeat защищён).
+    # Колбэк, который один раз бросает: обработка не должна падать (heartbeat защищён).
     def heartbeat(done=None):
         beats.append(1)
         if len(beats) == 2:
@@ -63,7 +63,7 @@ def test_external_ai_process_payload_heartbeats_per_article():
 def test_heartbeat_that_cannot_take_the_result_fails_loudly():
     """23.09: циклы ИИ передают heartbeat итог на границе шага (его отдаст воркер, если шаг
     зависнет на остановке). Колбэк старой сигнатуры проглоченным TypeError тихо отключил бы
-    и остановку, и отзыв аренды — класс 24.07. Поэтому это громкая ошибка."""
+    и остановку, и отзыв аренды: класс 24.07. Поэтому это громкая ошибка."""
     payload = {
         "offline": True,
         "articles": [{"id": 1, "title": "Drilling", "url": "https://example.com/a", "raw_text": "drilling"}],
@@ -124,7 +124,7 @@ def _stub_writes(monkeypatch, articles):
 def test_core_applies_glossary_to_worker_result(monkeypatch):
     """Замечание заказчика 22.09: «спудрил вертикальную скважину», «более granularными».
 
-    Словарь на воркере — его версия кода, NL пересобирает владелец; без прохода на ядре
+    Словарь на воркере: его версия кода, NL пересобирает владелец; без прохода на ядре
     правка словаря не дошла бы до новых карточек до пересборки NL.
     """
     written = _stub_writes(monkeypatch, lambda ids: [SPUD_ARTICLE])
@@ -202,7 +202,7 @@ def test_result_of_build_before_the_cleanup_writes_summary_but_bills_every_stage
 
 
 def test_apply_rejects_malformed_only_before_any_write(monkeypatch):
-    """payload_json — граница: строка «summary» дала бы множество букв, пустой список — все стадии."""
+    """payload_json, граница: строка «summary» дала бы множество букв, пустой список: все стадии."""
     import pytest
 
     writes = []
@@ -240,7 +240,7 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
 
 
 def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
-    """Ревью 27.09: пометка проверялась только при записи — когда ответ модели уже оплачен."""
+    """Ревью 27.09: пометка проверялась только при записи: когда ответ модели уже оплачен."""
     import pytest
 
     reserved = []
@@ -316,7 +316,7 @@ def test_worker_drops_retired_stages_from_a_job_queued_before_the_cleanup(monkey
 
 
 def test_worker_rejects_malformed_only_before_any_model_call(monkeypatch):
-    """payload — граница: строка «summary» дала бы множество букв, и воркер не сделал бы ничего."""
+    """payload, граница: строка «summary» дала бы множество букв, и воркер не сделал бы ничего."""
     calls: list = []
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _recording_offline(calls))
 
@@ -327,7 +327,7 @@ def test_worker_rejects_malformed_only_before_any_model_call(monkeypatch):
 
 def test_lease_loss_aborts_batch_instead_of_burning_money():
     """Инцидент 24.07: core отозвал lease (heartbeat 409), но воркер продолжал звать
-    OpenAI по каждой статье. Результат уже не примут — деньги в мусор (~$11/час,
+    OpenAI по каждой статье. Результат уже не примут: деньги в мусор (~$11/час,
     80 минут). Теперь LeaseLost обязан прервать батч на ПЕРВОЙ же статье."""
     calls = {"heartbeats": 0}
 
@@ -352,7 +352,7 @@ def test_lease_loss_aborts_batch_instead_of_burning_money():
 
 
 def test_transient_heartbeat_failure_does_not_abort_batch():
-    """Обратная сторона: обычный сбой сети НЕ должен ронять батч — иначе любое моргание
+    """Обратная сторона: обычный сбой сети НЕ должен ронять батч: иначе любое моргание
     связи будет терять уже оплаченную работу. Прерываемся только на потере lease."""
     calls = {"heartbeats": 0}
 

@@ -12,7 +12,7 @@ export function login(email: string, password: string) {
   });
 }
 
-// Шаг «код допуска»: почта, пароль и код одним запросом — допуск и сессия.
+// Шаг «код допуска»: почта, пароль и код одним запросом: допуск и сессия.
 export function admit(email: string, password: string, code: string) {
   return apiFetch<AuthResponse>("/api/auth/admit", {
     method: "POST",

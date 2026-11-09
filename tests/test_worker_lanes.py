@@ -67,7 +67,7 @@ def _wait_until(condition, timeout: float = 2.0) -> bool:
 
 
 def test_lease_is_extended_even_when_handler_never_calls_heartbeat(monkeypatch):
-    """Класс 24.07 / 17.09 / 21.09: новый код забывал beat() — аренда уходила."""
+    """Класс 24.07 / 17.09 / 21.09: новый код забывал beat(): аренда уходила."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)
     monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: time.sleep(0.2) or {"ok": 1})
     keeper_client = _Client()
@@ -80,7 +80,7 @@ def test_lease_is_extended_even_when_handler_never_calls_heartbeat(monkeypatch):
 
 
 def test_revoked_lease_stops_paid_work_at_next_step(monkeypatch):
-    """Ядро отозвало аренду (409) — фон отмечает, и следующий шаг обработчика прерывается:
+    """Ядро отозвало аренду (409), фон отмечает, и следующий шаг обработчика прерывается:
     за выброшенный результат не платим (24.07: ~$11/ч в петле)."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)
     steps = []
@@ -127,7 +127,7 @@ def test_long_batch_with_steady_progress_is_not_killed(monkeypatch):
     keeper = external_worker.LeaseKeeper(client, dict(JOB), interval=0.01, stall_seconds=0.1,
                                          on_deadline=restarted.set).start()
 
-    for _ in range(30):  # 0,6 с работы — в шесть раз дольше предела без продвижения
+    for _ in range(30):  # 0,6 с работы: в шесть раз дольше предела без продвижения
         keeper.touch()
         time.sleep(0.02)
     keeper.stop()
@@ -157,7 +157,7 @@ def test_restart_waits_for_sibling_threads_to_finish(monkeypatch):
 
 
 def test_restart_waits_for_sibling_even_if_stalled_handler_wakes_up(monkeypatch):
-    """Ревью #73: зависший обработчик проснулся во время ожидания и вышел из реестра — счётчик
+    """Ревью #73: зависший обработчик проснулся во время ожидания и вышел из реестра: счётчик
     «> 1» падал до числа соседей, и os._exit обрывал здоровую соседку. Ждём соседей без своей."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     shutdown = worker_shutdown.Shutdown()
@@ -182,11 +182,11 @@ def test_restart_waits_for_sibling_even_if_stalled_handler_wakes_up(monkeypatch)
 
 
 def _stalling(monkeypatch, kind: str, handler) -> tuple[_Client, list]:
-    """Задача, чей шаг не возвращается дольше срока; перезапуск процесса — без выхода из pytest.
+    """Задача, чей шаг не возвращается дольше срока; перезапуск процесса: без выхода из pytest.
     handler(unblock) → (модуль, имя, обработчик): шаг висит, пока тест не отпустит unblock."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)
-    # Запас на медленный старт потока под нагрузкой: сработай сторож до первой границы шага —
+    # Запас на медленный старт потока под нагрузкой: сработай сторож до первой границы шага:
     # снимка ещё не было бы, и тест упал бы не по делу.
     monkeypatch.setitem(external_worker._JOB_STALL_SECONDS, kind, 0.5)
     restarted: list = []
@@ -203,7 +203,7 @@ def _stalling(monkeypatch, kind: str, handler) -> tuple[_Client, list]:
 
 
 def test_stalled_step_hands_back_what_was_done_before_it(monkeypatch):
-    """Хвост сессии C: шаг ИИ-пакета завис дольше срока — процесс уходит на перезапуск, а задача
+    """Хвост сессии C: шаг ИИ-пакета завис дольше срока: процесс уходит на перезапуск, а задача
     уходила ядру через fail без снимка: три оплаченные статьи делались и оплачивались заново.
     Теперь с fail уходит снимок на последней границе шага, а обработчик, проснувшись, молчит."""
 
@@ -213,7 +213,7 @@ def test_stalled_step_hands_back_what_was_done_before_it(monkeypatch):
             for index in range(3):
                 heartbeat(result)
                 result["articles"].append({"article_id": index})
-            heartbeat(result)  # граница четвёртой статьи, дальше — вызов модели, который не возвращается
+            heartbeat(result)  # граница четвёртой статьи, дальше: вызов модели, который не возвращается
             unblock.wait(5)
             result["articles"].append({"article_id": 3})
             return result
@@ -230,8 +230,8 @@ def test_stalled_step_hands_back_what_was_done_before_it(monkeypatch):
 
 
 def test_stalled_fetch_goes_back_whole_as_before(monkeypatch):
-    """Сбор частичного итога не отдаёт (ИИ не зовёт — повторить дёшево), документ — одна карточка
-    на файл: зависшие, они по-прежнему уходят fail целиком. Отчёт — один и здесь."""
+    """Сбор частичного итога не отдаёт (ИИ не зовёт: повторить дёшево), документ: одна карточка
+    на файл: зависшие, они по-прежнему уходят fail целиком. Отчёт: один и здесь."""
 
     def handler(unblock):
         def process_payload(payload, heartbeat=None):
@@ -250,7 +250,7 @@ def test_stalled_fetch_goes_back_whole_as_before(monkeypatch):
 def test_stall_noticed_while_handler_reports_leaves_the_report_to_it(monkeypatch, handler):
     """Итог уже в пути (complete) или обработчик уже отчитался и вышел: fail сторожа мог бы
     обогнать оплаченный полный итог, и тот ушёл бы в повтор. Сторож не отчитывается и процесс
-    не перезапускает — зависания нет."""
+    не перезапускает: зависания нет."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     restarted: list = []
     monkeypatch.setattr(external_worker.os, "_exit", restarted.append)
@@ -270,13 +270,13 @@ def test_stall_noticed_while_handler_reports_leaves_the_report_to_it(monkeypatch
 
 
 def test_stall_limits_are_per_kind():
-    assert external_worker.job_stall_seconds("process_articles") >= 10 * 60  # шаг — одна статья
-    assert external_worker.job_stall_seconds("scrape_source") >= 5 * 90  # шаг — одна страница
+    assert external_worker.job_stall_seconds("process_articles") >= 10 * 60  # шаг: одна статья
+    assert external_worker.job_stall_seconds("scrape_source") >= 5 * 90  # шаг: одна страница
     assert external_worker.job_stall_seconds("unknown_kind") == external_worker.config.EXTERNAL_JOB_MAX_SECONDS
 
 
 def test_three_fetch_threads_keep_customer_keywords_until_last_job_ends():
-    """Ревью 21.09: задача, закончившая первой, возвращала None, пока соседняя шла, —
+    """Ревью 21.09: задача, закончившая первой, возвращала None, пока соседняя шла,:
     и та фильтровала без ключей заказчика."""
     from oiltech_digest.ingestion import relevance_filter
 
@@ -304,7 +304,7 @@ def test_three_fetch_threads_keep_customer_keywords_until_last_job_ends():
         thread.join(3)
 
     assert seen and seen[0][0] == ("бурение",)
-    assert relevance_filter._TAG_KEYWORDS_OVERRIDE is None  # после последней — как было
+    assert relevance_filter._TAG_KEYWORDS_OVERRIDE is None  # после последней: как было
 
 
 def test_lane_runs_several_claim_threads_with_distinct_names(monkeypatch):
@@ -370,7 +370,7 @@ def _polling_client(answers: list):
 
 
 def test_idle_pause_grows_to_30_seconds_and_resets_on_first_job(monkeypatch):
-    """21.09: 582 claim за 5 мин простоя — пауза стояла 3 с всегда (сессия C, п. 4)."""
+    """21.09: 582 claim за 5 мин простоя: пауза стояла 3 с всегда (сессия C, п. 4)."""
     pauses: list[float] = []
     monkeypatch.setattr(external_worker, "_pause", pauses.append)
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_POLL_MAX_SECONDS", 30.0)
@@ -406,11 +406,11 @@ def test_idle_nl_asks_core_about_sixty_times_in_five_minutes(monkeypatch):
         external_worker._claim_loop(Client(), 3.0)
 
     per_thread = sum(1 for moment in claims_at if 300 <= moment < 600)  # вторые 5 минут простоя
-    assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09 — 582)
+    assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09-582)
 
 
 def test_every_job_kind_resolves_to_a_worker_handler():
-    """Таблица обработчиков грузит модули лениво — опечатка в пути всплыла бы только на NL,
+    """Таблица обработчиков грузит модули лениво: опечатка в пути всплыла бы только на NL,
     на первой задаче вида. Здесь каждая строка разрешается в функцию, и каждый вид любой
     полосы есть в таблице."""
     for kind in external_worker._HANDLERS:
@@ -421,7 +421,7 @@ def test_every_job_kind_resolves_to_a_worker_handler():
 
 def test_every_lane_has_its_own_nl_worker():
     """Раскладка NL: у каждой внешней очереди есть воркер, полосы не делят контейнер
-    (иначе пересчёт снова встанет перед потоком дня, а браузер — перед RSS). Одно исключение —
+    (иначе пересчёт снова встанет перед потоком дня, а браузер: перед RSS). Одно исключение:
     код допуска (#113): короткие сообщения отправляет воркер сбора вдобавок к своей полосе."""
     compose = Path(__file__).resolve().parents[1] / "docker-compose.external-worker.yml"
     services = yaml.safe_load(compose.read_text())["services"]

@@ -1,7 +1,7 @@
 """Таблица пакета эксперту «Отбора» (#129): инструкция, разметка, правила колонок, листы на утверждение и скрытые
-списки. Состав строк и манифест — otbor_pack, формат — otbor_pack_format. Правила колонок со справочником и линейки
+списки. Состав строк и манифест: otbor_pack, формат: otbor_pack_format. Правила колонок со справочником и линейки
 берутся из данных, а не пишутся здесь: одна и та же линейка идёт в правила эксперта и потом в инструкцию модели
-(спека #128). Тексты для эксперта — без длинного и среднего тире."""
+(спека #128). Тексты для эксперта: без длинного и среднего тире."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.datavalidation import DataValidation
 
-    # Значения выпадающих списков — на скрытом листе, а не строкой в самой проверке: у строки предел Excel
+    # Значения выпадающих списков, на скрытом листе, а не строкой в самой проверке: у строки предел Excel
     # 255 знаков, а названия тем длиннее.
     hidden = book.create_sheet(LISTS_SHEET)
     hidden.sheet_state = "hidden"
@@ -101,7 +101,7 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
         sheet.add_data_validation(validation)
     for one in score_columns(rubrics):
         if one["allows_no_date"]:
-            continue  # число или «нет даты» — проверит загрузка разметки
+            continue  # число или «нет даты»: проверит загрузка разметки
         validation = DataValidation(type="whole", operator="between", formula1="0", formula2="100", allow_blank=True)
         validation.add(f"{letter[one['header']]}2:{letter[one['header']]}{last}")
         sheet.add_data_validation(validation)
@@ -122,7 +122,7 @@ def _links_text(links: list[dict[str, Any]]) -> str | None:
 
 
 def _rules(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> list[list[Any]]:
-    """Правило и пример у каждой колонки разметки; значения списков — с правилом и примерами, темы — с описанием."""
+    """Правило и пример у каждой колонки разметки; значения списков: с правилом и примерами, темы: с описанием."""
     rows: list[list[Any]] = [["Колонка", "Правило", "Значение", "Пояснение и примеры"]]
     for column, key in CHOICE_COLUMNS:
         if key == "theme":
@@ -178,7 +178,7 @@ def _approval(dictionaries: dict[str, Any]) -> list[list[Any]]:
 
 
 def _rubrics(rubrics: dict[str, Any]) -> list[list[Any]]:
-    """Линейки на утверждение: строка — критерий, колонки — что значат ступени балла, с примером."""
+    """Линейки на утверждение: строка: критерий, колонки: что значат ступени балла, с примером."""
     bands = rubrics["bands"]
     rows: list[list[Any]] = [["Профиль", "Критерий", *(band["label"] for band in bands), "Примечание", "Решение",
                               "Комментарий эксперта"]]

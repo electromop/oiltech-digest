@@ -1,7 +1,7 @@
 """Общее для тестов пути «отметить → собрать → выгрузить» (решение владельца 29.09).
 
 Пользователь продукта с запросами экрана, статьи и карточки радара на настоящей базе,
-фикстуры выпуска, Chromium и «молчащего» хоста картинок. Сами тесты —
+фикстуры выпуска, Chromium и «молчащего» хоста картинок. Сами тесты:
 test_digest_user_path.py (сборка) и test_digest_user_export.py (выгрузка).
 """
 
@@ -24,7 +24,7 @@ from oiltech_digest.processing import digest as digest_module
 MSK = feed_window.MSK
 SEPT = "2026-09"
 THEME = "Бурение и заканчивание скважин"
-# Темы выпуска в формате эксперта (#161) — корневые теги заказчика (13 тематик), как на проде.
+# Темы выпуска в формате эксперта (#161): корневые теги заказчика (13 тематик), как на проде.
 MARKET = "Рынок, бизнес-модели, сервисные модели, партнёрства и M&A"
 DRILLING = "Бурение, направленное бурение, буровые растворы и буровое оборудование"
 ENERGY = "Энергетика и промышленные энергосистемы"
@@ -186,7 +186,7 @@ def add_signal(key: str, *, first_seen: datetime, score: float = 75, maturity: s
             (first_seen, first_seen, first_seen, signal_id),
         )
         # Ссылка найдена вместе с карточкой. Часы базы не заморожены: без этого у сентябрьской
-        # карточки ссылка числилась бы найденной в день прогона тестов (после 05.10 — после
+        # карточки ссылка числилась бы найденной в день прогона тестов (после 05.10: после
         # закрытия сентября), и выбор ссылки закрытого выпуска зависел бы от даты прогона.
         conn.execute("UPDATE signal_evidence SET created_at = %s WHERE signal_id = %s", (first_seen, signal_id))
         conn.commit()
@@ -219,7 +219,7 @@ def set_card(signal_id: int, **fields) -> None:
 
 def breakdown(profile: str, *scores: float | None, ids_from: int = 1) -> dict:
     """Разбивка балла по пяти критериям профиля, как её пишет «Карточка»: снимок набора на момент оценки (имена и веса
-    набора эксперта) и баллы по критериям; None — «Свежесть» без даты события, в итог не входит."""
+    набора эксперта) и баллы по критериям; None: «Свежесть» без даты события, в итог не входит."""
     from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
     preset = SCORING_PRESETS["customer"][profile]
@@ -232,7 +232,7 @@ def breakdown(profile: str, *scores: float | None, ids_from: int = 1) -> dict:
 
 
 def pdf_content(count: int, images: dict[int, str]) -> dict:
-    """Готовый выпуск для рендера без базы: count карточек, картинки — у номеров из images."""
+    """Готовый выпуск для рендера без базы: count карточек, картинки: у номеров из images."""
     news = [
         {
             "category": ("Бурение", "Добыча", "Цифровизация", "Рынок")[n % 4],
@@ -264,13 +264,13 @@ def pdf_content(count: int, images: dict[int, str]) -> dict:
 
 @pytest.fixture()
 def issue(isolated_db, monkeypatch, tmp_path):
-    """Трое: аналитик, его коллега и админ. Часы окна — 29.09 12:00 МСК: сентябрь открыт,
-    август — архив."""
+    """Трое: аналитик, его коллега и админ. Часы окна: 29.09 12:00 МСК: сентябрь открыт,
+    август: архив."""
     monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 9, 29, 12, 0))
-    # Выгрузка — фоновой задачей, но исполняем её в тесте сами, без пула потоков.
+    # Выгрузка: фоновой задачей, но исполняем её в тесте сами, без пула потоков.
     monkeypatch.setattr(config, "BACKGROUND_JOB_INLINE", False)
     monkeypatch.setattr(digest_module, "EXPORTS_DIR", tmp_path)
-    # DOCX тянет картинки статей из сети — в тесте сети нет.
+    # DOCX тянет картинки статей из сети: в тесте сети нет.
     monkeypatch.setattr(digest_module, "_fetch_docx_image", lambda url, timeout=8: None)
     analyst = int(repository.create_user("analyst@example.test", "long-enough-password", "user")["id"])
     colleague = int(repository.create_user("colleague@example.test", "long-enough-password", "user")["id"])
@@ -301,7 +301,7 @@ def issue(isolated_db, monkeypatch, tmp_path):
 
 @pytest.fixture(scope="module")
 def chromium():
-    """Есть ли Chromium — проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
+    """Есть ли Chromium: проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
     probe = ("from playwright.sync_api import sync_playwright\n"
              "with sync_playwright() as pw:\n"
              "    pw.chromium.launch(headless=True, args=['--no-sandbox']).close()\n")
@@ -315,7 +315,7 @@ def chromium():
 
 @pytest.fixture()
 def silent_image_host():
-    """Хост картинки, который принимает соединение и молчит — как недоступный с ядра сайт."""
+    """Хост картинки, который принимает соединение и молчит: как недоступный с ядра сайт."""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", 0))
@@ -338,7 +338,7 @@ def silent_image_host():
 
 
 class _Refuse(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 — имя задаёт http.server
+    def do_GET(self) -> None:  # noqa: N802: имя задаёт http.server
         self.send_response(403)
         self.end_headers()
 
@@ -348,7 +348,7 @@ class _Refuse(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def refusing_image_host():
-    """Хост картинки, который сразу отвечает 403 — как сайт, закрытый для РФ-адресов."""
+    """Хост картинки, который сразу отвечает 403: как сайт, закрытый для РФ-адресов."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Refuse)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}"

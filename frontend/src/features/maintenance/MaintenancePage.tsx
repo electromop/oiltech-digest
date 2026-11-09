@@ -150,7 +150,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
           <div className="externalQueueList" aria-label="Воркеры NL">
             <div className="metaLabel">Воркеры NL — у ядра контракт {status.external_queues.contract ?? "—"}</div>
             {status.external_queues.consumers.map((consumer) => {
-              // Правило одно — на ядре (lanes.consumer_mismatch): давно пропавший воркер не красим.
+              // Правило одно: на ядре (lanes.consumer_mismatch): давно пропавший воркер не красим.
               const mismatch = Boolean(consumer.mismatch);
               return (
                 <div
@@ -220,7 +220,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
             <input value={String(status?.retention.stale_minutes ?? "—")} readOnly />
           </label>
           <div className="maintenanceActions">
-            {/* Очистка необратима — опасная кнопка, красный контур, а не синяя заливка «главного действия». */}
+            {/* Очистка необратима: опасная кнопка, красный контур, а не синяя заливка «главного действия». */}
             <button type="button" className="dangerButton" onClick={() => void handleCleanup()} disabled={running}>
               {running ? "Выполняем..." : "Запустить очистку"}
             </button>
