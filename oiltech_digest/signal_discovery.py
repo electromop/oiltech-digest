@@ -843,7 +843,7 @@ def _trial_own_links(cluster: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
 def _merge_trial_duplicate(candidate: dict[str, Any], stored_keys: dict[str, int],
                            found_again_keys: dict[str, int | None]) -> bool:
     """Дубль в пробном прогоне (#138): его ссылки: в главную находку этого прогона; дубль сигнала платформы или
-    главной, которая сама оказалась сигналом платформы,: найден снова (found_again_id), сигнал прогон не трогает.
+    главной, которая сама оказалась сигналом платформы, найден снова (found_again_id), сигнал прогон не трогает.
     Главная не записана по другой причине (её ссылки собрал сбор, пока шёл прогон): False, и дубль со своей ссылкой
     пишется сам и идёт в «Отбор»."""
     signal = candidate["signal"]
@@ -1036,7 +1036,7 @@ def _merge_duplicate(
 
 def discover_signals(config: SignalDiscoveryConfig) -> dict[str, Any]:
     """Прогон целиком на ядре (CLI, локальная очередь, тесты). Настройки поиска GPT, которых нет в конфиге разовой
-    команды,, настройки ядра (#138): прогон идёт там же, где они заданы."""
+    команды, настройки ядра (#138): прогон идёт там же, где они заданы."""
     config = replace(
         config,
         research_model=config.research_model or app_config.SIGNAL_RESEARCH_MODEL,
@@ -1443,7 +1443,7 @@ def _topic_web_evidence(
 
 def _split_collected(events: list[dict[str, Any]], collected: set[str] | frozenset[str],
                      ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Находки поиска, чья ссылка уже есть в статьях сбора (#138),, не новые материалы: (новые, уже собранные).
+    """Находки поиска, чья ссылка уже есть в статьях сбора (#138), не новые материалы: (новые, уже собранные).
     Ключ: тот же, что у статьи сбора (normalize.url_key): другое написание адреса: тот же материал."""
     if not collected:
         return events, []

@@ -84,7 +84,8 @@ def font_faces() -> str:
     """@font-face шрифта бренда в base64: рендер не зависит от шрифтов ОС. Файлы с сервера (brand_fonts); нет файла,
     нет и правила, и печать берёт запасной шрифт из списка семейства в _CSS."""
     faces = []
-    for name, (family, weight) in brand_fonts.FILES.items():
+    for name in brand_fonts.PRINT:
+        family, weight = brand_fonts.FILES[name]
         path = brand_fonts.font_path(name)
         if path is not None:
             faces.append(
@@ -356,67 +357,68 @@ def _css(document: dict) -> str:
     name = _css_string((document.get("name") or "").upper())
     month = _css_string(document.get("month_label") or "")
     # Месяц первым: название (его правит админ) может содержать «%MONTH%», месяц (его пишет код): нет.
-    return _CSS.replace("%MONTH%", month).replace("%NAME%", name)
+    css = _CSS.replace("%SANS%", brand_fonts.SANS_STACK).replace("%CONDENSED%", brand_fonts.CONDENSED_STACK)
+    return css.replace("%MONTH%", month).replace("%NAME%", name)
 
 
 _CSS = """
 @page{size:A4;margin:21mm 16.6mm 15mm 16.6mm;
-  @top-left{content:%NAME%;font:700 8.2pt 'Brand Sans',Arial,sans-serif;letter-spacing:.05em;color:#00469d;
+  @top-left{content:%NAME%;font:700 8.2pt %SANS%;letter-spacing:.05em;color:#00469d;
     vertical-align:bottom;padding-bottom:2.2mm;margin-bottom:4mm;border-bottom:.6pt solid #d5dfeb;}
-  @top-right{content:%MONTH%;font:400 8.2pt 'Brand Sans',Arial,sans-serif;color:#56677e;text-align:right;
+  @top-right{content:%MONTH%;font:400 8.2pt %SANS%;color:#56677e;text-align:right;
     vertical-align:bottom;padding-bottom:2.2mm;margin-bottom:4mm;border-bottom:.6pt solid #d5dfeb;}
-  @bottom-right{content:counter(page) " / " counter(pages);font:700 8.2pt 'Brand Sans',Arial,sans-serif;color:#00469d;}
+  @bottom-right{content:counter(page) " / " counter(pages);font:700 8.2pt %SANS%;color:#00469d;}
 }
 @page :first{margin:0 0 15mm 0;@top-left{content:none;border:none;}@top-right{content:none;border:none;}
   @bottom-right{padding-right:16.6mm;color:#56677e;font-weight:400;}}
-html{font-family:'Brand Sans',Arial,sans-serif;color:#1b2432;-webkit-print-color-adjust:exact;
+html{font-family:%SANS%;color:#1b2432;-webkit-print-color-adjust:exact;
   font-kerning:none;font-variant-ligatures:none;hyphens:manual;}
 body{margin:0;}
 a{color:inherit;text-decoration:none;}
 .cover{height:282mm;display:flex;flex-direction:column;overflow:hidden;}
 .masthead{flex:0 0 17mm;display:flex;justify-content:space-between;align-items:center;padding:0 12mm;background:#fff;}
 .logo{display:block;flex:0 0 auto;height:11.6mm;width:auto;max-width:90mm;}
-.unit{font:700 12pt 'Brand Sans',Arial,sans-serif;letter-spacing:.03em;text-transform:uppercase;color:#003da6;}
+.unit{font:700 12pt %SANS%;letter-spacing:.03em;text-transform:uppercase;color:#003da6;}
 .hero{position:relative;flex:0 0 auto;}
 .banner{display:block;width:210mm;height:auto;max-height:120mm;object-fit:cover;}
 .tab{position:absolute;left:12mm;top:0;min-width:41mm;height:12.6mm;padding:0 4mm;box-sizing:border-box;
   background:#ff5600;border-radius:0 0 3mm 3mm;display:flex;align-items:center;justify-content:center;
-  font:700 14pt 'Brand Sans',Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:#fff;}
+  font:700 14pt %SANS%;letter-spacing:.04em;text-transform:uppercase;color:#fff;}
 .cover-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:space-between;
   padding:5mm 16.6mm 3mm 16.6mm;}
 .intro{font-size:11.8pt;line-height:1.38;text-align:justify;margin:0;min-height:0;overflow:hidden;}
-.hl-title{font:700 12.5pt 'Brand Sans',Arial,sans-serif;letter-spacing:.03em;text-transform:uppercase;color:#00469d;margin:0 0 1.5mm;}
+.hl-title{font:700 12.5pt %SANS%;letter-spacing:.03em;text-transform:uppercase;color:#00469d;margin:0 0 1.5mm;}
 .hl{display:flex;gap:6mm;padding:2.2mm 0;border-bottom:.8pt solid #d5dfeb;}
-.hl-label{flex:0 0 42mm;font:700 13.5pt/1.3 'Brand Sans',Arial,sans-serif;color:#00469d;}
+.hl-label{flex:0 0 42mm;font:700 13.5pt/1.3 %SANS%;color:#00469d;}
 .hl-text{flex:1;font-size:12.5pt;line-height:1.38;text-align:justify;}
 .radar{display:flex;gap:6mm;align-items:center;padding:3.6mm 5.5mm 2.4mm;border:.8pt solid #dce2ea;border-radius:9px;}
 .radar-body{flex:1;}
-.radar-title{font:700 12pt 'Brand Sans',Arial,sans-serif;color:#00469d;margin:0 0 2.4mm;}
+.radar-title{font:700 12pt %SANS%;color:#00469d;margin:0 0 2.4mm;}
 .rr{display:flex;gap:4mm;font-size:10.8pt;line-height:1.32;margin:0 0 1.6mm;}
 .rr b{flex:0 0 29mm;}
 .rr a{color:#00469d;font-weight:700;white-space:nowrap;}
 .qr{flex:0 0 auto;text-align:center;font-size:10pt;color:#1b2432;}
 .qr img{display:block;width:31mm;margin:0 auto 1.6mm;}
 .list{break-before:page;}
-.sec-num{font:700 8.5pt 'Brand Sans',Arial,sans-serif;color:#ff5600;margin:0 0 1mm;}
-h1{font:700 29pt/1.1 'Brand Sans Condensed','Arial Narrow',Arial,sans-serif;color:#00469d;margin:0 0 4mm;}
+.sec-num{font:700 8.5pt %SANS%;color:#ff5600;margin:0 0 1mm;}
+h1{font:700 29pt/1.1 %CONDENSED%;color:#00469d;margin:0 0 4mm;}
 .card{border:.8pt solid #c5d7ec;border-radius:7px;padding:2.6mm 4mm 2mm;margin:0 0 2.4mm;break-inside:avoid;}
 .top{display:flex;gap:4mm;align-items:flex-start;margin:0 0 1.4mm;}
 .side{flex:0 0 44mm;}
 .side .read{display:block;margin:1.6mm 0 0;}
 .pic{width:44mm;height:33mm;object-fit:cover;border-radius:4px;display:block;}
 .txt{flex:1;min-width:0;}
-.rub{font:700 8.5pt 'Brand Sans',Arial,sans-serif;color:#ff5600;margin:0 0 1.2mm;}
-.title{display:block;font:700 16pt/1.1 'Brand Sans Condensed','Arial Narrow',Arial,sans-serif;color:#00469d;margin:0 0 1.3mm;}
+.rub{font:700 8.5pt %SANS%;color:#ff5600;margin:0 0 1.2mm;}
+.title{display:block;font:700 16pt/1.1 %CONDENSED%;color:#00469d;margin:0 0 1.3mm;}
 .sum{font-size:10.5pt;line-height:1.29;text-align:justify;margin:0;}
 .hyp{margin:0 0 1.6mm;}
-.hyp-label{font:700 8.5pt 'Brand Sans',Arial,sans-serif;color:#00469d;margin:0 0 .5mm;}
-.hyp-text{font:700 10.5pt/1.29 'Brand Sans',Arial,sans-serif;color:#00469d;margin:0;}
-.read{font:700 8.3pt 'Brand Sans',Arial,sans-serif;color:#ff5600;}
+.hyp-label{font:700 8.5pt %SANS%;color:#00469d;margin:0 0 .5mm;}
+.hyp-text{font:700 10.5pt/1.29 %SANS%;color:#00469d;margin:0;}
+.read{font:700 8.3pt %SANS%;color:#ff5600;}
 .crit{width:100%;border-collapse:collapse;table-layout:fixed;margin:1.4mm 0 0;}
-.crit th{font:400 6.4pt/1.12 'Brand Sans',Arial,sans-serif;color:#56677e;text-align:left;vertical-align:bottom;padding:1mm 1.6mm .5mm;
+.crit th{font:400 6.4pt/1.12 %SANS%;color:#56677e;text-align:left;vertical-align:bottom;padding:1mm 1.6mm .5mm;
   border-top:.6pt solid #d5dfeb;border-left:.6pt solid #d5dfeb;}
-.crit td{font:700 9.6pt 'Brand Sans',Arial,sans-serif;color:#1b2432;padding:.2mm 1.6mm .2mm;border-left:.6pt solid #d5dfeb;}
+.crit td{font:700 9.6pt %SANS%;color:#1b2432;padding:.2mm 1.6mm .2mm;border-left:.6pt solid #d5dfeb;}
 .crit th:first-child,.crit td:first-child{border-left:none;padding-left:0;}
 .crit td.muted{font-weight:400;font-size:8.5pt;color:#56677e;}
 .crit td.rel{color:#00469d;}

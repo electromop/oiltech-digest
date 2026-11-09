@@ -83,8 +83,8 @@ def test_days_are_moscow_calendar_days_like_the_last_load_column(isolated_db, mo
     """«7 дн. назад» ⇔ «Требует внимания», «6 дн. назад» ⇔ «Работает штатно».
 
     Новый день начинается в 00:00 МСК = 21:00 UTC. Загрузка 22.09 в 00:00 МСК: в 23:59 МСК
-    28.09-6 дней, штатно; минутой позже, в 00:00 МСК 29.09,: 7 дней, требует внимания.
-    Загрузка минутой раньше, 21.09 в 23:59 МСК,, тот же день по UTC, но другой по Москве:
+    28.09, 6 дней, штатно; минутой позже, в 00:00 МСК 29.09, 7 дней, требует внимания.
+    Загрузка минутой раньше, 21.09 в 23:59 МСК, тот же день по UTC, но другой по Москве:
     в 23:59 МСК 28.09 это уже 7 дней, хотя прошло ровно 7 × 24 ч и скользящее окно считало
     источник штатным. Экран для тех же моментов показывает те же числа: sourceUtils.test.ts,
     «counts days by the Moscow calendar».
@@ -119,7 +119,7 @@ def test_cli_source_health_and_source_retry_use_the_same_rule(silent_sources, mo
     assert "stale_days=7" in header
     assert "stale=1" in header and "ok=1" in header
 
-    # source-retry форсирует сбор только у тех, кто требует внимания,: не у молчащих 5 дней.
+    # source-retry форсирует сбор только у тех, кто требует внимания, не у молчащих 5 дней.
     retried: list[int] = []
     monkeypatch.setattr(
         "oiltech_digest.ingestion.rss_parser.parse_all",

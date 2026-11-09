@@ -49,7 +49,7 @@ def _playwright_proxy_for(url: str) -> dict[str, str] | None:
     """Прокси в playwright-формате ({server, username, password}) для URL, или None.
 
     Переиспользует логику http_client (PROXY_HOST_OVERRIDES имеет приоритет над
-    глобальным PROXY_URL): через прокси идут только хосты из overrides это и есть
+    глобальным PROXY_URL): через прокси идут только хосты из overrides: это и есть
     точечный канал для Hard-WAF (Cloudflare/Akamai), чтобы не гонять платный
     резидентский трафик для всех playwright-источников. Headless Chromium с
     резидентским IP нужен сайтам, блокирующим и по JS-challenge, и по IP-репутации.
@@ -94,7 +94,7 @@ def with_base_href(html_text: str, final_url: str) -> str:
     Относительные ссылки браузер разрешает от адреса, на котором страница оказалась
     после переадресации, а разбор листинга: от адреса из настройки. У CNOOC лента
     `/zxzx/gsxw/` скриптом уходит на `/zxzx/gsxw/gsxw/`, ссылки на ней вида
-    `./202609/t….html`, и парсер собирал адреса без одного звена пути: все 404.
+    `./202609/t….html`: и парсер собирал адреса без одного звена пути: все 404.
     Если `<base>` на странице уже есть: не трогаем, он главнее.
     """
     if not final_url or re.search(r"<base\s", html_text[:20000], re.I):
@@ -349,7 +349,7 @@ def render_listing_candidates(source: dict, listing_url: str, limit: int = REQUE
     """Отрисовать листинг и извлечь кандидатов; пусто: ещё раз с ожиданием дольше.
 
     Единственное место этой логики: ядро, NL-воркер и диагностика зовут её, а не свою
-    копию,: иначе одна из копий снова останется без повтора.
+    копию, иначе одна из копий снова останется без повтора.
     """
     from oiltech_digest.ingestion.request_parser import extract_candidate_links
 

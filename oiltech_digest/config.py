@@ -77,7 +77,7 @@ AI_EXECUTION_REGION = os.environ.get("AI_EXECUTION_REGION", "ru").strip().lower(
 # Пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод заголовков):
 # своей полосой external-ai-bulk, чтобы не стоять перед потоком дня (18.09: 28 пакетов
 # пересчёта задержали обычную обработку на 4,5 ч). Включать, только когда на NL поднят
-# воркер этой очереди,: иначе задачи будут ждать (сторож очередей это покажет).
+# воркер этой очереди, иначе задачи будут ждать (сторож очередей это покажет).
 AI_BULK_LANE_ENABLED = os.environ.get("AI_BULK_LANE_ENABLED", "0").lower() in {"1", "true", "yes"}
 FETCH_EXTERNAL_ENABLED = os.environ.get("FETCH_EXTERNAL_ENABLED", "0").lower() in {"1", "true", "yes"}
 EXTERNAL_WORKER_TOKEN_HASH = os.environ.get("EXTERNAL_WORKER_TOKEN_HASH", "").strip()
@@ -120,7 +120,7 @@ EXTERNAL_WORKER_STOP_GRACE_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_
 EXTERNAL_WORKER_STOP_STEP_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_STEP_SECONDS", "60"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
-# PROXY_URL, полная строка подключения: "http://user:pass@host:port"
+# PROXY_URL: полная строка подключения: "http://user:pass@host:port"
 # (у 2captcha HTTP/HTTPS-прокси с авторизацией порт обычно 8080).
 # Если переменная задана, ВЕСЬ парсинг (RSS discovery, ленты, full-text статей)
 # идёт через прокси. Пусто (по умолчанию): прямые запросы, как при локальной
@@ -255,7 +255,7 @@ SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
 SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS = int(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS", "8"))
 # Добор страниц находок (ingestion/publisher_page.py, поручение владельца 04.11): браузер на NL после
 # запроса и ядра РФ: выключатель на случай нехватки памяти NL (Chromium в контейнере агентов); предел размера
-# страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11-11 МБ).
+# страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11: 11 МБ).
 SIGNAL_PAGE_BROWSER_ENABLED = os.environ.get("SIGNAL_PAGE_BROWSER_ENABLED", "1").lower() in {"1", "true", "yes"}
 SIGNAL_PAGE_MAX_BYTES = int(os.environ.get("SIGNAL_PAGE_MAX_BYTES", str(15 * 1024 * 1024)))
 # Откуда брать темы радара: tags, корневые тематики заказчика (пункт 12), table:
@@ -263,7 +263,7 @@ SIGNAL_PAGE_MAX_BYTES = int(os.environ.get("SIGNAL_PAGE_MAX_BYTES", str(15 * 102
 SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").strip().lower()
 # Сколько пар «одно ли событие» судит дедуп радара за прогон (signal_dedup). Едет
 # воркеру в снимке задачи: менять можно без пересборки NL. С сигналами ленты в снимке (04.11) пар
-# больше: замер прогона 51351-135 пар ленты на 24 находки; судья gpt-6-luna: $0,00011 за пару.
+# больше: замер прогона 51351: 135 пар ленты на 24 находки; судья gpt-6-luna: $0,00011 за пару.
 SIGNAL_DEDUP_MAX_PAIRS = int(os.environ.get("SIGNAL_DEDUP_MAX_PAIRS", "1000"))
 # Карточка, чьё событие (дата судьи прежней цепочки или «Карточки») старше этого срока, на экран не выходит.
 # Хранится: срок можно поменять без пересчёта. 0: не скрывать по возрасту.
@@ -383,7 +383,7 @@ BRAND_FONTS_DIR = os.environ.get("BRAND_FONTS_DIR", "").strip()
 
 # --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
 # Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
-# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09-5; 05.10:
+# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09: 5; 05.10:
 # 11: прошлый месяц открыт по 10-е число включительно (сентябрь: по 10 октября).
 # Держим в пределах 1..28: 1: прошлый месяц не виден никогда, больше 28: виден
 # почти всегда, и окно перестаёт быть окном.

@@ -3,7 +3,7 @@ import { listArticles, updateArticle } from "../../api/articles";
 import { editIssueMaterial, updateSignal } from "../../api/signals";
 import { getDigestContent, getMonthlyDigest, saveIssueHighlight, updateMonthlyDigest } from "../../api/digest";
 import type { Article, DigestContent, DigestMaterial, DigestSectionKey, IssueMaterialPatch, MonthlyDigestDraft } from "../../api/types";
-import { monthLabel, useFeedWindow } from "../articles/feedWindow";
+import { monthLabel, useFeedWindow } from "../shared/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 import { DigestArchive } from "./DigestArchive";
 import { exportDigestFile, type DigestExportFormat } from "./digestExport";
@@ -292,7 +292,7 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
     return map;
   }, [digestPreview]);
   // Материал, как он выйдет в выпуске (состав на сервере): плашка «Технология / Бизнес» и суть, сжатая под площадь
-  // карточки выпуска,: очередь показывает то же, что уйдёт в PDF.
+  // карточки выпуска, очередь показывает то же, что уйдёт в PDF.
   const issueItems = useMemo(() => {
     const map = new Map<number, IssueItem>();
     for (const item of exportPreviewItems) {

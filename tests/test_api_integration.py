@@ -1330,7 +1330,7 @@ def test_saving_incomplete_tag_list_is_refused(isolated_db):
     app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "g@e.ru", "role": "admin"}
     try:
         client = TestClient(app)
-        # Прислали один тег вместо шести это выключило бы пять из шести.
+        # Прислали один тег вместо шести: это выключило бы пять из шести.
         response = client.put("/api/tags", json=[
             {"id": None, "parent_name": None, "name": "Тема 1", "name_en": None,
              "description": None, "keywords_json": None, "keywords_en_json": None,
@@ -1401,7 +1401,7 @@ def test_system_tag_survives_save_and_delete(isolated_db):
             ).fetchone()[0]
         assert still_on is True, "приёмник обязан пережить сохранение без него в списке"
 
-        # И удалить его руками тоже нельзя это не тематика.
+        # И удалить его руками тоже нельзя: это не тематика.
         deleted = client.delete(f"/api/tags/{system_id}")
         assert deleted.status_code == 400, deleted.text
         assert "служебный приёмник" in deleted.json()["detail"]

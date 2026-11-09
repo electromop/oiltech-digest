@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getFeedWindow } from "../../api/stats";
-import type { FeedWindowInfo, FeedWindowPayload } from "../../api/types";
+import type { FeedWindowPayload } from "../../api/types";
 
 // Окно месяца на фронте: подписи и загрузка списка месяцев. Само правило живёт на сервере
 // (oiltech_digest/feed_window.py; ADR 0001: lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
@@ -37,32 +37,12 @@ const MONTHS = [
   "январь", "февраль", "март", "апрель", "май", "июнь",
   "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
 ];
-const MONTHS_GENITIVE = [
-  "января", "февраля", "марта", "апреля", "мая", "июня",
-  "июля", "августа", "сентября", "октября", "ноября", "декабря",
-];
 
 // «2026-08» → «август 2026». Незнакомый формат возвращается как есть.
 export function monthLabel(month: string): string {
   const match = /^(\d{4})-(\d{2})$/.exec(month);
   const name = match ? MONTHS[Number(match[2]) - 1] : undefined;
   return match && name ? `${name} ${match[1]}` : month;
-}
-
-// Какие месяцы открыты и до какого числа виден прошлый.
-export function windowPeriodText(feedWindow: FeedWindowInfo | null | undefined): string {
-  if (!feedWindow || !feedWindow.months.length) return "";
-  const first = feedWindow.months[0];
-  const last = feedWindow.months[feedWindow.months.length - 1];
-  if (first === last) return `Показан ${monthLabel(first)}. Прошлые месяцы — в архиве, только для просмотра.`;
-  const firstName = MONTHS[Number(first.slice(5, 7)) - 1] ?? first;
-  const lastGenitive = MONTHS_GENITIVE[Number(last.slice(5, 7)) - 1] ?? last;
-  // Смена окна, в 00:00 МСК дня rollover_day: последний открытый день прошлого месяца: накануне.
-  return `Показаны ${monthLabel(first)} и ${monthLabel(last)}: ${firstName} виден по ${feedWindow.rollover_day - 1} ${lastGenitive} включительно, пока собирается его выпуск.`;
-}
-
-export function archiveNoticeText(month: string): string {
-  return `Архив за ${monthLabel(month)} — только просмотр: статус и отметку «в дайджест» здесь не поменять.`;
 }
 
 // Подсказка у неактивной «В дайджест» / «Убрать» карточки радара закрытого месяца (решение

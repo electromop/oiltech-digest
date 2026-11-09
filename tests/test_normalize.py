@@ -120,7 +120,7 @@ def test_strip_emoji_drops_modifiers_but_keeps_base_glyph():
     """VS16/ZWJ/тон кожи уходят всегда; базовый текстовый символ остаётся читаемым."""
     assert normalize.strip_emoji("Итоги ⚠️ риски") == "Итоги ⚠ риски"
     assert normalize.strip_emoji("1️⃣ Первый пункт") == "1 Первый пункт"
-    assert normalize.strip_emoji("Команда 👨\u200d👩\u200d👧\u200d👦 и 👍🏽 результат") == (
+    assert normalize.strip_emoji("Команда 👨‍👩‍👧‍👦 и 👍🏽 результат") == (
         "Команда и результат"
     )
 

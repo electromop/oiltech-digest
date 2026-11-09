@@ -245,7 +245,7 @@ def country_region(items: list[dict[str, Any]], cards: Finals, countries: Any) -
 
 def baseline(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, float]],
              control: Mapping[str, Any]) -> dict[str, Any]:
-    """То, с чем сравнивается модель,, без её ответов: константа (самая частая ступень и тема эксперта, его среднее по
+    """То, с чем сравнивается модель, без её ответов: константа (самая частая ступень и тема эксперта, его среднее по
     критерию), эксперт сам с собой (итог по весам из его баллов) и контроль с ядра (балл и тег ленты, балл и тема
     судьи): на строках пакета, контроль: где он есть."""
     pack = [row for row in rows if not row["extra"]]

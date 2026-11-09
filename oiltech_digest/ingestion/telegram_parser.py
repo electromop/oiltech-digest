@@ -104,7 +104,7 @@ def post_steps(source: dict, posts: list[TelegramPost], max_age_days: int | None
 
     Единственная реализация: parse_source вставляет READY, проба источника
     (`source-probe`) печатает вердикты. Последний пост прошлого сбора останавливает
-    просмотр: он и всё, что ниже,: KNOWN, сбор их не смотрит.
+    просмотр: он и всё, что ниже, KNOWN, сбор их не смотрит.
     """
     cutoff = verdicts.old_cutoff(source, max_age_days)
 

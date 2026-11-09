@@ -193,7 +193,7 @@ def monthly_analytics(months: int = 6, *, include_cost: bool = False, top_source
     """Всё для экрана одним ответом: месяцы подряд (пустые: нулями), тот же период
     прошлого месяца для честной дельты, темы, главные источники, цели из презентации.
 
-    include_cost, стоимость ИИ только администратору: это коммерческая сторона."""
+    include_cost: стоимость ИИ только администратору: это коммерческая сторона."""
     months = max(1, min(int(months), 24))
     now_local = datetime.now(ZoneInfo(TZ))
     keys = _month_keys(now_local, max(months, 2))

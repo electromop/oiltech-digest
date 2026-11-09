@@ -196,7 +196,7 @@ def test_worker_fill_keeps_teaser_when_page_body_belongs_to_another_article(monk
 
     filled = external_fetch._fill_bodies_from_source({"id": 1}, recs)
 
-    # Прежде тело бралось, если оно просто длиннее анонса,: без проверки принадлежности.
+    # Прежде тело бралось, если оно просто длиннее анонса, без проверки принадлежности.
     assert filled[0]["raw_text"] == teaser
 
 

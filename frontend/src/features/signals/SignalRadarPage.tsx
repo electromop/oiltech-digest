@@ -21,7 +21,7 @@ import type {
   SignalTile,
 } from "../../api/signals";
 import type { Signal, SignalEvidence, SignalFeedbackBlock, SignalFeedbackPayload } from "../../api/types";
-import { radarDigestLockedText } from "../articles/feedWindow";
+import { radarDigestLockedText } from "../shared/feedWindow";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
@@ -553,7 +553,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
-      // 409, месяц карточки закрылся, пока экран был открыт (день смены окна): выборка заново,
+      // 409: месяц карточки закрылся, пока экран был открыт (день смены окна): выборка заново,
       // чтобы кнопка погасла по признаку сервера, а не ждала «Обновить».
       if (error instanceof ApiError && error.status === 409) reload({ keepLoaded: true });
     } finally {

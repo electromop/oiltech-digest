@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS sources (
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
 -- Естественный ключ: бренд может иметь несколько каналов (сайт + Telegram) с одним
--- именем, но разным типом это разные источники. Поэтому уникальность по (name, source_type).
+-- именем, но разным типом: это разные источники. Поэтому уникальность по (name, source_type).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_name_type ON sources(name, source_type);
 CREATE INDEX IF NOT EXISTS idx_sources_enabled_strategy ON sources(enabled, parse_strategy);
 
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_sources_archived_at ON sources(archived_at) WHERE
 
 -- Дата начала сбора (решение владельца 06.11): статью, опубликованную раньше, сбор не берёт (рубеж OLD у всех
 -- стратегий, `verdicts.old_cutoff`). Новому источнику база ставит дату на две недели раньше заведения, каким бы путём
--- он ни заводился (экран «Источники», агент источников, Excel), чтобы подключение не тащило архив ленты в «Отбор»:
+-- он ни заводился (экран «Источники», Excel), чтобы подключение не тащило архив ленты в «Отбор»:
 -- ФИПС 06.11 принёс 264 статьи с 2017 года, свежих среди них 27. Повторное заведение (ON CONFLICT) дату не трогает.
 -- NULL: без границы, так у источников, заведённых до колонки. Нужен архив: UPDATE sources SET collect_since = NULL.
 -- Колонка без значения по умолчанию, затем значение для новых строк: иначе now() легло бы и на прежние источники.
@@ -1053,7 +1053,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_del
 -- замер прода 13.09, за 90 дней 940 лишних статей, три причины поимённо:
 --   ?from=main_lines_11 против ?from=newsfeed (РБК): query-хвосты
 --   http:// против https://            (Ростех): схема
---   /topics/x против /topics/x/        (Wood Mackenzie)— хвостовой слэш
+--   /topics/x против /topics/x/        (Wood Mackenzie): хвостовой слэш
 -- Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку:
 -- ровно то, на что жаловался заказчик 08.09 («все 4 новости об одном»).
 -- Ключ = host+path без схемы, www и слэша + значимый query (normalize.url_key).

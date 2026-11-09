@@ -43,7 +43,7 @@ def rules(themes: list[str]) -> list[str]:
 
 
 def candidates(text: str, tags: list[dict[str, Any]]) -> list[str]:
-    """До трёх тематик, чьи ключи (свои и подтегов, русские и английские) нашлись в тексте,: больше совпадений
+    """До трёх тематик, чьи ключи (свои и подтегов, русские и английские) нашлись в тексте, больше совпадений
     выше, при равенстве по порядку справочника. Совпадение: целым словом, как у темы радара."""
     from oiltech_digest.signal_discovery import (_contains_negative_keyword, _dedupe, _flatten_tag_values,
                                                  _norm_match_text, _select_topic_tags)

@@ -126,7 +126,7 @@ def test_prefilter_ignores_too_short_tag_keywords(monkeypatch):
 
 
 def test_prefilter_stop_words_block_article(monkeypatch):
-    """Стоп-слова тематик реально отбивают статью это то новое, что теги дают
+    """Стоп-слова тематик реально отбивают статью: это то новое, что теги дают
     предфильтру (он разрешительный, позитивные слова меняют исход редко)."""
     from oiltech_digest.db import repository
 

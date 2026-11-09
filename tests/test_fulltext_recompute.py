@@ -25,7 +25,7 @@ from oiltech_digest.processing.openai_client import AIResponse
 AUTH = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}
 STAGES = ["summary"]
 TITLE = "Aker BP starts drilling campaign at Yggdrasil field in the North Sea"
-# Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09-183).
+# Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09: 183).
 TEASER = ("Aker BP has started a drilling campaign at the Yggdrasil field. The operator plans "
           "several wells this year, the company said in a statement on Monday, without details.")
 FULL = (

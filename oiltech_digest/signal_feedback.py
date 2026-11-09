@@ -40,7 +40,7 @@ NEGATIVE_VERDICTS = {"reject", "wrong_domain", "too_generic", "merge_duplicate",
 VERDICT_MEMORY_TYPES = ("signal_verdict", "signal_duplicate")
 # Чему учит поиск: после отказа по карточке подсказки из неё больше не нужны.
 SEARCH_MEMORY_TYPES = ("signal_query_hint", "signal_source_preference")
-# Выбор сигнала в дайджест это «Сильный сигнал» по шкале заказчика; строки памяти
+# Выбор сигнала в дайджест: это «Сильный сигнал» по шкале заказчика; строки памяти
 # помечены происхождением, чтобы снятие отметки гасило только их.
 DIGEST_SELECTION_ORIGIN = "digest_selection"
 

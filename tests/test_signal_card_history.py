@@ -72,7 +72,7 @@ def test_history_refills_only_cards_of_another_recipe_and_skips_duplicates_and_r
     for title in titles:
         feed_signal(title, TEXT, published=published(10))
     monkeypatch.setattr(signal_card, "make_client", lambda: FakeModel({title: answer() for title in titles}))
-    cli.main(["enqueue-signal-cards"])  # шаг планировщика: модель отвечает снимком с датой это та же модель
+    cli.main(["enqueue-signal-cards"])  # шаг планировщика: модель отвечает снимком с датой: это та же модель
     run_worker("external-ai")
     ids = {title: card["id"] for title, card in business(user).items()}
     with repository.get_connection() as conn:

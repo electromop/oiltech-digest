@@ -24,7 +24,7 @@ export function readableErrorMessage(text: string): string {
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers ?? {});
-  // FormData, ИСКЛЮЧЕНИЕ: Content-Type у многочастного тела содержит boundary, который
+  // FormData: ИСКЛЮЧЕНИЕ: Content-Type у многочастного тела содержит boundary, который
   // знает только браузер. Подставив здесь application/json (или даже голый
   // multipart/form-data без boundary), мы получим на сервере неразбираемое тело.
   const isMultipart = typeof FormData !== "undefined" && init.body instanceof FormData;

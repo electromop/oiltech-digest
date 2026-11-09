@@ -421,7 +421,7 @@ def test_ids_file_mistakes_are_refused(corpus, tmp_path):
     cases = {
         "unknown": (listed[:-1] + [("signal:999999", "business")], "нет среди кандидатов"),
         "not-a-candidate": ([(f"article:{sorted(corpus['not_feed'])[0]}", "useful")] + listed[1:], "нет среди кандидатов"),
-        # Доля сигнала радара, его категория: технология, записанная бизнесом,: ошибка списка.
+        # Доля сигнала радара, его категория: технология, записанная бизнесом, ошибка списка.
         "radar-stratum": ([(item, {tech: "business", business: "technology"}.get(item, stratum))
                            for item, stratum in listed], "доля не подходит"),
         "count": (listed[1:], "не те квоты"),

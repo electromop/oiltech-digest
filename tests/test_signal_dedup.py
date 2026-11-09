@@ -229,7 +229,7 @@ def test_merge_hides_repeat_counts_it_and_spares_reviewed(isolated_db):
     assert repository.mark_signal_merged(repeat, main) is False  # уже скрыта
     assert repository.mark_signal_merged(reviewed, main) is False  # вердикт эксперта: не прячем
     assert repository.mark_signal_merged(main, repeat) is False  # в свою же группу не уходит
-    # Главная, указанная через скрытую карточку,: корень группы.
+    # Главная, указанная через скрытую карточку, корень группы.
     assert repository.mark_signal_merged(later, repeat) is True
     assert repository.resolve_signal_merge_root(later) == main
 
@@ -494,7 +494,7 @@ def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_finding_for_otbor(
 
 
 def test_refound_archived_card_with_its_own_key_stays_archived(isolated_db):
-    # Тот же ключ (у одной ссылки ключ, от адреса) это она же: архив: решение человека о
+    # Тот же ключ (у одной ссылки ключ, от адреса): это она же: архив: решение человека о
     # карточке, повторная находка его не отменяет. Другой ключ: новая карточка (тест выше).
     archived = repository.upsert_signal(_signal_row("same", "Velocity Geomatics: первые данные"))
     repository.upsert_signal_evidence(archived, {"source_url": "https://a.example/1", "title": "t"})

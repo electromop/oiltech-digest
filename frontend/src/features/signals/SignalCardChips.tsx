@@ -33,7 +33,7 @@ const DATE_SET_BY_LABELS: Record<string, string> = { radar_judge: "по оцен
 type Chip = { key: string; label: string; value: string; gap: boolean };
 
 // Пробел карточки, поле заполняли (агент или человек: card_set_by), а значения нет. Поле, которое ещё
-// никто не заполнял,, не пробел: «не определено» сказало бы, что агент не смог, а он не начинал.
+// никто не заполнял, не пробел: «не определено» сказало бы, что агент не смог, а он не начинал.
 function isGap(signal: Signal, key: string, value: unknown): boolean {
   if (value === UNDEFINED) return true;
   const empty = value == null || value === "" || (Array.isArray(value) && value.length === 0);

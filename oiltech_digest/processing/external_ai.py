@@ -103,7 +103,8 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str], *, missing_onl
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access: суть и перевод заголовка принятых статей.
 
-    ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи это     продлевает lease задачи у core. Без него длинный батч на медленной модели
+    ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи: это
+    продлевает lease задачи у core. Без него длинный батч на медленной модели
     истекает по lease (600с) ещё до завершения, и задача бесконечно
     переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
     Ему передаётся итог на этот момент: если следующая статья зависнет на остановке
@@ -331,7 +332,7 @@ def apply_process_result(
 ) -> dict[str, Any]:
     """Apply an external AI result to the core database.
 
-    job_id, id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
+    job_id: id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
     (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт.
 
     only: какие стадии записать (пересчёт после полного текста, перегенерация сути, правка
@@ -490,7 +491,7 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
     from oiltech_digest.processing.reprints import resolve_primary as reprints_resolve_primary
 
     if result.get("dry_run"):
-        # Сухой прогон ничего не пишет это умолчание CLI и главный сценарий
+        # Сухой прогон ничего не пишет: это умолчание CLI и главный сценарий
         # показа заказчику перед тем, как что-то схлопывать. Расход тоже, как у радара
         # (signal_discovery.apply_discovery): токены остаются в итоге задачи.
         return {"applied": 0, "dry_run": True}

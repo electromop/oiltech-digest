@@ -1,8 +1,8 @@
 """Инструкции и JSON Schema для разбора загруженного документа.
 
 Две стадии map-reduce:
-  MAP, DOC_CHUNK_INSTRUCTIONS + DOC_CHUNK_SCHEMA: разбор ОДНОГО фрагмента;
-  REDUCE, DOC_CARD_INSTRUCTIONS + DOC_CARD_SCHEMA: карточка ВСЕГО документа из
+  MAP: DOC_CHUNK_INSTRUCTIONS + DOC_CHUNK_SCHEMA: разбор ОДНОГО фрагмента;
+  REDUCE: DOC_CARD_INSTRUCTIONS + DOC_CARD_SCHEMA: карточка ВСЕГО документа из
            результатов фрагментов.
 
 Схемы уходят в клиента с `"strict": True` (см. processing/openai_client.py), поэтому

@@ -97,9 +97,10 @@ def test_letter_and_docx_are_built_as_before_the_expert_pdf(issue):
     assert hashlib.sha256(document_xml).hexdigest() == _DOCX_BEFORE_EXPERT_PDF, "DOCX изменился"
 
 
-# Письмо снято заново 09.11 (#181): шрифт бренда с сервера, в репозитории файлов нет. Разница с прежним только в
-# шрифте (имена семейств и встроенный @font-face), сверено кодом: обратная замена даёт прежний отпечаток ff92679c.
-_LETTER_BEFORE_EXPERT_PDF = "26cb4b67cec63a5372ce83f5de4788d5097cd0455737773c95983318c400ada0"
+# Письмо снято заново 09.11 (#181): шрифт бренда с сервера, в репозитории файлов нет, и комментарии шаблона без
+# тире. Сверено кодом: обратная замена имён семейств и прежний @font-face дают прежний отпечаток ff92679c, а без
+# комментариев шаблона письмо совпадает с промежуточным 26cb4b67.
+_LETTER_BEFORE_EXPERT_PDF = "82559750ccee3dbfe30999fdf8fb1b26a40450e41026a9a9139dad01dd2a24ea"
 _DOCX_BEFORE_EXPERT_PDF = "a22e75104e8e8684dadbd7aec404fa9e40de279a180152969d2877a47131b284"
 
 
@@ -186,7 +187,7 @@ def test_pdf_shows_the_theme_placeholder_instead_of_a_refused_image(chromium, re
 
 def test_docx_spends_a_bounded_time_on_silent_article_images(silent_image_host, monkeypatch):
     """Дефект до 29.09. Картинки для Word сервер тянет сам, по одной, с таймаутом 8 с на запрос:
-    замер 29.09-40 позиций без картинок 0,1 с, две молчащие картинки из сорока: 16,2 с.
+    замер 29.09: 40 позиций без картинок 0,1 с, две молчащие картинки из сорока: 16,2 с.
     Экран ждёт документ не дольше 160 с: от двадцати молчащих картинок выгрузка на экране
     обрывалась. Теперь на все картинки общий бюджет, остальные карточки идут без картинки."""
     monkeypatch.setattr(digest_module, "_DOCX_IMAGES_BUDGET_SECONDS", 2.0)

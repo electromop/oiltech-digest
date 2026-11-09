@@ -219,7 +219,7 @@ def test_publisher_is_dropped_only_when_it_is_a_media_outlet(user, contour, monk
     # так выпадали 12 из 38 компаний эксперта на радарной части набора).
     radar_finding("fugro", "Fugro: контракт на диагностику", "Fugro has secured a marine asset integrity "
                   "contract with Woodside for offshore Australia.", publisher="Fugro")
-    # RSS, канал, а не вид издателя: так приходят и собственные новости компаний.
+    # RSS: канал, а не вид издателя: так приходят и собственные новости компаний.
     feed_signal("JOGMEC: сейсмика", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia.",
                 source="JOGMEC", source_type="RSS")
     # Журнал сообщает о чужом событии: его участником не становится.

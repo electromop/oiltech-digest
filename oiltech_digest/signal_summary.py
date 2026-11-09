@@ -73,7 +73,7 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
-    """Публикация сигнала так, как её видит этап,: поля статьи ленты (pipeline._article_prompt), публикация та же, что
+    """Публикация сигнала так, как её видит этап, поля статьи ленты (pipeline._article_prompt), публикация та же, что
     у «Отбора» (у материала: colleague_materials.as_publication); поля «Отбора»: ключами сигнала
     (pipeline.OTBOR_FIELDS). edit_title: править ли русский заголовок по правилам эксперта (решение владельца 03.11):
     у находки да, у материала нет: его заголовок написал человек."""

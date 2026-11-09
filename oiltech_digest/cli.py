@@ -1224,7 +1224,7 @@ def cmd_source_health(args: argparse.Namespace) -> None:
     # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
     if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
         raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
-    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09-3 дня).
+    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09: 3 дня).
     stale_days = config.SOURCE_STALE_DAYS if args.stale_days is None else args.stale_days
     rows = repository.source_health_report(stale_days=stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
@@ -1664,7 +1664,7 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
 
 
 def cmd_live_ai_leases(args: argparse.Namespace) -> None:
-    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть,: scripts/deploy-core.sh
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, scripts/deploy-core.sh
     тогда отказывается перезапускать ядро без --force."""
     from oiltech_digest.db import repository
 

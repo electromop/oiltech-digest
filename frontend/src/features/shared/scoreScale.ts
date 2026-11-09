@@ -8,7 +8,7 @@ export function scoreClass(score: number) {
   return "bad";
 }
 
-// Словесную оценку (score_label) красим в тот же тон, что и число,: чтобы метка и
+// Словесную оценку (score_label) красим в тот же тон, что и число, чтобы метка и
 // оценка совпадали по цвету.
 export function ratingClass(rating: string | null | undefined) {
   switch ((rating || "").trim()) {

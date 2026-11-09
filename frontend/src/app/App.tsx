@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
 import { admit, getSession, login, logout, register } from "../api/auth";
 import type { AuthResponse, User } from "../api/types";
@@ -28,17 +28,13 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   "company-description",
   // Статистика сводная (видно работу КАЖДОГО пользователя), решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
-  // require_admin: фронтовый гейт без серверного это дыра (аудит изоляции 24.07).
+  // require_admin: фронтовый гейт без серверного: это дыра (аудит изоляции 24.07).
   "statistics",
 ]);
 
 type ScreenDef = {
   id: ScreenId;
   label: string;
-  eyebrow: string;
-  title: string;
-  description: string;
-  status: string;
 };
 
 type NavGroup = {
@@ -51,95 +47,51 @@ const screens: ScreenDef[] = [
     id: "business-feed",
     // #97 (спека #93): бизнес-сигналы карточками, как радар: одна карточка на событие, публикации снизу.
     label: "Бизнес-лента",
-    eyebrow: "Лента",
-    title: "Бизнес-лента",
-    description: "Бизнес-сигналы карточками событий: публикации, атрибуты карточки, фильтры и «всё про компанию».",
-    status: "Экран активен",
   },
   {
     id: "digest",
     label: "Месячный дайджест",
-    eyebrow: "Выпуск",
-    title: "Сборка выпуска",
-    description: "Выборка материалов, предпросмотр, черновик и выгрузка опираются на тот же API, но уже через новый интерфейс.",
-    status: "Экран активен",
   },
   {
     id: "signal-radar",
     // «Радар сигналов» → «Технологический радар» по документу заказчика (19.09), как в MVP-1.
     label: "Технологический радар",
-    eyebrow: "Радар",
-    title: "Технологический радар",
-    description: "Сигналы, найденные новым поисковым агентом: ссылки-доказательства, переносимость, развернутая ОС и выбор в дайджест.",
-    status: "Экран активен",
   },
   {
     id: "colleague-materials",
     // Один раздел «Материалы» (решение владельца 23.10): материалы из бота Telegram и документы, внесённые на
     // платформе; у каждой записи видно, откуда она. Прежний адрес ?screen=documents ведёт сюда же.
     label: "Материалы",
-    eyebrow: "Материалы",
-    title: "Материалы",
-    description: "Что коллеги прислали боту в Telegram, и документы, которые вы внесли на платформе.",
-    status: "Экран активен",
   },
   {
     id: "sources",
     label: "Источники",
-    eyebrow: "Источники",
-    title: "Каталог источников",
-    description: "Упрощённые карточки, фильтры, диагностика и настройки парсинга теперь собраны в отдельном экране.",
-    status: "Экран активен",
   },
   {
     id: "scoring",
     label: "Скоринг",
-    eyebrow: "Настройки",
-    title: "Профиль критериев",
-    description: "Весы критериев, редактор описаний и нормализация профиля уже перенесены в новый интерфейс.",
-    status: "Экран активен",
   },
   {
     id: "tags",
     label: "Теги",
-    eyebrow: "Тематики",
-    title: "Дерево тем",
-    description: "Направления и подтеги: включение, редактирование и сохранение теперь тоже в новом интерфейсе.",
-    status: "Экран активен",
   },
   {
     id: "company-parents",
     // Решение владельца 20.10: фильтр «всё про компанию» показывает и дочерние общества по этому списку.
     label: "Дочерние общества",
-    eyebrow: "Компании",
-    title: "Дочерние общества",
-    description: "Список «дочка → мать» для фильтра «всё про компанию»: правка действует сразу, без выката.",
-    status: "Экран активен",
   },
   {
     id: "company-description",
     // #162: по этому тексту агент «Гипотеза для Компании» (#163) понимает, для кого пишет.
     label: "Описание Компании",
-    eyebrow: "Компании",
-    title: "Описание Компании",
-    description: "Публичное описание Компании для агента гипотезы: текст, кто и когда правил.",
-    status: "Экран активен",
   },
   {
     id: "users",
     label: "Пользователи",
-    eyebrow: "Доступ",
-    title: "Пользователи",
-    description: "Управление учётными записями и ролями (только для администратора).",
-    status: "Экран активен",
   },
   {
     id: "statistics",
     label: "Статистика",
-    eyebrow: "Аналитика",
-    title: "Статистика платформы",
-    description: "Месячные результаты платформы и работа пользователей: воронка от сбора до дайджеста, затраты на ИИ, разметка по каждому и общий итог (только для администратора).",
-    status: "Экран активен",
   },
 ];
 
@@ -227,19 +179,8 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileNavOpen]);
 
-  let currentScreen = (
-    <section className="screenStack">
-      <header className="screenHeader">
-        <div>
-          <div className="eyebrow">{active.eyebrow}</div>
-          <h1>{active.title}</h1>
-          <p>{active.description}</p>
-        </div>
-        <div className="statusPill">{active.status}</div>
-      </header>
-
-    </section>
-  );
+  // У каждого экрана своя ветка ниже; null только до первой из них.
+  let currentScreen: ReactNode = null;
 
   if (activeScreen === "sources") {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
@@ -352,7 +293,7 @@ export function App() {
         setAdmissionNotice(payload.detail);
         return;
       }
-      await enter(payload, authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
+      enter(payload, authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Не удалось выполнить вход", "error");
     }
@@ -361,7 +302,7 @@ export function App() {
   async function submitAdmission(event?: FormEvent) {
     event?.preventDefault();
     try {
-      await enter(await admit(email.trim(), password, admissionCode), "Допуск получен, вход выполнен");
+      enter(await admit(email.trim(), password, admissionCode), "Допуск получен, вход выполнен");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Не удалось проверить код", "error");
     }
@@ -373,7 +314,7 @@ export function App() {
     setPassword("");
   }
 
-  async function enter(payload: AuthResponse, message: string) {
+  function enter(payload: AuthResponse, message: string) {
     setUser(payload.user);
     setAdmissionNotice(null);
     setAdmissionCode("");

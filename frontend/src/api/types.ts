@@ -34,7 +34,7 @@ export type Source = {
 
 export type SourceHealth = {
   id: number;
-  // archived, источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // archived: источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
   // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
   verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;

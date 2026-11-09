@@ -686,7 +686,7 @@ PETRONAS_SELECTOR = 'div[role="article"] a[href*="/media/media-releases/"]'
 
 
 def test_undated_featured_card_falls_behind_dated_ones_by_default():
-    # Для всех остальных источников порядок прежний это и есть симптом Petronas.
+    # Для всех остальных источников порядок прежний: это и есть симптом Petronas.
     source = {"article_link_selector": PETRONAS_SELECTOR}
     candidates = request_parser.extract_candidate_links(
         source, "https://www.petronas.com/media/media-releases", PETRONAS_LIKE_HTML, limit=3)

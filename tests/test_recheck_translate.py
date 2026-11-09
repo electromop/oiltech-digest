@@ -90,7 +90,7 @@ def test_russian_title_off_the_rules_is_edited_by_the_translation_model(monkeypa
 @pytest.mark.parametrize("answer", ["«Татнефть» построит завод сорбентов на 50 тысяч тонн", ""],
                          ids=["number-not-in-publication", "empty"])
 def test_edit_that_cannot_be_taken_keeps_the_publisher_title(answer):
-    """Число, которого нет ни в заголовке, ни в тексте,: выдумка модели; пустой ответ: не заголовок. Остаётся
+    """Число, которого нет ни в заголовке, ни в тексте, выдумка модели; пустой ответ: не заголовок. Остаётся
     заголовок издателя, а оплаченный вызов учитывается."""
     title_ru, response = pipeline.title_ru_for_article(dict(VESTI), _EditClient(answer), edit_russian=True)
 
@@ -99,7 +99,7 @@ def test_edit_that_cannot_be_taken_keeps_the_publisher_title(answer):
 
 
 def test_russian_title_by_the_rules_does_not_call_the_model():
-    """Заголовок уже по правилам, которые видно кодом,: как есть, модель не зовётся."""
+    """Заголовок уже по правилам, которые видно кодом, как есть, модель не зовётся."""
     client = _EditClient("не должен прийти")
     title = "Минприроды РФ предлагает расширить доступ к шельфовым проектам для опытных компаний"
 

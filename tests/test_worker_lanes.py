@@ -276,7 +276,7 @@ def test_stall_limits_are_per_kind():
 
 
 def test_three_fetch_threads_keep_customer_keywords_until_last_job_ends():
-    """Ревью 21.09: задача, закончившая первой, возвращала None, пока соседняя шла,:
+    """Ревью 21.09: задача, закончившая первой, возвращала None, пока соседняя шла:
     и та фильтровала без ключей заказчика."""
     from oiltech_digest.ingestion import relevance_filter
 
@@ -406,7 +406,7 @@ def test_idle_nl_asks_core_about_sixty_times_in_five_minutes(monkeypatch):
         external_worker._claim_loop(Client(), 3.0)
 
     per_thread = sum(1 for moment in claims_at if 300 <= moment < 600)  # вторые 5 минут простоя
-    assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09-582)
+    assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09: 582)
 
 
 def test_every_job_kind_resolves_to_a_worker_handler():

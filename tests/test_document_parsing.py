@@ -190,7 +190,7 @@ def test_detect_kind_rejects_zip_without_office_parts():
 
 
 def test_detect_kind_reports_broken_archive_as_unreadable():
-    # Сигнатура zip есть, содержимое обрезано это битый файл, а не чужой формат.
+    # Сигнатура zip есть, содержимое обрезано: это битый файл, а не чужой формат.
     broken = make_docx(["Абзац"])[:200]
     with pytest.raises(UnreadableDocumentError):
         detect_kind(broken)

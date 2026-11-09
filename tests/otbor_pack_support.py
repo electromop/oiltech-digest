@@ -278,7 +278,7 @@ def rejected(**overrides):
 
 
 def fill(out, answers, *, name="otbor_markup_done.xlsx", edit=None):
-    """Таблица пакета, заполненная ответами эксперта {ID: {колонка: значение}},: рядом с манифестом."""
+    """Таблица пакета, заполненная ответами эксперта {ID: {колонка: значение}}, рядом с манифестом."""
     book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
     sheet = book[pack_format.MARKUP_SHEET]
     header = [cell.value for cell in sheet[1]]

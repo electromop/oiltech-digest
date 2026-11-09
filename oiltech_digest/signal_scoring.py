@@ -109,7 +109,7 @@ def totals(items: list[dict[str, Any]]) -> dict[str, float | None]:
 
 
 def chosen(found: dict[str, float | None]) -> float | None:
-    """Итог, который идёт в балл сигнала,: вариант настройки SIGNAL_SCORES_KEYWORDS."""
+    """Итог, который идёт в балл сигнала, вариант настройки SIGNAL_SCORES_KEYWORDS."""
     return found["keywords" if config.SIGNAL_SCORES_KEYWORDS else "plain"]
 
 

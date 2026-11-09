@@ -55,7 +55,7 @@ def test_cli_queues_a_radar_run_with_the_core_search_settings(monkeypatch):
     assert (run.topic, run.offline, run.research_reasoning) == ("Бурение", False, "medium")
 
 
-# --- Своя модель и лимит у «Дедупа», лимит запросов агента источников ---------------------------
+# --- Своя модель и лимит у «Дедупа» ---------------------------------------------------------------
 
 
 class _Recorder:

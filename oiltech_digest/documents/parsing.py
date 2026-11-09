@@ -110,7 +110,7 @@ def _detect_ooxml_kind(data: bytes) -> str:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             names = set(archive.namelist())
     except zipfile.BadZipFile as exc:
-        # Сигнатура zip есть, а содержимое не читается это битый файл,
+        # Сигнатура zip есть, а содержимое не читается: это битый файл,
         # а не «неизвестный формат»: пользователю надо перезалить, а не конвертировать.
         raise UnreadableDocumentError(
             "Файл повреждён: архив документа не читается. Попробуйте пересохранить "

@@ -51,7 +51,7 @@ def findings(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
 
 
 def platform_cards(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Сигналы платформы, которые пробный прогон нашёл снова,, карточками для замера полноты: заголовки, суть,
+    """Сигналы платформы, которые пробный прогон нашёл снова, карточками для замера полноты: заголовки, суть,
     компании и ссылки (свои и склеенных дублей)."""
     ids = sorted({int(value) for value in signal_ids if value is not None})
     if not ids:

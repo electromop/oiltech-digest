@@ -228,7 +228,7 @@ def test_finding_waiting_for_otbor_is_shown_nowhere_and_gets_no_card(user, admin
     assert model.calls == []
 
 
-# --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте,: ссылка его карточки ----------------
+# --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте, ссылка его карточки ----------------
 
 FEED_TITLE = "ADNOC Drilling заключила с SLB контракт на бурение 40 скважин Hail и Ghasha"
 
@@ -240,7 +240,7 @@ def _last_seen(signal_id):
 
 def test_finding_of_an_event_already_in_the_feed_becomes_a_link_of_its_card_and_skips_otbor(
         user, contour, monkeypatch):
-    # Статья сбора, принятая «Отбором»,: видимая карточка бизнес-ленты.
+    # Статья сбора, принятая «Отбором», видимая карточка бизнес-ленты.
     article(FEED_TITLE, PAGE_TEXT)
     decide(monkeypatch, {FEED_TITLE: answer()})
     [feed_card] = showcase(user, "business").values()

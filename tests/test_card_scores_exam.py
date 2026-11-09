@@ -66,7 +66,7 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
     luna, mini = report["models"]
     assert (luna["model"], mini["model"]) == (LUNA, MINI)
     # Один балл всем: итог у всех строк одинаковый: порядок только ничьи (половина), ступень «полезный» у всех, как у
-    # нынешних баллов ядра,: не лучше их (решение: по строкам пакета).
+    # нынешних баллов ядра, не лучше их (решение: по строкам пакета).
     rows = report["rows"]
     pack = [one for one in rows if one["rating"] != "strong_extra"]
     useful = sum(one["band"] == "useful" for one in pack)

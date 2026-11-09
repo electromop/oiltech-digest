@@ -39,7 +39,7 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
 
   useEffect(() => {
     let cancelled = false;
-    // 0, экран ещё не знает выпуск (окно месяца не пришло): собирать нечего. В окружении без object URL
+    // 0: экран ещё не знает выпуск (окно месяца не пришло): собирать нечего. В окружении без object URL
     // (тесты) предпросмотр просто не строится.
     if (refreshToken === 0 || typeof URL.createObjectURL !== "function") return;
     setLoading(true);

@@ -247,7 +247,7 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
             conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (fresh, dup))
             conn.commit()
     marks.set_signal_mark(fresh, status="digest", user_id=int(user["id"]))
-    # Выбор коллеги, тоже в дайджесте: плитка, как и кнопка на карточке,: по общей отметке (#111).
+    # Выбор коллеги, тоже в дайджесте: плитка, как и кнопка на карточке, по общей отметке (#111).
     marks.set_signal_mark(old, status="digest", user_id=int(other["id"]))
     repository.record_signal_feedback_event(
         None, "comment_added", signal_id=reviewed, user_id=int(other["id"]), comment="сильный источник",
@@ -292,7 +292,7 @@ def test_tile_filter_lists_the_cards_behind_each_tile(user):
 
 def test_card_carries_the_word_rating_by_the_feed_thresholds(user):
     # Оценка «как у бизнес-сигналов» (документ заказчика 19.09): те же пороги 80/65/40,
-    # что у ленты (pipeline.score_label),: один источник слов и цвета.
+    # что у ленты (pipeline.score_label), один источник слов и цвета.
     for key, score in (("a", 85), ("b", 70), ("c", 50), ("d", 20)):
         _card(key, f"Карточка {key}", score=score)
 

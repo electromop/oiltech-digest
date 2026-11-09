@@ -73,7 +73,7 @@ def revoke(user_id: int) -> None:
 def issue_code(user_id: int, *, force: bool = False) -> tuple[str, datetime] | None:
     """Новый код учётке; None, выдавать рано: прежний ещё действует или выдан меньше 10 минут назад.
 
-    force, команда на сервере: выдаёт всегда и заменяет прежний. Проверка и замена: одним
+    force: команда на сервере: выдаёт всегда и заменяет прежний. Проверка и замена: одним
     запросом, чтобы два одновременных входа не выдали два кода."""
     code = f"{secrets.randbelow(10 ** CODE_DIGITS):0{CODE_DIGITS}d}"
     salt, digest = auth.hash_password(code)

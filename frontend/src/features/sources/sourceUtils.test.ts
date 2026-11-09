@@ -128,7 +128,7 @@ describe("source states on the sources screen", () => {
   });
 
   it("says in the problem column how long a stale source has been silent", () => {
-    // stale ставит сервер: нет нового материала дольше SOURCE_STALE_DAYS (с 28.09-7 суток).
+    // stale ставит сервер: нет нового материала дольше SOURCE_STALE_DAYS (с 28.09: 7 суток).
     const stale = health(1, "stale", { last_article_at: "2026-09-17T06:00:00Z" });
     expect(sourceProblem(baseSource, stale, undefined, now)).toBe("Нет новых материалов 8 дн.");
     expect(sourceProblem(baseSource, health(1, "ok"), undefined, now)).toBe("—");

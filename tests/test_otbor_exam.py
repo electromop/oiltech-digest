@@ -87,7 +87,7 @@ def test_split_is_fixed_at_the_first_run_and_instruction_examples_stay_in_tuning
 
     split = json.loads((out / "otbor_exam_split.json").read_text(encoding="utf-8"))
     assert sorted(split["tuning"] + split["exam"]) == sorted(item["id"] for item in exam_pack["items"])
-    # Строки, которые стоят примерами в инструкции,, только в настройке: иначе модель видит ответ в инструкции.
+    # Строки, которые стоят примерами в инструкции, только в настройке: иначе модель видит ответ в инструкции.
     assert set(rows["in_instruction"]) <= set(split["tuning"])
     # Доли «группа × решение эксперта», страницы-списки: своя доля; доля от двух строк: в обеих частях.
     shares = defaultdict(lambda: {"tuning": 0, "exam": 0})
@@ -109,7 +109,7 @@ def test_split_is_fixed_at_the_first_run_and_instruction_examples_stay_in_tuning
     _, exam = run_exam(monkeypatch, exam_pack["markup"], {NANO: oracle(exam_pack)})
     assert exam["split"] == {"tuning": split["tuning"], "exam": split["exam"]}
 
-    # Строка экзамена, ставшая примером инструкции,, отказ до вызовов: инструкцию правят только по настройке.
+    # Строка экзамена, ставшая примером инструкции, отказ до вызовов: инструкцию правят только по настройке.
     write_rows(out, {**rows, "in_instruction": [*rows["in_instruction"], split["exam"][0]]})
     with pytest.raises(SystemExit, match="примеры инструкции"):
         run_exam(monkeypatch, exam_pack["markup"], {NANO: oracle(exam_pack)})

@@ -188,7 +188,7 @@ def test_partial_search_failure_keeps_run_ok_with_health(radar, monkeypatch):
     assert run["status"] == "ok"
     assert run["error_message"] is None
     assert run["result"]["search_health"] == {"topics": 3, "failed": 2, "first_error": FIRST_ERROR}
-    # Тема, где поиск ответил пусто,: не сбой.
+    # Тема, где поиск ответил пусто, не сбой.
     assert [row["web_error"] for row in job["result_json"]["applied"]["topics"]] == [FIRST_ERROR, FIRST_ERROR, None]
 
 

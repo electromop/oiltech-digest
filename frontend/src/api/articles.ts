@@ -26,7 +26,7 @@ export type ArticleQuery = {
 };
 
 // Без фильтров возвращает дефолтный лёгкий топ-2000. С `search` (и др.) запрос
-// уходит в Postgres и покрывает ВСЮ базу это снимает компромисс «поиск только
+// уходит в Postgres и покрывает ВСЮ базу: это снимает компромисс «поиск только
 // по загруженным 2000».
 export function listArticles(query: ArticleQuery = {}) {
   const params = new URLSearchParams();

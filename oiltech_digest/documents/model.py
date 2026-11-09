@@ -56,4 +56,4 @@ class UnreadableDocumentError(DocumentError):
 
 
 class ScannedDocumentError(DocumentError):
-    """В документе нет текстового слоя это скан. Распознавание вне области v1."""
+    """В документе нет текстового слоя: это скан. Распознавание вне области v1."""

@@ -85,7 +85,7 @@ def base(isolated_db, monkeypatch):
         _state(conn, tester, "user_signal_states", "signal_id", test_signal, "digest")
         _draft(conn, expert, "2026-09", [a["mid"], a["hi"]], updated_at=utc(2026, 10, 2, 9))
         _draft(conn, tester, "2026-09", [a["test"]])
-        # Общий черновик месяца, у которого нет черновика основы,: не трогается.
+        # Общий черновик месяца, у которого нет черновика основы, не трогается.
         _draft(conn, None, "2026-08", [a["aug"]], title="Август, общий")
         conn.commit()
     return {"expert": expert, "tester": tester, "a": a, "signal": signal, "test_signal": test_signal}
@@ -153,7 +153,7 @@ def test_write_makes_the_expert_state_shared_and_keeps_closed_issues(base):
 def test_expert_draft_replaces_an_older_shared_draft_even_if_that_one_is_newer(base):
     """До #111 команда digest-save писала общий черновик (строку без учётки), и на проде такие есть.
     Выпуск эксперта собирался по его черновику, а общий был запасным: черновик эксперта заменяет
-    общий своего месяца, даже если общий сохранён позже,: иначе состав разошёлся бы."""
+    общий своего месяца, даже если общий сохранён позже, иначе состав разошёлся бы."""
     a = base["a"]
     with connection.get_connection() as conn:
         _draft(conn, None, "2026-09", [a["test"]], title="Сентябрь, старый общий", updated_at=utc(2026, 10, 3, 9))

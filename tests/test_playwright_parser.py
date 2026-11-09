@@ -450,7 +450,7 @@ def _kill_groups(pids: list[int]) -> None:
 
 @pytest.mark.parametrize("mode", ["no-handshake", "stopped"])
 def test_render_hung_before_the_browser_pid_is_known_is_cut_too(chromium, tmp_path, mode):
-    """no-handshake: launch() ждёт браузер, который не отвечает,: у Playwright 1.62 это 180 с
+    """no-handshake: launch() ждёт браузер, который не отвечает, у Playwright 1.62 это 180 с
     (замер 28.09), а не 30, как думали 25.09. stopped: браузер замолчал сразу после запуска:
     вызов CDP за его PID не вернётся никогда: срока у него нет, а снятие браузера его не
     отпускает (замер 28.09: держал, пока жив драйвер). Теперь срок взведён до запуска, а PID

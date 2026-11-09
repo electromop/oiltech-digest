@@ -624,7 +624,7 @@ def test_glossary_puts_the_russian_term_first(text, preferred):
     "PTT Exploration and Production signed the contract.",
 ])
 def test_ambiguous_abbreviations_do_not_pull_the_new_terms(text):
-    """#150: MOF, ECA и PTT ключами словаря не взяты это ещё Министерство финансов, зона контроля выбросов и тайская
+    """#150: MOF, ECA и PTT ключами словаря не взяты: это ещё Министерство финансов, зона контроля выбросов и тайская
     PTT. Полное название (metal-organic framework, eddy current array, push-to-talk) в публикации о них и так есть."""
     assert relevant_glossary_terms({"title": "Update", "raw_text": text}) == []
 

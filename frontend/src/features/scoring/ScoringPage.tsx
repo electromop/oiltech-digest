@@ -123,7 +123,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
       } finally {
         setBusy(false);
       }
-      // Удаление уже в базе это не несохранённая правка.
+      // Удаление уже в базе: это не несохранённая правка.
       setStored((prev) => prev.filter((row) => row.id !== item.id));
     }
     setCriteria((prev) => prev.filter((_, currentIndex) => currentIndex !== index));

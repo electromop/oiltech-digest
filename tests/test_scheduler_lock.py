@@ -6,7 +6,7 @@
 
 24.09 08:32 шаг parse не вернулся 20 ч 45 мин: page.content() у листинга JPT ждал без
 срока, шаги идут друг за другом: стоял весь цикл. Под PID 1 контейнера к тому часу было
-около 2250 зомби chrome (по 2 на рендер; 25.09 в 05:31-2259) при pids.max 2315. run_step
+около 2250 зомби chrome (по 2 на рендер; 25.09 в 05:31 их было 2259) при pids.max 2315. run_step
 ведёт шаг под сроком (oiltech_digest/step_timeout.py), сервисы с Chromium идут с init.
 
 Процессы настоящие: замок это сессия базы, срок: сигналы и группы процессов; подделка
@@ -405,7 +405,7 @@ def test_zero_deadline_runs_the_step_without_a_ceiling():
 
 def test_services_that_launch_chromium_reap_zombies():
     """25.09 под PID 1 планировщика было 2259 зомби chrome при pids.max 2315 (DefaultTasksMax
-    systemd, 15% от threads-max): каждый рендер оставлял ~2 процесса, которые python под
+    systemd: 15% от threads-max): каждый рендер оставлял ~2 процесса, которые python под
     PID 1 не подбирает. init (tini) подбирает осиротевших, и слоты не кончаются."""
     core = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("scheduler", _app_service(core), "worker", "playwright-worker"):

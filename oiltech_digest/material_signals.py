@@ -222,7 +222,7 @@ def _author_block(cur, signal_id: int, material: dict[str, Any]) -> None:
 
 
 def accumulated() -> list[dict[str, Any]]:
-    """Материалы со статусом «принят», ещё не ставшие сигналом,: по порядку поступления."""
+    """Материалы со статусом «принят», ещё не ставшие сигналом, по порядку поступления."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute("SELECT * FROM colleague_materials WHERE signal_id IS NULL ORDER BY id")

@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import config, feed_window, signal_scoring
+from oiltech_digest import brand_fonts, config, feed_window, signal_scoring
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
@@ -475,6 +475,23 @@ def _render_footer_contact(footer: dict) -> str:
     return "<br>".join(lines)
 
 
+# Имя шрифта из брендинга идёт в атрибут style письма: только буквы, цифры, пробел, точка, дефис и подчёркивание.
+_FONT_NAME = re.compile(r"^[\w .-]{1,60}$")
+
+
+def font_stack(branding: dict, *, condensed: bool = False, sep: str = ",") -> str:
+    """Семейства шрифта письма: шрифт бренда (встроенный @font-face из файлов на сервере), затем шрифт бренда,
+    установленный у читателя (блок fonts брендинга: почтовые клиенты вырезают @font-face), затем Arial."""
+    fonts = (branding or {}).get("fonts") or {}
+    names = [brand_fonts.CONDENSED, brand_fonts.SANS] if condensed else [brand_fonts.SANS]
+    office = [fonts.get("office_condensed_family"), fonts.get("office_family")] if condensed else [fonts.get("office_family")]
+    for name in office:
+        name = str(name or "").strip()
+        if name and _FONT_NAME.match(name) and name not in names:
+            names.append(name)
+    return sep.join([f"'{name}'" for name in names] + ["Arial", "Helvetica", "sans-serif"])
+
+
 def render_digest_email(content: dict) -> str:
     """Письмо выпуска из issue/hero/news/footer: тот же HTML для экрана и выгрузки HTML (DOCX собирается из тех же
     news). PDF в формате эксперта собирается отдельно (digest_pdf, #161)."""
@@ -486,18 +503,22 @@ def render_digest_email(content: dict) -> str:
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
-        # Шрифт бренда, как у PDF; почтовые клиенты его вырезают, остаётся Arial.
+        # Шрифт бренда, как у PDF; почтовые клиенты его вырезают, остаётся установленный у читателя или Arial.
         "font_face_style": digest_pdf.font_faces(),
+        "font_stack": font_stack(branding),
+        "font_stack_condensed": font_stack(branding, condensed=True),
+        "font_stack_condensed_spaced": font_stack(branding, condensed=True, sep=", "),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
         "highlights_section": "",
         "news_sections": news_sections,
-        # Hero, утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
+        # Hero: утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
         "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
         "hero_alt": _html(HERO_ALT),
         "footer_contact_block": _render_footer_contact(content.get("footer", {})),
-        "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or []),
+        "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or [],
+                                                      font_stack(branding)),
     }
     return template.format(**values)
 
@@ -757,7 +778,7 @@ def _render_news_meta(item: dict) -> str:
     return f'<div class="news-card-meta">{_html(" · ".join(parts))}</div>'
 
 
-def _render_footer_socials(socials: list[dict]) -> str:
+def _render_footer_socials(socials: list[dict], fonts: str = "'Brand Sans',Arial,Helvetica,sans-serif") -> str:
     if not socials:
         return ""
     cells = []
@@ -768,7 +789,7 @@ def _render_footer_socials(socials: list[dict]) -> str:
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
             'text-align:center;line-height:36px;display:inline-block;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
-            "font-weight:bold;font-size:13px;font-family:'Brand Sans',Arial,Helvetica,sans-serif;"
+            f"font-weight:bold;font-size:13px;font-family:{fonts};"
             f'" title="{_html(item.get("label"))}">{icon}</div>'
             "</td>"
         )

@@ -392,7 +392,7 @@ def _article_prompt(article: dict, *, otbor: bool = False) -> str:
 
 def _title_prompt(article: dict) -> str:
     """Вход переводчика: только заголовок и контекст источника (дёшево, без полного текста); поля «Отбора», если
-    они есть,: как у сути (#131)."""
+    они есть, как у сути (#131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",

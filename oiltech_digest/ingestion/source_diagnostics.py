@@ -273,7 +273,7 @@ def probe_strategies(url: str, limit: int = 2) -> dict:
     listing_status = (request.get("listing_probe") or {}).get("status")
     if listing_status in _BLOCK_STATUSES and browser.get("verdict") == "no_candidates":
         # С РФ-ядра сайт не открылся ни запросом, ни браузером. Проверить отсюда, что
-        # он откроется из NL, нельзя это покажет первый сбор воркера.
+        # он откроется из NL, нельзя: это покажет первый сбор воркера.
         return {"url": url, "attempts": attempts,
                 "chosen": {"parse_strategy": "playwright", "listing_url": url, "network_region": "external",
                            "note": "с РФ-ядра не открылся — сбор пойдёт через зарубежный воркер, "

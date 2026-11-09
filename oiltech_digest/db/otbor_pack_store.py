@@ -142,7 +142,7 @@ def card_row_facts(article_ids: list[int], signal_ids: list[int]) -> tuple[dict[
 
 
 def judged_categories(signal_ids: list[int]) -> dict[int, str | None]:
-    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки),: контроль
+    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки), контроль
     категории на экзамене «Отбора» (#133)."""
     with connection.get_connection() as conn:
         rows = conn.execute(f"SELECT s.id, {_judged_sql('s', 'signal_category')} FROM signals s"

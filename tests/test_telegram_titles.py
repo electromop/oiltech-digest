@@ -158,7 +158,7 @@ def test_repair_updates_title_and_copied_title_ru_only(isolated_db):
     with connection.get_connection() as conn:
         assert conn.execute("SELECT title FROM articles WHERE id = %s", (ids[0],)).fetchone()[0] == glued
         # title_ru отличается от заголовка только двойником (так бывает между заголовком и
-        # карточкой после repair-terminology --scripts-only) это всё ещё копия заголовка.
+        # карточкой после repair-terminology --scripts-only): это всё ещё копия заголовка.
         conn.execute("UPDATE article_cards SET title_ru = %s WHERE article_id = %s", (glued.replace("о", "o", 1), ids[0]))
         conn.commit()
 

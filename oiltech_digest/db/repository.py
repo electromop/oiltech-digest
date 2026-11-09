@@ -575,7 +575,7 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
 
 
 def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
-    """Отсеянная карточка, у которой найденное снова забрало последнюю ссылку,, дубль забравшей:
+    """Отсеянная карточка, у которой найденное снова забрало последнюю ссылку, дубль забравшей:
     иначе в «Отсеянных» висела бы пустая копия события со старой причиной. Забравшая: принятая
     (событие на радаре) или, если пустая отсеяна до вердикта (поиск, сбой судьи), забракованная
     судьёй или ревью пачки: событие разобрано дальше, и причина: у неё (17.10). Дубль не
@@ -583,7 +583,7 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
     ссылки не переезжают (_signal_holds_evidence_sql).
 
     Обе карточки в этот момент не склеены, а склеенная ни ссылку не забирает, ни повторным
-    отсевом не оживает,: кольца дублей не бывает (ревью 05.10: склеенная хозяйка давала
+    отсевом не оживает, кольца дублей не бывает (ревью 05.10: склеенная хозяйка давала
     A→B→C→A, и событие пропадало из обоих списков). Забракованная судьёй дублем отсеянной не
     становится: её ключ носят кандидаты судьи, и принятый потом повтор ушёл бы в скрытую карточку
     (_reconcile_with_owner). У отсеянной до вердикта ключ свой (filtered:…): его кандидаты не носят."""
@@ -608,7 +608,7 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
         ).fetchone()
         if retired is not None:
             # Группа, в один шаг, как у mark_signal_merged: пустая до вердикта, ставшая дублем
-            # этой карточки,: дубль забравшей.
+            # этой карточки, дубль забравшей.
             conn.execute(
                 "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
                 (taken_by, signal_id),
@@ -666,7 +666,7 @@ def refresh_platform_decisions(signal_ids: Sequence[int], *, conn) -> None:
 
 
 def refresh_signal_evidence_count(signal_id: int) -> int:
-    """Число публикаций сигнала; у события, к которому «Дедуп» добавил публикацию,, и «Решение платформы» (#132): у
+    """Число публикаций сигнала; у события, к которому «Дедуп» добавил публикацию, и «Решение платформы» (#132): у
     самого сигнала и у главной карточки, если он дубль."""
     with get_connection() as conn:
         cur = conn.execute(
@@ -731,7 +731,7 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
     или отклонил, и повтор того же события не должен вернуться новой карточкой.
     Неразобранные: за окно. fresh, появилась за последние дни: только такие
     неразобранные карточки сверяются между собой (см. signal_dedup._eligible).
-    hidden, не видна ни в одной витрине (качество, архив): такая не забирает себе новую
+    hidden: не видна ни в одной витрине (качество, архив): такая не забирает себе новую
     находку того же события (signal_dedup._rank). Бизнес-находка видна в витрине «бизнес»:
     не скрытая (#95). last_seen_day, когда радар нашёл событие последний раз: поиск темы
     получает карточки, найденные за его период, чтобы не приносить их снова (17.10)."""
@@ -852,7 +852,7 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
 
     Разобранную карточку не прячем, даже если судья счёл её дублем: между выдачей
     задачи и её завершением её могли успеть разобрать или выбрать в дайджест.
-    `respect_review=False`, решение человека («Дубль #ID» в обратной связи): сам отзыв
+    `respect_review=False`: решение человека («Дубль #ID» в обратной связи): сам отзыв
     делает карточку разобранной, и без этого флага она не спряталась бы никогда."""
     root = resolve_signal_merge_root(into_signal_id)
     if root is None or root == int(signal_id):
@@ -876,7 +876,7 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
             (root, (reason or "")[:500] or None, int(signal_id)),
         ).fetchone()
         if row is not None:
-            # Группа всегда в один шаг: всё, что было склеено с этой карточкой,: к корню.
+            # Группа всегда в один шаг: всё, что было склеено с этой карточкой, к корню.
             conn.execute(
                 "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
                 (root, int(signal_id)),
@@ -1303,7 +1303,7 @@ def latest_signal_generation_run(*, payload_subset: dict) -> dict | None:
     {"schedule": "daily_signal_discovery"}). Идущий не берём: итога у него ещё нет.
 
     Время прогона, старт задачи: у пути через воркер строка прогона появляется только при
-    записи итога, её started_at это конец прогона, а не начало."""
+    записи итога, её started_at: это конец прогона, а не начало."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1435,7 +1435,7 @@ def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = No
     Экран радара: все правки. Выпуск (`issue_window`: окно ленты на сейчас) у карточки
     закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
     «архив только на просмотр»: и текст закрытого выпуска). Отзыв после закрытия принимается
-    как раньше и виден на радаре: он нужен агенту для обучения,: но выпуск не меняет.
+    как раньше и виден на радаре: он нужен агенту для обучения, но выпуск не меняет.
     `month_sql`: месяц выпуска материала, если он не месяц поступления карточки (у статьи ленты её месяц)."""
     until = ""
     if issue_window is not None:
@@ -2490,65 +2490,6 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
         return rows
 
 
-def compute_topic_gap_rows(
-    period_from: datetime,
-    period_to: datetime,
-    target_per_topic: int = 10,
-    limit: int = 10,
-) -> list[dict]:
-    """Темы/теги с дефицитом релевантных сигналов за период."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            WITH tagged_articles AS (
-              SELECT
-                COALESCE(parent.name, t.name) AS topic,
-                a.id AS article_id,
-                {feed_window.relevance_sql('a', 'c')} AS relevant,
-                c.status AS card_status,
-                sc.total_score,
-                {marks.article_marked_sql('a.id', 'digest')} AS user_digest
-              FROM tags t
-              LEFT JOIN tags parent ON parent.id = t.parent_id
-              LEFT JOIN article_tags at ON at.tag_id = t.id
-              LEFT JOIN articles a
-                     ON a.id = at.article_id
-                    AND a.collected_at >= %s
-                    AND a.collected_at < %s
-              LEFT JOIN article_cards c ON c.article_id = a.id
-              LEFT JOIN article_scores sc ON sc.article_id = a.id
-              WHERE t.enabled = TRUE
-            )
-            SELECT
-              topic,
-              COUNT(article_id) FILTER (WHERE relevant IS TRUE) AS signals,
-              ROUND(AVG(total_score), 2) AS avg_score,
-              COUNT(article_id) FILTER (WHERE user_digest OR card_status = 'digest') AS digest_count
-            FROM tagged_articles
-            GROUP BY topic
-            ORDER BY GREATEST(%s - COUNT(article_id) FILTER (WHERE relevant IS TRUE), 0) DESC,
-                     topic
-            LIMIT %s
-            """,
-            (period_from, period_to, target_per_topic, limit),
-        )
-        rows = []
-        for row in cur.fetchall():
-            signals = int(row["signals"] or 0)
-            gap = max(int(target_per_topic) - signals, 0)
-            rows.append({
-                "topic": row["topic"],
-                "signals": signals,
-                "target_signals": int(target_per_topic),
-                "gap": gap,
-                "avg_score": row.get("avg_score"),
-                "digest_count": int(row["digest_count"] or 0),
-                "priority": round(min(100, gap / max(target_per_topic, 1) * 100), 2),
-            })
-        return rows
-
-
 def snapshot_source_quality(period_from: datetime, period_to: datetime) -> int:
     rows = compute_source_quality_rows(period_from, period_to)
     if not rows:
@@ -2600,7 +2541,7 @@ def article_exists(url: str) -> bool:
 
 def set_source_collection(source_id: int, *, listing_url: str | None, network_region: str,
                           enabled: bool) -> None:
-    """Записать, чем и откуда собирать источник,: итог перебора стратегий.
+    """Записать, чем и откуда собирать источник, итог перебора стратегий.
 
     Архивный источник этим не воскрешается: `enabled` ставится только вместе с
     `archived_at IS NULL`, как и в add_rss_source.
@@ -3011,7 +2952,7 @@ def _requeue_or_exhaust(conn, *, lost_where: str, lost_params: tuple, reason: st
     ПЕРЕОЧЕРЕДЬ: ЭТО ТОЖЕ ПОПЫТКА. Пока `attempts` не сверялся с `max_attempts`, задача,
     которая физически не может завершиться, возвращалась в очередь вечно. Инцидент 24.07:
     задача 1181 (батч 800 статей) намотала 6 кругов при `max_attempts=3`, каждый круг
-    начиная с первой статьи и заново оплачивая OpenAI,: а потолок попыток не срабатывал
+    начиная с первой статьи и заново оплачивая OpenAI, а потолок попыток не срабатывал
     никогда, потому что его проверял только `fail_background_job`, до которого дело не доходило.
     Исчерпавшие лимит уходят в `failed`: дальше решает человек, а не бесконечный ретрай.
 
@@ -3258,7 +3199,7 @@ def record_external_consumer(worker_id: str, *, queues: list[str], build: str | 
     """Запомнить, какую сборку и контракт сообщил контейнер NL при выдаче задачи.
 
     Пустые очереди claim идут раз в 3-30 с на поток: строку переписываем не чаще раза в
-    30 с, если ничего не поменялось,: иначе таблица из четырёх строк пухла бы от версий."""
+    30 с, если ничего не поменялось, иначе таблица из четырёх строк пухла бы от версий."""
     with get_connection() as conn:
         conn.execute(
             """
@@ -3711,7 +3652,7 @@ def requeue_stale_background_jobs(
     настоящего протокола живости нет: локальный воркер исполняет задачу в своём процессе
     и, падая, не оставляет о себе никакого сигнала, кроме «висит слишком долго».
 
-    У ВНЕШНЕГО контура протокол есть: lease + heartbeat перед каждой статьёй,: и он
+    У ВНЕШНЕГО контура протокол есть: lease + heartbeat перед каждой статьёй, и он
     достовернее любого таймаута. Поэтому внешние `running` здесь не трогаются вовсе; ими
     занимается `requeue_expired_external_leases`. Раньше этот фильтр стоял только на ветке
     «пометить failed», а ветка переочереди хватала всё подряд, и комментарий про «внешний
@@ -4032,7 +3973,8 @@ def body_hash_belongs_to_other_article(source_id: int, body_hash: str | None,
 
     Один и тот же текст у разных статей источника, почти всегда подмена: сайт отдал
     листинг/пейвол/заглушку вместо статьи. Проверка идёт в паре (source_id, body_hash),
-    под неё есть составной индекс. Кросс-источниковые совпадения НЕ считаем подменой это перепечатки, ими занимается дедуп (№21).
+    под неё есть составной индекс. Кросс-источниковые совпадения НЕ считаем подменой:
+    это перепечатки, ими занимается дедуп (№21).
     """
     if not body_hash:
         return False
@@ -4209,7 +4151,7 @@ def dashboard_stats(window: FeedWindow | None = None) -> dict:
     выборке ленты до скрытий отметками: помеченное «шум/дубликат/архив» лента по
     умолчанию прячет, а здесь оно входит в M и в плитки статусов (вкладка «Со статусом»
     его показывает). До 23.09 здесь было своё условие: оно считало
-    перепечатки и статьи архивных источников, но не видело свежих статей без карточки,:
+    перепечатки и статьи архивных источников, но не видело свежих статей без карточки:
     и над лентой из 1 934 статей висело 2 205 «сигналов».
     ``avg_score``: среднее только по оценённым. ``selected_for_digest`` и статусы: по
     общим отметкам (#111). ``window``: окно месяца; без окна: вся база (замеры, benchmarks).
@@ -4860,7 +4802,7 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
 
     Выбор людей важнее выбора судьи. Копию, выбранную кем-то «в дайджест», не прячем: главную он
     не отмечал, и новость ушла бы из его выпуска и из ленты целиком (29.09; так же радар не прячет
-    карточку, выбранную в дайджест,: mark_signal_merged). Если главную при этом не выбирал
+    карточку, выбранную в дайджест, mark_signal_merged). Если главную при этом не выбирал
     никто, главной становится выбранная копия, а прячется прежняя главная вместе со своей группой
     (ревью #84: отказ оставлял в ленте у всех обе копии). Выбраны обе: не прячем ни одну. Так же:
     копию с обратной связью человека (блок ОС у её сигнала ленты, 04.11): _kept_by_people."""
@@ -4902,7 +4844,7 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             duplicate_id, primary_id = primary_id, duplicate_id
             # Перестановку видно в базе (ревью #88): главная: не та, что выбрал судья, и его довод о
             # главной к этой пометке не относится; что это одно событие, его слова, после «судья:».
-            # decided_by, как у вызывающего: иных значений, кроме «ai», в базе нет.
+            # decided_by: как у вызывающего: иных значений, кроме «ai», в базе нет.
             reason = (why.swapped + (f"; судья: {reason}" if reason else ""))[:500]
         elif not article_visible_in_feed(conn, primary_id):
             # Прятать копию можно только в пользу той, которую читатель увидит.
@@ -5672,13 +5614,13 @@ def save_tags(items: list[dict]) -> dict:
             name_to_id[it["name"]] = tag_id
             # СТАРОЕ имя тоже обязано вести к этому id: подтеги в запросе всё ещё несут
             # прежний parent_name, если родителя только что переименовали. Берём его из
-            # БД по id это не зависит от того, прислал ли фронт original_name.
+            # БД по id: это не зависит от того, прислал ли фронт original_name.
             if previous_name and previous_name != it["name"]:
                 name_to_id.setdefault(previous_name, tag_id)
             keep.append(tag_id)
         if keep:
             # СТРАХОВКА от потери таксономии одним нажатием. Сохранение выключает всё,
-            # чего нет в присланном списке,: и это правильно, пока фронт шлёт ВЕСЬ
+            # чего нет в присланном списке, и это правильно, пока фронт шлёт ВЕСЬ
             # список. Но 13.09 проверочный запрос с одним тегом выключил разом все 14:
             # неполный список (обрыв загрузки, частичный рендер, чужой скрипт) стирает
             # справочник молча и без следа.
@@ -5968,7 +5910,7 @@ def delete_scoring_criterion(criterion_id: int) -> None:
 
     ПРОВЕРЯЕМ сумму весов оставшихся активных критериев. Раньше не проверяли, и это было
     миной: «Сохранить» сумму валидирует, а «Удалить» уходило в БД немедленно. Стоило уйти
-    со страницы, не добив веса до 100,: и следующая стадия скоринга падала ЦЕЛИКОМ, ещё
+    со страницы, не добив веса до 100, и следующая стадия скоринга падала ЦЕЛИКОМ, ещё
     до первой статьи.
     Заказчик 11.09 как раз просил «убрать старые, не актуальные» критерии: по одному это гарантированно ломало бы
     скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
@@ -6262,7 +6204,7 @@ def _issue_signal_member_sql(selected_sql: str) -> str:
 def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
                       max_score: float | None = None,
                       search: str | None = None, top_tag: str | None = None) -> list[dict]:
-    """Статьи и карточки радара, отмеченные «в дайджест» (общая отметка, #111),: выпуск месяца
+    """Статьи и карточки радара, отмеченные «в дайджест» (общая отметка, #111), выпуск месяца
     без привязки к учётке.
 
     ``month`` опционален: пусто/None: фильтр периода снимается, возвращаются все
@@ -6685,7 +6627,7 @@ def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[d
 #  Обратная связь человека: оценки + комментарий (требование владельца 12.09)
 # ---------------------------------------------------------------------------
 # Быстрые причины в один клик. Набор выведен из того, за что заказчик РЕАЛЬНО ставит
-# «Шум»: замер 03.09-239 пометок, из них 34 оказались не «не по теме», а обрывками.
+# «Шум»: замер 03.09: 239 пометок, из них 34 оказались не «не по теме», а обрывками.
 # Без причины эти два случая сливаются, и обучать гейт на такой смеси нельзя: система
 # выучит «короткие статьи нерелевантны» вместо «эта тема не наша».
 FEEDBACK_REASONS = (

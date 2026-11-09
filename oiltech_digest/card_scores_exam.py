@@ -358,7 +358,7 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
             *, spend: dict[str, Any], card_exam: dict[str, Any] | None = None,
             theme_before: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
     """Отчёт прогона или пересчёта: рядом с манифестом, JSON и читаемый .md (card_scores_exam_report.write).
-    theme_before, тема прежнего прогона (_theme_before): «до» рядом с темой этого."""
+    theme_before: тема прежнего прогона (_theme_before): «до» рядом с темой этого."""
     part, decision = settings["part"], _decision(tried, settings["part"])
     inputs = Inputs(exam)
     control = exam["scores_control"]

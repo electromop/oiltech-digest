@@ -150,7 +150,7 @@ export type SignalSearchHealth = {
   first_error: string | null;
 };
 
-// Возврат отклонённого (#132): поля «Отбора», которые вписывает человек,: коды справочника «Отбора».
+// Возврат отклонённого (#132): поля «Отбора», которые вписывает человек, коды справочника «Отбора».
 export type SignalReturnPayload = {
   industry: string;
   oilfield_relevance: string;

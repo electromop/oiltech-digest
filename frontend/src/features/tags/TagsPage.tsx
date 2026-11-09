@@ -36,7 +36,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   // По умолчанию направления свёрнуты (документ заказчика 19.09): 13 развёрнутых
-  // тематик по 30-50 ключей это несколько экранов прокрутки.
+  // тематик по 30-50 ключей: это несколько экранов прокрутки.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const clientKeySeq = useRef(0);
 

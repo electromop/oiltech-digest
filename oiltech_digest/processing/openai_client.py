@@ -124,7 +124,7 @@ class OpenAIResponsesClient:
             "max_output_tokens": _budget_for_sent_effort(max_output_tokens, reasoning_effort, effort),
             "tools": [{"type": "web_search", "search_context_size": search_context_size}],
             # Адреса, которые поиск реально вернул. Сносок (url_citation) при строгом JSON
-            # модель не ставит: прогон 30.09: 0 из 18,: и проверять ссылку было не по чему.
+            # модель не ставит: прогон 30.09: 0 из 18, и проверять ссылку было не по чему.
             "include": ["web_search_call.action.sources"],
             "text": {"format": {"type": "json_schema", "name": schema["name"], "strict": True,
                                 "schema": schema["schema"]}},
@@ -278,7 +278,7 @@ class OfflineAIClient:
         elif name == "document_chunk":
             # Офлайн-разбор фрагмента: берём ПЕРВОЕ настоящее число из текста и первый
             # якорь фрагмента. Так проверяльщик фактов получает вход, который ДОЛЖЕН
-            # подтвердиться,: иначе тест сквозного пути не отличит рабочую сверку
+            # подтвердиться, иначе тест сквозного пути не отличит рабочую сверку
             # от сверки, которая всегда возвращает False.
             anchor = _first_int(user_input, "якоря во фрагменте: с") or 1
             match = re.search(r"\b\d[\d\u00a0 ]*(?:[.,]\d+)?\b", _after_marker(user_input, "текст:"))
@@ -348,7 +348,7 @@ _ALL_BUT_MINIMAL = frozenset(_EFFORT_ORDER) - {"minimal"}
 _LOW_AND_ABOVE = frozenset(_EFFORT_ORDER[_EFFORT_ORDER.index("low"):])
 # Какие уровни принимает модель: страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra: 03.11.2026).
 # Ключ, начало имени: в ответе API имя бывает с датой. Незнакомая gpt-6: уровни, которые принимают все известные
-# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max),: правило поколений gpt-5 / gpt-5.N в
+# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max), правило поколений gpt-5 / gpt-5.N в
 # _reasoning_effort.
 _MODEL_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-6.1-sol": _LOW_AND_ABOVE,

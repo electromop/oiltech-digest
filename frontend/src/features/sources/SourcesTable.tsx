@@ -19,7 +19,7 @@ type Props = {
 
 // Таблица по документу заказчика (19.09): «экран выглядит очень административно:
 // перейти к таблице». Колонки: его. Всё, что было на карточке (сбор вкл/выкл,
-// настройка, диагностика, архив, обратная связь),: в раскрытой строке.
+// настройка, диагностика, архив, обратная связь), в раскрытой строке.
 export function SourcesTable({ sources, healthById, diagnostics, loadedAt, expandedId, onToggle, renderDetails, filterKey }: Props) {
   return (
     <div className="jobsTableWrap">

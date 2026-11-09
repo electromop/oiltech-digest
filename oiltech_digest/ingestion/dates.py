@@ -90,7 +90,7 @@ def _build(kind: str, match: re.Match[str]) -> datetime | None:
             month, day, year = _month(match[1], _EN_MONTHS), int(match[2]), int(match[3])
         elif kind == "ymd":
             year, month, day = int(match[1]), int(match[2]), int(match[3])
-        else:  # dmy, день первым: источники не американские, а «24/08» однозначно
+        else:  # dmy: день первым: источники не американские, а «24/08» однозначно
             day, month, year = int(match[1]), int(match[2]), int(match[3])
         if not month:
             return None
@@ -103,7 +103,7 @@ def _first(text: str, patterns: list[tuple[re.Pattern[str], str]]) -> datetime |
     for pattern, kind in patterns:
         for match in pattern.finditer(text):
             parsed = _build(kind, match)
-            # Дата из будущего это анонс события, а не публикация.
+            # Дата из будущего: это анонс события, а не публикация.
             if parsed is not None and parsed.year >= 2000 and not normalize.is_future_date(parsed):
                 return parsed
     return None
@@ -135,7 +135,8 @@ class UrlDate:
         """Сходится ли дата с адресом: тот же день или тот же месяц.
 
         Сутки запаса: только у метки времени. У даты без времени сдвига пояса нет, а запас
-        пропустил бы и второе прочтение числовой даты: «01/02/2026» по адресу `/2026/january/` это 2 января, а не 1 февраля. Без `timestamp` датой без времени считается полночь UTC: так
+        пропустил бы и второе прочтение числовой даты: «01/02/2026» по адресу `/2026/january/`:
+        это 2 января, а не 1 февраля. Без `timestamp` датой без времени считается полночь UTC: так
         отдаёт её разбор формы без времени (у настоящей метки ровно в полночь UTC запаса не будет)."""
         if value is None:
             return False

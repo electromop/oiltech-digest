@@ -149,7 +149,7 @@ def test_no_return_without_an_event_date_in_the_text_or_when_its_month_may_be_re
     decisions = len(otbor_model.calls)
 
     fill_cards(monkeypatch, {
-        # Апрель 2026: последний день периода 30.04-173 дня к 20.10; первое число месяца не подставляется.
+        # Апрель 2026: последний день периода 30.04: 173 дня к 20.10; первое число месяца не подставляется.
         "Апрельский контракт": card_answer(event_date="2026-04"),
         "Дата не названа": card_answer(event_date="", event_date_source="не определено"),
         # Дата публикации вместо даты события не подставляется ни для «Свежести», ни для возврата.

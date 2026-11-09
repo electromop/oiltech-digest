@@ -202,7 +202,7 @@ def canonical_unit(unit: str | None) -> str | None:
 def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
     """True, если число с таким же масштабом и единицей есть в тексте якоря.
 
-    Пустое значение или пустой текст якоря это False, а не исключение:
+    Пустое значение или пустой текст якоря: это False, а не исключение:
     сверка не подтвердила факт, вызывающему нечего ловить.
 
     Единица не указана (None или пусто), сверяется только само число: модель
@@ -226,7 +226,7 @@ def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
         return False
 
     # Модель нередко кладёт масштаб в само значение: value="1,5 млн", unit="тонн".
-    # Хвост значения используется только там, где поле unit молчит,: иначе
+    # Хвост значения используется только там, где поле unit молчит, иначе
     # масштаб посчитался бы дважды.
     tail_exp, tail_unit = _parse_spec(raw_value[head.end():])
     claimed_exp, claimed_unit = _parse_spec(unit or "")

@@ -143,7 +143,7 @@ def _process_playwright(source: dict[str, Any], payload: dict[str, Any], heartbe
 
     listing_url = source.get("listing_url") or source.get("url")
     limit = int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)
-    # Та же пара попыток, что у ядра,: общей функцией, а не копией.
+    # Та же пара попыток, что у ядра, общей функцией, а не копией.
     candidates = render_listing_candidates(source, listing_url, limit=limit) if listing_url else []
     result = _articles_from_candidates(source, candidates, payload, rendered_article, _listing_hash,
                                        heartbeat=heartbeat)
@@ -245,7 +245,7 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]],
                              heartbeat=None) -> list[dict[str, Any]]:
     """Дотянуть полный текст статей ленты со страницы издания.
 
-    Работает только там, где вызвано,: на воркере зарубежного контура. Берём
+    Работает только там, где вызвано, на воркере зарубежного контура. Берём
     страницу лишь когда анонс короче порога: у лент с полным текстом ходить
     незачем. Неудача не отбрасывает запись: остаётся анонс, как было раньше.
     """
@@ -389,7 +389,7 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
         stored = str(article.get("raw_text") or "")
         if not _refetch_improves(stored, text, status):
             # Тело на месте; попытку отмечаем: от неё считаются сутки до следующей
-            # (external_refetch_candidates). Та же страница, что уже лежит,: прежний статус.
+            # (external_refetch_candidates). Та же страница, что уже лежит, прежний статус.
             same = text == stored
             repository.update_article_full_text(
                 article_id, None, bool(article.get("text_truncated")),

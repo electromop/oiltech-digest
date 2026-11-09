@@ -35,7 +35,7 @@ export function sourceStateTone(state: SourceState | null): StateTone {
 
 export type SourceStateCounts = Record<SourceState, number> & { total: number };
 
-/** Плитки считаются по ТОМУ ЖЕ списку, что показывает таблица,, в этом и была ошибка:
+/** Плитки считаются по ТОМУ ЖЕ списку, что показывает таблица, в этом и была ошибка:
  *  плитки шли по отчёту здоровья вместе с архивом (173), а список и счётчик в шапке:
  *  без архива (133). «Всего источников»: каталог без архива; архив: своя плитка. */
 export function countSourceStates(sources: Source[], healthById: Map<number, SourceHealth>): SourceStateCounts {

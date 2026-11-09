@@ -20,6 +20,11 @@ FILES: dict[str, tuple[str, int]] = {
     "brand-sans-condensed-regular.ttf": (CONDENSED, 400),
     "brand-sans-condensed-bold.ttf": (CONDENSED, 700),
 }
+# Печать PDF и письмо берут три начертания: обычный, жирный и узкий жирный; узкое обычное есть только у интерфейса.
+PRINT = ("brand-sans-regular.ttf", "brand-sans-bold.ttf", "brand-sans-condensed-bold.ttf")
+# Списки семейств печати: шрифт бренда, затем запасной.
+SANS_STACK = f"'{SANS}',Arial,sans-serif"
+CONDENSED_STACK = f"'{CONDENSED}','Arial Narrow',Arial,sans-serif"
 
 
 def fonts_dir() -> Path | None:

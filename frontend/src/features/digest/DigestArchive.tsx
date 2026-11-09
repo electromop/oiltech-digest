@@ -1,5 +1,5 @@
 import type { ArchiveMonth } from "../../api/types";
-import { monthLabel } from "../articles/feedWindow";
+import { monthLabel } from "../shared/feedWindow";
 
 type Props = {
   months: ArchiveMonth[];

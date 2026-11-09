@@ -21,7 +21,7 @@ from oiltech_digest.otbor_pack_format import (APPROVAL_SHEET, CATEGORY_COLUMN, C
                                               fingerprint, open_book, sheet_rows, text)
 from oiltech_digest.signal_card import _plain
 
-# Шаги «Отбора», без которых решения нет,: у каждой строки. Категория, только у «брать»: она выбирает витрину, а у
+# Шаги «Отбора», без которых решения нет, у каждой строки. Категория, только у «брать»: она выбирает витрину, а у
 # отклонённого витрины нет (решение владельца 23.10; эксперт её у отказов не ставил).
 REQUIRED = (DECISION_COLUMN, INDUSTRY_COLUMN, RELEVANCE_COLUMN)
 # Колонка списка → метка строки для экзамена: справочник колонки, у общей оценки: overall.
@@ -153,7 +153,7 @@ def _versions(manifest: dict[str, Any]) -> list[str]:
 
 
 def _manifest(path: Path) -> dict[str, Any]:
-    """Манифест пакета: всё, чем проверяется разметка,: до первой строки, а не KeyError на середине."""
+    """Манифест пакета: всё, чем проверяется разметка, до первой строки, а не KeyError на середине."""
     if not path.exists():
         raise PackError(f"нет манифеста пакета {path}: он лежит рядом с таблицей, иначе укажите --manifest")
     data = json.loads(path.read_text(encoding="utf-8"))

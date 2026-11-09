@@ -50,7 +50,7 @@ def period_month_sql(alias: str = "a") -> str:
     `to_char(COALESCE(published_at, collected_at), 'YYYY-MM')` в часовом поясе сессии
     БД (на проде UTC). Лента обязана делить по месяцам так же: что видно в ленте за
     месяц, то и может попасть в выпуск этого месяца. Делить «по МСК» здесь нельзя:
-    замер 23.09-69 статей ложатся в разные месяцы по UTC и по МСК. Такая статья
+    замер 23.09: 69 статей ложатся в разные месяцы по UTC и по МСК. Такая статья
     была бы видна в октябрьской ленте, а в выпуск шла бы сентябрьским.
     """
     return f"to_char(COALESCE({alias}.published_at, {alias}.collected_at), 'YYYY-MM')"
@@ -108,7 +108,7 @@ def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
     return f"{selected_sql(article, card)} AND {ungated_visible_sql(article, source)}"
 
 
-# Решение агента «Отбор» о статье (#130): коды справочника decision. Здесь, в самом нижнем модуле,: их берут и
+# Решение агента «Отбор» о статье (#130): коды справочника decision. Здесь, в самом нижнем модуле, их берут и
 # слой базы, и сам агент.
 OTBOR_ACCEPT, OTBOR_REJECT = "accept", "reject"
 

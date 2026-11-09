@@ -174,6 +174,6 @@ def test_media_publisher_is_dropped_under_another_spelling_of_its_name():
 
     assert [item["name"] for item in _kept(text, companies, publisher="Нефтегаз", publisher_type="Media")] == [
         "Halliburton"]
-    # Компания, которая публикует свою новость,: участник.
+    # Компания, которая публикует свою новость, участник.
     assert [item["name"] for item in _kept(text, companies, publisher="Нефтегаз", publisher_type="Company")] == [
         "ООО «Нефтегаз»", "Halliburton"]

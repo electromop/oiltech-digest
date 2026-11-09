@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveNoticeText, monthLabel, useFeedWindow, windowPeriodText } from "./feedWindow";
+import { monthLabel, useFeedWindow } from "./feedWindow";
 
 describe("useFeedWindow", () => {
   afterEach(() => {
@@ -31,25 +31,4 @@ describe("подписи окна месяца", () => {
     expect(monthLabel("август")).toBe("август");
   });
 
-  it("один открытый месяц", () => {
-    expect(windowPeriodText({ months: ["2026-09"], month: null, read_only: false, rollover_day: 5 })).toBe(
-      "Показан сентябрь 2026. Прошлые месяцы — в архиве, только для просмотра.",
-    );
-  });
-
-  it("зазор: прошлый месяц виден до дня смены окна", () => {
-    expect(windowPeriodText({ months: ["2026-09", "2026-10"], month: null, read_only: false, rollover_day: 5 })).toBe(
-      "Показаны сентябрь 2026 и октябрь 2026: сентябрь виден по 4 октября включительно, пока собирается его выпуск.",
-    );
-  });
-
-  it("без данных окна подписи нет", () => {
-    expect(windowPeriodText(undefined)).toBe("");
-  });
-
-  it("плашка архива", () => {
-    expect(archiveNoticeText("2026-08")).toBe(
-      "Архив за август 2026 — только просмотр: статус и отметку «в дайджест» здесь не поменять.",
-    );
-  });
 });

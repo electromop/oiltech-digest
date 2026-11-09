@@ -436,7 +436,7 @@ class MaterialsBot:
                         username=user.get("username"), private=chat.get("type") == "private",
                         touched=self.clock())
         # На это сообщение автора бот отвечает вопросами: ForceReply с selective показывается
-        # тому, на чьё сообщение ответ, и тем, кто упомянут,: остальным в группе нет.
+        # тому, на чьё сообщение ответ, и тем, кто упомянут, остальным в группе нет.
         dialog.data["_last_user_message"] = message.get("message_id")
         if own and message.get("message_id"):
             dialog.user_messages.append(int(message["message_id"]))

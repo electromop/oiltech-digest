@@ -153,33 +153,33 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 меняют данные задним числом, по умолчанию идут сухим прогоном, но не все (`retire-tags` и `recheck-unmark` пишут
 сразу): перед запуском смотреть справку.
 
-- **База и учётки:** `init-db`, `schema-check`, `seed-sources`, `seed-tags`, `seed-scoring`,
+- База и учётки: `init-db`, `schema-check`, `seed-sources`, `seed-tags`, `seed-scoring`,
   `apply-scoring-preset`, `seed-signal-topics`, `create-user`, `set-role`, `list-users`, `admission-code`.
-- **Сбор:** `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
+- Сбор: `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
   `enqueue-external-scrape`, `enqueue-external-refetch`, `source-retry`, `stats`.
-- **Источники:** `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
+- Источники: `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
   `set-source-region`, `apply-source-overrides`, `source-audit`, `source-diagnose`, `source-probe`,
   `source-dump-listing`.
-- **Суть и перевод ленты:** `process`, `process-full`, `process-articles`, `enqueue-process`, `summarize`,
+- Суть и перевод ленты: `process`, `process-full`, `process-articles`, `enqueue-process`, `summarize`,
   `translate-titles`, `enqueue-translate`, `enqueue-resummarize`, `enqueue-title-edit`.
-- **Агенты:** `enqueue-otbor`, `enqueue-signal-summary`, `enqueue-signal-cards`, `enqueue-signal-scores`,
+- Агенты: `enqueue-otbor`, `enqueue-signal-summary`, `enqueue-signal-cards`, `enqueue-signal-scores`,
   `enqueue-signal-card-history`, `otbor-materials`, `sync-feed-signals`.
-- **Радар:** `enqueue-daily-signal-discovery`, `enqueue-signal-discovery`, `radar-search-trial`, `signals`,
+- Радар: `enqueue-daily-signal-discovery`, `enqueue-signal-discovery`, `radar-search-trial`, `signals`,
   `radar-weekly-report`, `radar-recall`, `import-reference-signals`, `archive-signals`, `unarchive-signals`,
   `unmerge-signal`, `refresh-signal-evidence-counts`.
-- **«Дедуп» ленты:** `find-reprints`, `reprints`.
-- **Экзамены агентов:** `otbor-expert-pack`, `otbor-markup-check`, `otbor-exam`, `otbor-exam-control`,
+- «Дедуп» ленты: `find-reprints`, `reprints`.
+- Экзамены агентов: `otbor-expert-pack`, `otbor-markup-check`, `otbor-exam`, `otbor-exam-control`,
   `card-scores-exam`, `card-scores-exam-control`, `signal-card-expert-pack`, `signal-card-exam`,
   `signal-card-exam-judge`.
-- **Обратная связь и выгрузки:** `signal-feedback`, `import-signal-feedback`, `article-signal-feedback`,
+- Обратная связь и выгрузки: `signal-feedback`, `import-signal-feedback`, `article-signal-feedback`,
   `export-signal-training-jsonl`, `export-signal-context`, `import-signal-context`.
-- **Выпуск:** `digest-content`, `digest-save`.
-- **Терминология:** `validate-terminology`, `audit-terminology`, `repair-terminology`, `eval-terminology`.
-- **Ремонт данных:** `repair-article-bodies`, `repair-article-dates`, `repair-url-keys`, `repair-telegram-titles`,
+- Выпуск: `digest-content`, `digest-save`.
+- Терминология: `validate-terminology`, `audit-terminology`, `repair-terminology`, `eval-terminology`.
+- Ремонт данных: `repair-article-bodies`, `repair-article-dates`, `repair-url-keys`, `repair-telegram-titles`,
   `cleanup-future-dates`, `recheck-marked`, `recheck-purge`, `recheck-unmark`, `retire-tags`,
   `migrate-shared-marks`, `article-candidates`.
-- **Переключение на «Отбор» (история 04.11):** `otbor-shadow`, `otbor-shadow-report`, `otbor-switch`.
-- **Процессы и обслуживание:** `jobs-worker`, `external-worker`, `tg-materials-bot`, `jobs-requeue-stale`,
+- Переключение на «Отбор» (история 04.11): `otbor-shadow`, `otbor-shadow-report`, `otbor-switch`.
+- Процессы и обслуживание: `jobs-worker`, `external-worker`, `tg-materials-bot`, `jobs-requeue-stale`,
   `external-queues-status`, `check-lanes`, `live-ai-leases`, `worker-versions`, `scheduler-lock`,
   `maintenance-cleanup`, `bench-readiness`, `ai-cost-report`, `ai-article-cost-report`.
 
@@ -187,31 +187,31 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 
 Все адреса в [`api.py`](../oiltech_digest/api.py); роли в [architecture.md](architecture.md), раздел 6.
 
-- **Вход:** `POST /api/auth/login`, `POST /api/auth/admit` (код допуска), `POST /api/auth/logout`,
+- Вход: `POST /api/auth/login`, `POST /api/auth/admit` (код допуска), `POST /api/auth/logout`,
   `GET /api/auth/me`; учётки: `/api/users`.
-- **Служебное:** `GET /api/health`, `GET /api/readiness`, `/api/jobs`, `/api/maintenance/*`.
-- **Лента и сигналы:** `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
+- Служебное: `GET /api/health`, `GET /api/readiness`, `/api/jobs`, `/api/maintenance/*`.
+- Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
   `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,
   `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `/api/feedback`.
-- **Выпуск:** `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
+- Выпуск: `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
   `POST /api/jobs/digest-export`, `/api/monthly-digests`, `PUT /api/issue-highlights/{month}`,
   `PATCH /api/signals/{id}/issue-material`, `/api/digest-branding`.
-- **Материалы и документы:** `/api/materials`, `/api/documents`.
-- **Настройки:** `/api/sources` (с `scrape`, `diagnose`, `archive`), `GET /api/source-health`, `/api/tags`,
+- Материалы и документы: `/api/materials`, `/api/documents`.
+- Настройки: `/api/sources` (с `scrape`, `diagnose`, `archive`), `GET /api/source-health`, `/api/tags`,
   `/api/scoring-criteria`, `/api/company-parents`, `/api/company-description`.
-- **Отчёты:** `/api/reports/ai-cost`, `/api/reports/ai-article-cost`, `/api/stats/monthly`, `/api/analytics/monthly`.
-- **Внешние воркеры и бот:** `/api/external-worker/*`, только с токеном воркера.
+- Отчёты: `/api/reports/ai-cost`, `/api/reports/ai-article-cost`, `/api/stats/monthly`, `/api/analytics/monthly`.
+- Внешние воркеры и бот: `/api/external-worker/*`, только с токеном воркера.
 
 ## 9. Что видит пользователь
 
 Меню в три группы (`frontend/src/app/App.tsx`):
 
-- **Работа:** «Бизнес-лента» (бизнес-сигналы карточками событий, публикации снизу, атрибуты, фильтры и «всё про
+- Работа: «Бизнес-лента» (бизнес-сигналы карточками событий, публикации снизу, атрибуты, фильтры и «всё про
   компанию»), «Технологический радар», «Месячный дайджест» (сборка выпуска, предпросмотр PDF, правка материалов,
   выгрузка), «Материалы» (материалы из бота и загруженные документы);
-- **Настройки:** «Источники», «Скоринг» (вкладки профилей), «Теги», «Дочерние общества», «Описание Компании»;
-- **Администрирование:** «Пользователи», «Статистика».
+- Настройки: «Источники», «Скоринг» (вкладки профилей), «Теги», «Дочерние общества», «Описание Компании»;
+- Администрирование: «Пользователи», «Статистика».
 
 Служебные экраны задач и обслуживания открываются по ссылке `?screen=jobs` и `?screen=maintenance`.
 

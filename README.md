@@ -282,7 +282,7 @@ assets/                  картинки этого README
 
 > **Важно:** при внешнем контуре настройку модели читает тот процесс, который зовёт модель. Модели сути, перевода, «Дедупа», перепечаток и документов задают в `.env.external-worker` на NL, строка в `.env` ядра на них не действует. Модели «Отбора», «Карточки» и поиска радара читает ядро и передаёт воркеру в задаче.
 
-Брендинг выпуска лежит в томе `branding` (`/app/branding/digest_branding.json`), шрифт бренда в его подкаталоге `fonts/`: `brand-sans-regular.ttf`, `brand-sans-bold.ttf`, `brand-sans-condensed-regular.ttf`, `brand-sans-condensed-bold.ttf`. Интерфейс берёт файлы по адресу `/brand/fonts/`, печать PDF и письмо встраивают их из того же каталога. Файла нет: работает запасной шрифт (Arial, Arial Narrow).
+Брендинг выпуска лежит в томе `branding` (`/app/branding/digest_branding.json`), шрифт бренда в его подкаталоге `fonts/`: `brand-sans-regular.ttf`, `brand-sans-bold.ttf`, `brand-sans-condensed-regular.ttf`, `brand-sans-condensed-bold.ttf`. Интерфейс берёт файлы по адресу `/brand/fonts/`, печать PDF и письмо встраивают их из того же каталога. Файла нет: работает запасной шрифт (Arial, Arial Narrow). Почтовые клиенты вырезают встроенный шрифт, а Word берёт шрифт по имени, поэтому имя шрифта бренда, установленного у читателей, задаёт блок `fonts` того же файла (`office_family`, `office_condensed_family`); пусто: Arial.
 
 ---
 

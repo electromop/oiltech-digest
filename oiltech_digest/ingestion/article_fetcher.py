@@ -83,7 +83,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
     retry_too_short=True re-attempts articles previously marked too_short or
     no_gain, useful after adding a new extraction backend (e.g. trafilatura).
     """
-    # mismatch, отдельно от failed: это не сбой сети, а сработавшая защита от подмены
+    # mismatch: отдельно от failed: это не сбой сети, а сработавшая защита от подмены
     # текста (№24). Смешивать их нельзя, иначе не видно, работает ли страж.
     stats: dict = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0,
                    "no_gain": 0, "mismatch": 0, "replaced": []}  # (id, прежнее тело, новое): для пересчёта ИИ
@@ -309,7 +309,7 @@ def _title_share_in(title_words: set[str], text: str) -> float:
 def _own_article_block(doc, title: str):
     """Блок страницы, где заголовок ЭТОЙ статьи: единственный заголовок своего уровня.
 
-    None, якоря нет (заголовок не нашёлся или он на странице один): тогда извлечение
+    None: якоря нет (заголовок не нашёлся или он на странице один): тогда извлечение
     идёт по всей странице, как раньше."""
     title_words = set(_heading_words(title))
     if len(title_words) < _ANCHOR_MIN_WORDS:
@@ -346,7 +346,7 @@ def _json_ld_article_text(doc, title: str = "") -> str:
 
     С заголовком: только тело, чей headline совпадает со статьёй. Раньше бралось
     «самое длинное» из всех, и закреплённый материал из разметки побеждал свою
-    статью (дефект №24, 28.07). Несколько тел, и ни одно не наше,: разметке не верим."""
+    статью (дефект №24, 28.07). Несколько тел, и ни одно не наше, разметке не верим."""
     entries: list[tuple[str, str]] = []
     for node in doc.xpath("//script[contains(translate(@type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'ld+json')]"):
         raw = (node.text or "").strip()

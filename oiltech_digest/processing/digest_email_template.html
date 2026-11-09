@@ -37,14 +37,14 @@
 
     .news-repeat-table {{
       border-collapse: collapse;
-      /* fixed: ширины колонок задаются разметкой, а не содержимым — длинный текст
+      /* fixed: ширины колонок задаются разметкой, а не содержимым: длинный текст
          переносится внутри ячейки вместо того, чтобы раздвигать таблицу. */
       table-layout: fixed;
       width: 100%;
     }}
 
     /* Заголовок «Новости» показывается ОДИН раз, в начале блока.
-       Было `table-header-group` — Chromium повторял его на каждой странице PDF,
+       Было `table-header-group`: Chromium повторял его на каждой странице PDF,
        и в середине документа это читается как начало новой рубрики, а не как
        продолжение той же. Замечание заказчика 24.08: «что за НОВОСТИ сверху?».
        Секция в выпуске одна, повторять её нечего. */
@@ -53,7 +53,7 @@
     }}
 
     .news-section-title {{
-      font-family:'Brand Sans Condensed','Brand Sans',Arial,Helvetica,sans-serif;
+      font-family:{font_stack_condensed};
       font-size:30px;
       line-height:36px;
       color:#003da6;
@@ -76,10 +76,10 @@
 
     .news-card-title {{
       /* Без переносов длинное слово или URL распирает таблицу фикс-ширины 600px,
-         и вёрстка «съезжает» — карточка вылезает за рамку, картинка сдвигается. */
+         и вёрстка «съезжает»: карточка вылезает за рамку, картинка сдвигается. */
       word-break: break-word;
       overflow-wrap: anywhere;
-      font-family: 'Brand Sans Condensed', 'Brand Sans', Arial, Helvetica, sans-serif;
+      font-family: {font_stack_condensed_spaced};
       font-size: 20px;
       line-height: 24px;
       color: #003da6;
@@ -95,7 +95,7 @@
       line-height: 18px;
       color: #333333;
       margin-top: 6px;
-      /* Выравнивание по ширине — просьба заказчика 25.08. В колонке 600 px оно само
+      /* Выравнивание по ширине: просьба заказчика 25.08. В колонке 600 px оно само
          по себе рвёт строку «реками» пробелов, поэтому идёт в паре с переносами:
          html имеет lang="ru", и Chromium расставляет их по русским правилам. */
       text-align: justify;
@@ -150,7 +150,7 @@
     }}
   </style>
 </head>
-<body style="margin:0;padding:0;background:#F3F5F8;font-family:'Brand Sans',Arial,Helvetica,sans-serif;color:#262d3c;">
+<body style="margin:0;padding:0;background:#F3F5F8;font-family:{font_stack};color:#262d3c;">
   <div style="display:none;max-height:0;overflow:hidden;color:#F3F5F8;">{issue_preheader}</div>
 
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F3F5F8;">
@@ -159,8 +159,8 @@
         <table class="digest-frame" role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;">
 
           <!-- HERO: баннер 600×305 (бейдж, заголовок и подзаголовок запечены в
-               картинке). Корпоративной символики не содержит — верхняя полоса срезана
-               по требованию правообладателя. <img>, а не background — надёжно в Outlook. -->
+               картинке). Корпоративной символики не содержит: верхняя полоса срезана
+               по требованию правообладателя. <img>, а не background: надёжно в Outlook. -->
           <tr>
             <td style="padding:0;margin:0;font-size:0;line-height:0;">
               <img src="{hero_img_src}" width="600" height="305" alt="{hero_alt}" style="display:block;width:600px;height:305px;border:0;outline:none;text-decoration:none;">

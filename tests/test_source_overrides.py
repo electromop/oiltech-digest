@@ -210,7 +210,7 @@ def test_apply_overrides_picks_row_by_source_type_when_name_is_not_unique(isolat
     оверрайд на ВЫКЛЮЧЕННУЮ telegram-строку: `changed=1`, а починен не тот источник.
 
     Здесь проверяется обе половины: нужная строка изменена И телеграм-двойник не тронут
-    (его `url`, `parse_strategy` и `enabled` это отдельный рабочий источник, порча
+    (его `url`, `parse_strategy` и `enabled`: это отдельный рабочий источник, порча
     которого выглядела бы как «оверрайд применился успешно»).
     """
     with connection.get_connection() as conn:
@@ -256,7 +256,8 @@ def test_apply_overrides_refuses_ambiguous_name_instead_of_guessing(isolated_db,
     """Имя без `source_type`, совпавшее с НЕСКОЛЬКИМИ строками, не применяется вслепую.
 
     Молчаливый выбор «какой-нибудь» строки, худший исход: счётчик покажет `changed=1`,
-    а починен будет не тот источник (и заодно испорчен второй). Поэтому неоднозначность это отказ с именем в отчёте, а не монетка.
+    а починен будет не тот источник (и заодно испорчен второй). Поэтому неоднозначность:
+    это отказ с именем в отчёте, а не монетка.
     """
     with connection.get_connection() as conn:
         site_id = _add_source(conn, "Neftegaz.ru", source_type="Media",
@@ -305,7 +306,7 @@ def test_apply_overrides_reports_missing_names_not_just_a_counter(isolated_db, m
 
 
 def test_apply_overrides_source_type_mismatch_is_reported_as_missing(isolated_db, monkeypatch):
-    """Запись с `source_type`, которого нет у источника,: промах, а не тихое применение.
+    """Запись с `source_type`, которого нет у источника, промах, а не тихое применение.
 
     Опечатка в `source_type` («Мedia», «news») не должна деградировать до поиска по одному
     имени: иначе сужение ключа, добавленное ради безопасности, само стало бы источником

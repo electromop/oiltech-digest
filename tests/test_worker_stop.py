@@ -242,7 +242,7 @@ def test_supervisor_hands_back_what_was_done_before_the_hung_step(monkeypatch):
 
 
 def test_ready_result_is_not_handed_back_empty_while_progress_is_sent(monkeypatch):
-    """Ревью 23.09: progress(90) шёл, пока задача числилась «в работе»,: главный поток мог
+    """Ревью 23.09: progress(90) шёл, пока задача числилась «в работе», главный поток мог
     вернуть её пустой, и готовый полный итог выбрасывался."""
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.0)
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.05)

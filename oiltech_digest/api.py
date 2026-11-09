@@ -947,7 +947,7 @@ def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)
 
 @app.post("/api/sources/{source_id}/unarchive")
 def unarchive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть источник из архива. Включать сбор НЕ начинаем это отдельное решение."""
+    """Вернуть источник из архива. Включать сбор НЕ начинаем: это отдельное решение."""
     with get_connection() as conn:
         cur = conn.execute(
             "UPDATE sources SET archived_at = NULL, updated_at = now() WHERE id = %s RETURNING id, name",
@@ -1193,7 +1193,7 @@ def feedback_reasons(target: str = Query("article", pattern="^(article|source)$"
     """Словарь быстрых причин. Фронт не хранит свою копию: иначе списки разойдутся,
     как уже разошлись четыре независимых списка статусов статьи.
 
-    `target=source`, для ОС по источнику: без причин про сам сигнал («Не тот блок»).
+    `target=source`: для ОС по источнику: без причин про сам сигнал («Не тот блок»).
     Какая причина к чему применима, решает сервер: он же отбивает её при сохранении."""
     # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
     # статус платформы». Платформа выходит на корпоративный портал заказчика, и разговорный
@@ -1554,7 +1554,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 @app.post("/api/signals/{signal_id}/return")
 def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
                            user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор»,: отрасль, связь и
+    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», отрасль, связь и
     применение, категорию, и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
     человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит только он (решение 05.10)."""
     from oiltech_digest.db import otbor_store
@@ -2113,7 +2113,7 @@ def external_worker_page(
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
     """Сбор на РФ (добор находок радара, поручение владельца 04.11): страницу, которую воркер NL не открыл, качает
-    ядро со своего адреса: в аренде задачи и только для прогона радара; что ядро качает, а что нет,: core_page."""
+    ядро со своего адреса: в аренде задачи и только для прогона радара; что ядро качает, а что нет, core_page."""
     lease = _sha256_hex(payload.lease_token)
     if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease):
         raise HTTPException(status_code=409, detail="Job lease is not active")
@@ -2325,7 +2325,7 @@ def external_worker_fail(
 def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> bool:
     """Сбой ИИ-пакета со снимком сделанного (шаг завис: external_worker.LeaseKeeper).
 
-    Сделанное пишется и вычитается из задачи, как при release,: модель не зовётся второй раз
+    Сделанное пишется и вычитается из задачи, как при release, модель не зовётся второй раз
     за оплаченное. Но попытка списывается (repository.fail_finalizing_external_job): зависание
     может сидеть в самой задаче. False: снимок не принимается (вид без частичного итога,
     пробный прогон): тогда это обычный fail."""

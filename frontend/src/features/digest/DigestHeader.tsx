@@ -1,4 +1,4 @@
-import { monthLabel } from "../articles/feedWindow";
+import { monthLabel } from "../shared/feedWindow";
 import type { DigestExportFormat } from "./digestExport";
 
 export type DigestView = "issue" | "archive";
