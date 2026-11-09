@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">OilTech Digest</title>
+  <style>
+    text { font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif; }
+  </style>
+  <rect x="1" y="1" width="638" height="178" rx="24" fill="#F7F7F4" stroke="#D3D7D1" stroke-width="2"/>
+  <rect x="28" y="26" width="128" height="128" rx="30" fill="#24292F"/>
+  <path d="M92 40 C92 40 60 78 60 106 A32 32 0 0 0 124 106 C124 78 92 40 92 40 Z" fill="#F7F7F4"/>
+  <circle cx="92" cy="114" r="6" fill="#2E7D6F"/>
+  <path d="M82.8 104.8 A13 13 0 0 1 101.2 104.8" fill="none" stroke="#2E7D6F" stroke-width="5" stroke-linecap="round"/>
+  <path d="M76.4 98.4 A22 22 0 0 1 107.6 98.4" fill="none" stroke="#2E7D6F" stroke-width="5" stroke-linecap="round"/>
+  <text x="184" y="88" font-size="52" font-weight="700" fill="#1F2328">OilTech <tspan fill="#2E7D6F">Digest</tspan></text>
+  <text x="187" y="124" font-size="20" fill="#57606A">мониторинг нефтесервисных публикаций</text>
+</svg>

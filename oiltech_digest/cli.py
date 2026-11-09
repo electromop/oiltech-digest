@@ -828,7 +828,7 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         )
         mode = "СУХОЙ ПРОГОН (ничего не помечается)" if not args.apply else "С ЗАПИСЬЮ пометок"
         print(f"find-reprints: задача {job['id']} в очереди {job['queue_name']}, пар={len(pairs)}, режим: {mode}")
-        print(f"Смотреть результат: cli jobs-show {job['id']} или таблица article_reprints")
+        print(f"Смотреть результат: задача {job['id']} на экране «Фоновые задачи» (GET /api/jobs/{job['id']}) или таблица article_reprints")
         return
 
     client = make_client(offline=args.offline)

@@ -1,384 +1,246 @@
 # OilTech Digest: гид по проекту
 
-Этот документ нужен, чтобы быстро понять, что уже работает в проекте, как данные
-двигаются по системе, где смотреть код и как запускать основные сценарии.
+Для того, кто впервые открывает проект: что работает, как данные идут по системе, где код и как запустить основные
+сценарии. Подробное устройство: [architecture.md](architecture.md), проверка: [testing.md](testing.md).
 
 ## 1. Что делает проект
 
-`OilTech Digest` собирает новости из каталога источников, сохраняет статьи в PostgreSQL,
-отсеивает очевидный шум, при необходимости догружает полный текст статьи по ссылке,
-прогоняет AI-обработку и дает интерфейс для ручного отбора материалов в месячный дайджест.
+OilTech Digest собирает публикации о нефтесервисе, решает агентами, какие из них брать, и даёт людям разобрать их и
+собрать месячный выпуск для заказчика. Части системы:
 
-Текущий продукт состоит из трех рабочих частей:
+1. сбор: каталог источников, RSS, листинги сайтов, браузер, открытые каналы Telegram, полный текст статьи;
+2. технологический радар: поиск материалов встроенным поиском модели по расписанию;
+3. бот Telegram «Материалы коллег»: сотрудники вносят ссылки, файлы и события ([tg_materials_bot.md](tg_materials_bot.md));
+4. агенты: «Отбор» (брать или нет), «Суть и перевод», «Карточка» (тема, атрибуты, баллы), «Дедуп»;
+5. интерфейс на React и API на FastAPI: бизнес-лента, радар, выпуск, материалы, настройки;
+6. выпуск месяца: PDF в формате эксперта заказчика, письмо, DOCX.
 
-1. ingestion-пайплайн для источников и статей;
-2. AI-пайплайн: агент «Отбор» (брать или нет), `summary -> translate` (суть и русский заголовок), агент
-   «Карточка» (тема и баллы сигнала);
-3. FastAPI + Admin UI для просмотра и управления данными.
-
-## 2. Что уже реально работает
-
-Сейчас в проекте есть:
-
-- каталог источников из Excel;
-- автообнаружение RSS для сайтов;
-- парсинг RSS в таблицу `articles`;
-- listing-based monitoring для `request`-источников без RSS;
-- Telegram public-preview ingestion для открытых каналов через `https://t.me/s/<channel>`;
-- предфильтр явного нерелевантного шума до записи в БД;
-- дозагрузка полного текста статьи по `url`, если RSS дал только анонс;
-- AI summary на русском;
-- агент «Отбор»: брать ли публикацию, категория и связь с нефтесервисом (гейт релевантности снят 08.11);
-- агент «Карточка»: тема из 13 тематик заказчика и атрибуты сигнала (тег статьи снят 08.11);
-- баллы сигнала по настраиваемым критериям профиля категории, второй вызов «Карточки» (балл статьи снят 08.11);
-- учет токенов и стоимости по каждому AI-этапу;
-- HTML email-шаблон дайджеста и JSON-черновик дайджеста;
-- UI для статей, источников, тегов, скоринга и дайджеста;
-- Docker Compose с `db`, `app`, `scheduler`.
-
-Пока не реализовано как рабочий продукт:
-
-- Telegram ingestion через Telegram API/авторизованную сессию для закрытых каналов;
-- автоматическая публикация PDF/DOCX;
-- сохранение редакторского дайджеста в `monthly_digests` как основного потока UI.
-
-Эти сущности в БД есть частично "впрок", но основная работа сейчас идет через
-`sources`, `articles`, `article_cards`, `signals`, `tags`, `scoring_criteria`,
-`ai_processing_runs`; `article_tags` и `article_scores` хранят историю (тег и балл статьи сняты 08.11).
-
-## 3. Как движутся данные
-
-Текущий боевой поток такой:
+## 2. Как движутся данные
 
 ```text
-sources
-  -> discover-rss
-  -> parse
-     (rss / request / public Telegram preview)
-  -> deterministic relevance prefilter
-  -> articles
-  -> fetch-full-text
-  -> «Отбор» (брать или нет)
-  -> summarize / translate (суть и русский заголовок)
-  -> «Карточка» (тема, атрибуты и баллы сигнала)
-  -> UI / digest-content / digest-email
+источники
+  → discover-rss, parse (rss, request, playwright, telegram)
+  → предфильтр шума, до записи в базу
+  → articles
+  → fetch-full-text
+  → «Отбор»: брать или нет                ← находки радара, материалы коллег
+  → суть и русский заголовок
+  → сигнал: «Карточка» (тема, атрибуты), затем баллы по профилю категории
+  → бизнес-лента и технологический радар на экране
+  → отметка «в дайджест» → выпуск месяца
 ```
 
-Разница между двумя фильтрами релевантности:
+Фильтров два, и они разные:
 
-- `ingestion/relevance_filter.py` — дешевый детерминированный отсев совсем явного мусора
-  еще до вставки статьи в БД;
-- агент «Отбор»: смысловое решение «брать или нет» до сути (AI-этап `relevance` снят 08.11).
+- `ingestion/relevance_filter.py`: дешёвый детерминированный отсев явного мусора ещё до записи статьи;
+- агент «Отбор»: смысловое решение «брать или нет» до сути и перевода. Отклонённое дальше не обрабатывается.
 
-## 4. Основные директории
+## 3. Где код
 
 ### `oiltech_digest/`
 
-- `config.py` — переменные окружения, пути, общие настройки;
-- `db/connection.py` — подключение к PostgreSQL и `init_db()`;
-- `db/schema.sql` — вся схема БД;
-- `db/repository.py` — SQL-операции и выборки для CLI/API/pipeline;
-- `ingestion/excel_seed.py` — загрузка источников из Excel;
-- `ingestion/rss_discovery.py` — поиск RSS-лент у источников;
-- `ingestion/rss_parser.py` — чтение RSS и вставка статей;
-- `ingestion/request_parser.py` — мониторинг listing-страниц и парсинг non-RSS источников;
-- `ingestion/relevance_filter.py` — предфильтр шума;
-- `ingestion/article_fetcher.py` — попытка извлечь полный текст со страницы статьи;
-- `processing/openai_client.py` — клиент OpenAI Responses API и offline-заглушка;
-- `processing/prompts.py`: схемы и инструкции сути, перевода и правки заголовка, судьи перепечаток;
-- `processing/pipeline.py` — бизнес-логика AI-этапов;
-- `processing/seed.py` — seed тегов и критериев;
-- `processing/digest.py` — сбор контента дайджеста и рендер HTML;
-- `processing/digest_email_template.html` — email-шаблон;
-- `api.py` — FastAPI API и отдача UI;
-- `cli.py` — точка входа для ручных команд.
+- `config.py`: переменные окружения и умолчания; `cli.py`: все команды; `api.py`: HTTP API и отдача интерфейса;
+- `background_jobs.py`, `external_worker.py`, `lanes.py`, `network_policy.py`, `contract.py`: очередь задач,
+  внешний воркер, полосы, маршрут «на месте или наружу», договор ядра и NL;
+- `otbor*.py`, `signal_card*.py`, `signal_summary.py`, `signal_scores.py`, `signal_scoring.py`, `card_return.py`:
+  агенты «Отбор», «Карточка» и «Суть и перевод» сигналов, их пакеты эксперту и экзамены (`*_pack*.py`, `*_exam*.py`);
+- `signal_discovery.py`, `signal_research.py`, `signal_dedup.py`, `signal_search_trial.py`: радар (прогон, поиск,
+  «Дедуп», пробный прогон);
+- `signal_feedback.py`, `signal_training.py`, `signal_reference.py`: обратная связь, выгрузки, эталон заказчика;
+- `colleague_materials.py`, `material_signals.py`, `tg_materials_bot.py`, `tg_materials_notices.py`: материалы
+  коллег и бот;
+- `auth.py`, `admission.py`: вход и допуск по коду; `brand_fonts.py`: шрифт бренда с сервера; `feed_window.py`:
+  окно месяца ленты;
+- `db/`: `schema.sql` (вся схема), `connection.py` (`init_db()`), `repository.py` (основные запросы) и хранилища
+  этапов (`otbor_store.py`, `signal_card_store.py`, `signal_scores_store.py`, `feed_signals.py`, `marks.py`,
+  `issue_edits_store.py` и соседние);
+- `ingestion/`: сбор (`rss_discovery.py`, `rss_parser.py`, `request_parser.py`, `playwright_parser.py`,
+  `telegram_parser.py`, `external_fetch.py`), полный текст (`article_fetcher.py`, `article_tails.py`), предфильтр
+  (`relevance_filter.py`), диагностика источников (`source_diagnostics.py`, `source_probe.py`), страницы находок
+  радара (`publisher_page.py`, `core_page.py`), сид каталога (`excel_seed.py`);
+- `processing/`: клиент OpenAI и офлайн-заглушка (`openai_client.py`), суть и перевод (`pipeline.py`, `prompts.py`,
+  `external_ai.py`), перепечатки (`reprints.py`), выпуск (`digest.py`, `digest_materials.py`, `digest_pdf.py`,
+  `digest_email_template.html`), словарь терминов (`domain_glossary.py`), сиды тематик и критериев (`seed.py`);
+- `documents/`: разбор загруженных документов.
 
-### `web/`
+### `frontend/`
 
-- `app.html` — весь текущий Admin UI без отдельного frontend build step.
+React и TypeScript, сборка Vite в `frontend/dist`; её отдаёт `app` на `/`. Экраны в `frontend/src/features/`,
+запросы к API в `frontend/src/api/`, стили и роли цветов в `frontend/src/styles/` (`tokens.css`).
 
 ### `scripts/`
 
-- `docker-scheduler.sh` — бесконечный цикл ingestion + AI в Docker.
+- `docker-scheduler.sh`: цикл планировщика;
+- `deploy-core.sh`, `deploy-nl.sh`: выкат ядра и воркеров NL ([architecture.md](architecture.md), раздел 10);
+- `run-local.sh`: местный запуск API на порту 8011 с включённым внешним контуром (проверка приёма файлов);
+- `manual-add-article.sh`: добавить статью по ссылке и поставить её в обработку.
 
-### `docs/`
+### Остальное
 
-- `architecture.md` — техническая архитектура;
-- `testing.md` — как проверять систему.
+- `tests/`: тесты pytest; `data/seed/`: каталог источников и направления с ключевыми словами (Excel), 13 тематик
+  заказчика; `docs/`: документация и ADR.
 
-## 5. Режимы запуска
+## 4. Запуск
 
-### Вариант A: все сразу через Docker
-
-Это основной способ понять проект целиком.
-
-Поднимаются:
-
-- `db` — PostgreSQL;
-- `app` — FastAPI и UI на `127.0.0.1:8000`;
-- `scheduler` — циклический ingestion и AI-processing (профиль `pipeline`).
-
-Команда:
+### Docker целиком
 
 ```bash
-docker compose --profile pipeline up -d --build
+cp .env.example .env    # заполнить: пароль базы, ключ OpenAI, модели агентов
+docker compose up -d --build app                                  # db, bootstrap (схема и сиды), app
+docker compose up -d --build worker playwright-worker scheduler   # конвейер, профиль pipeline
 ```
 
-### Вариант B: локально по шагам
+Интерфейс открывается на `http://localhost:8000`. Вход по http требует `AUTH_COOKIE_SECURE=0` в `.env`. Первая
+учётка и её первый вход:
 
-Подходит для разработки и диагностики:
+```bash
+docker compose exec app python -m oiltech_digest.cli create-user --email <почта> --password <пароль> --admin
+docker compose exec app python -m oiltech_digest.cli admission-code --email <почта>   # код для экрана входа
+```
 
-1. поднять только БД;
-2. вручную запускать CLI-команды;
-3. отдельно поднять `uvicorn`.
+Без внешнего контура (`EXTERNAL_WORKERS_ENABLED=0`, так по умолчанию) задачи ИИ встают в местную очередь `ai`, их
+исполняет `worker`. Этапу без своей модели (`OTBOR_MODEL`, `SIGNAL_CARD_MODEL`, `SIGNAL_SCORES_MODEL`,
+`SIGNAL_RESEARCH_MODEL`) шаг планировщика отказывает с причиной в логе. Сервис `caddy` нужен только на сервере.
 
-## 6. Что делает scheduler
-
-Файл: [scripts/docker-scheduler.sh](../scripts/docker-scheduler.sh)
-
-При старте scheduler:
-
-1. делает `init-db`;
-2. делает `seed-sources`;
-3. делает `seed-tags`;
-4. делает `seed-scoring`.
-
-Дальше в цикле:
-
-1. периодически запускает `discover-rss`;
-2. запускает `parse`;
-3. запускает `fetch-full-text`;
-4. запускает `process` или `process --offline`;
-5. печатает `stats`;
-6. засыпает на `CYCLE_INTERVAL_SECONDS`.
-
-Главные env-параметры для scheduler:
-
-- `CYCLE_INTERVAL_SECONDS`
-- `RUN_DISCOVER_ON_START`
-- `DISCOVER_EVERY_CYCLES`
-- `DISCOVER_TIMEOUT`
-- `DISCOVER_WORKERS`
-- `PARSE_WORKERS`
-- `FULL_TEXT_LIMIT`
-- `FULL_TEXT_MIN_CHARS`
-- `AI_PROCESS_LIMIT`
-- `AI_OFFLINE`
-
-## 7. База данных простыми словами
-
-### Источники и сырье
-
-- `sources` — каталог источников, который видит пользователь, включая `listing_url`,
-  `last_seen_article_url`, `last_seen_published_at` для non-RSS мониторинга;
-- `articles` — сырые статьи после RSS/полного текста.
-
-### Рабочий слой AI
-
-- `article_cards`: summary, русский заголовок, статус, комментарии, selected flag, вердикт гейта релевантности
-  (история: гейт снят 08.11);
-- `signals`: сигнал публикации (статьи ленты, находки радара, материала коллеги) с решением «Отбора», темой,
-  атрибутами и баллами «Карточки» по критериям;
-- `article_tags`, `article_scores`, `article_score_items`: тег и балл статьи до 08.11 (история, новых нет);
-- `ai_processing_runs` — токены, стоимость, статус каждого AI-вызова.
-
-### Настройки
-
-- `tags` — иерархия тематик;
-- `scoring_criteria` — критерии скоринга и веса.
-
-### Заготовки на будущее
-
-- `monthly_digests`, `monthly_digest_items`;
-- `export_jobs`.
-
-Сейчас UI-дайджест собирается на лету из обработанных статей, а не из сохраненного
-объекта `monthly_digests`.
-
-## 8. CLI-команды по смыслу
-
-### Подготовка БД
-
-- `init-db`
-- `seed-sources`
-- `seed-tags`
-- `seed-scoring`
-
-### Сбор данных
-
-- `discover-rss`
-- `parse`
-- `fetch-full-text`
-- `stats`
-
-### AI-обработка
-
-- `summarize`
-- `translate-titles`
-- `process`
-- `process-articles`
-- `enqueue-otbor`, `enqueue-signal-cards`, `enqueue-signal-scores` (агенты «Отбор» и «Карточка», внешний контур)
-
-### Аналитика по стоимости
-
-- `ai-cost-report`
-- `ai-article-cost-report`
-
-### Работа с источниками
-
-- `sources`
-- `source-health`
-- `source-enable`
-- `source-add-rss`
-- `source-diagnose`
-- `source-probe` — путь сбора источника с вердиктом рубежей вставки по каждому кандидату, только чтение
-
-### Дайджест
-
-- `digest-content`
-- `digest-save`
-
-## 9. API-эндпоинты
-
-Файл: [api.py](../oiltech_digest/api.py)
-
-Основные ручки:
-
-- `GET /` — UI;
-- `GET /api/health` — быстрая проверка живости;
-- `GET /api/articles` — список статей;
-- `PATCH /api/articles/{id}` — статус/отбор/комментарий статьи;
-- `GET /api/sources` — список источников;
-- `GET /api/source-health` — вердикты покрытия источников;
-- `POST /api/sources` — добавить RSS-источник;
-- `POST /api/auth/register` / `POST /api/auth/login` / `POST /api/auth/logout`;
-- `GET /api/auth/me`;
-- `POST /api/sources/{source_id}/scrape` — вручную проверить listing request-источника;
-- `GET/POST /api/sources/{source_id}/diagnose` — read-only диагностика источника; POST принимает временные селекторы без сохранения;
-- `PATCH /api/sources/{id}` — обновить источник;
-- `GET /api/tags`, `PUT /api/tags` — теги;
-- `GET /api/scoring-criteria`, `PUT /api/scoring-criteria` — критерии скоринга;
-- `GET /api/reports/ai-cost` — агрегированный cost report;
-- `GET /api/reports/ai-article-cost` — стоимость полного прогона статьи;
-- `GET /api/digest-content` — JSON дайджеста;
-- `POST /api/monthly-digests` — сохранить draft дайджеста за месяц;
-- `GET /api/monthly-digests/{month}` — получить сохраненный draft;
-- `GET /api/digest-email` — HTML email-шаблон;
-- `POST /api/process` — AI-обработка батча статей.
-
-## 10. Что видит пользователь в UI
-
-### Все статьи
-
-Главный рабочий экран:
-
-- поиск;
-- фильтры;
-- статусы;
-- балл сигнала статьи (второй вызов «Карточки»);
-- summary;
-- тема сигнала статьи («Карточка»);
-- статус статьи `digest`, который и определяет попадание в месячный дайджест;
-- запуск AI-обработки выбранных статей.
-
-### Месячный дайджест
-
-- фильтрация статей по месяцу и score;
-- JSON-черновик;
-- открытие HTML email-шаблона.
-
-### Источники
-
-- каталог источников;
-- включение/выключение;
-- изменение RSS URL;
-- настройка `listing_url` и селекторов для `request`-источников;
-- ручное добавление RSS-источника;
-- вход и регистрация по email/password.
-
-### Теги и Скоринг
-
-- редактируемые списки настроек для AI pipeline.
-
-## 11. Как проект обычно использовать
-
-### Если нужно просто собрать систему и посмотреть UI
+### Локально по шагам
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
-```
-
-### Если нужно вручную прогнать полный ingestion
-
-```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+docker compose up -d db
 python -m oiltech_digest.cli init-db
 python -m oiltech_digest.cli seed-sources
-python -m oiltech_digest.cli discover-rss
-python -m oiltech_digest.cli parse
-python -m oiltech_digest.cli fetch-full-text
-python -m oiltech_digest.cli stats
-```
-
-### Если нужно вручную прогнать AI
-
-```bash
 python -m oiltech_digest.cli seed-tags
 python -m oiltech_digest.cli seed-scoring
-python -m oiltech_digest.cli process --limit 20
+(cd frontend && npm ci && npx vite build)
+uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 ```
 
-### Если нужно посмотреть экономику
+`DATABASE_URL` из `.env` должен сходиться с логином и паролем базы в compose (в `.env.example` они согласованы).
+Без собранного фронта `/` отвечает 404 «Интерфейс не собран».
 
-```bash
-python -m oiltech_digest.cli ai-cost-report
-python -m oiltech_digest.cli ai-article-cost-report
-```
+## 5. Что делает планировщик
 
-### Если нужно собрать дайджест
+[`scripts/docker-scheduler.sh`](../scripts/docker-scheduler.sh), подробно в [architecture.md](architecture.md),
+раздел 7. Без `SKIP_BOOTSTRAP=1` при старте: `init-db`, `seed-sources`, `seed-tags`, `seed-scoring`,
+`seed-signal-topics`, `apply-source-overrides` (в compose это делает `bootstrap`). Дальше в цикле: обслуживание,
+поиск RSS, сбор, полный текст, суть и перевод, шаги агентов («Отбор», «Суть и перевод» сигналов, «Карточка», баллы),
+сбор через NL, перепечатки, радар по расписанию, сторож полос `check-lanes`, `stats`. Затем пауза
+`CYCLE_INTERVAL_SECONDS`.
 
-```bash
-python -m oiltech_digest.cli digest-content 2026-05 \
-  --output digest-2026-05.json \
-  --html-output digest-2026-05.html
-```
+Главные переменные: `CYCLE_INTERVAL_SECONDS`, `DISCOVER_EVERY_CYCLES`, `PARSE_WORKERS`, `FULL_TEXT_LIMIT`,
+`AI_PROCESS_LIMIT`, `AI_OFFLINE`, `FETCH_EXTERNAL_ENABLED`, `REPRINTS_INTERVAL_HOURS`, `SIGNAL_CARD_ENABLED`,
+`SIGNAL_DISCOVERY_DAILY_ENABLED`, `STEP_TIMEOUT_SECONDS`.
 
-## 12. Частые вопросы
+## 6. База простыми словами
 
-### Почему в БД может быть статья с пустым или коротким текстом?
+- `sources`: каталог источников (стратегия сбора, лента, селекторы, сетевой регион, дата начала сбора);
+- `articles`: статьи с текстом; `article_cards`: суть и русский заголовок статьи;
+- `signals`: карточка события, будь то статья ленты, находка радара или материал коллеги; на ней решение «Отбора»,
+  тема, атрибуты и баллы; `signal_evidence`: её публикации;
+- `article_marks`, `signal_marks`: общие отметки («в дайджест», шум, дубль, архив);
+- `monthly_digests`, `monthly_digest_items`: общий черновик выпуска месяца;
+- `tags`, `scoring_criteria`: тематики и критерии скоринга по профилям;
+- `ai_processing_runs`: токены, стоимость и статус каждого вызова модели; `background_jobs`: очередь задач.
 
-Потому что часть RSS отдает только анонс. Для этого есть `fetch-full-text`, который
-пытается заменить анонс на полный текст страницы.
+Теги и баллы статей (`article_tags`, `article_scores`) хранят историю до 08.11: с тех пор тему и баллы ставит
+«Карточка» у сигнала. Полный перечень таблиц: [architecture.md](architecture.md), раздел 5.
 
-### Почему статья может не попасть в БД вообще?
+## 7. Команды CLI по смыслу
 
-Если предфильтр распознал ее как явный шум, она отсекается еще на этапе `parse`
-и в БД не сохраняется.
+Запуск: `python -m oiltech_digest.cli <команда>`, справка по команде: `<команда> --help`. Многие команды, которые
+меняют данные задним числом, по умолчанию идут сухим прогоном, но не все (`retire-tags` и `recheck-unmark` пишут
+сразу): перед запуском смотреть справку.
 
-### Почему статья не дошла до темы и баллов?
+- **База и учётки:** `init-db`, `schema-check`, `seed-sources`, `seed-tags`, `seed-scoring`,
+  `apply-scoring-preset`, `seed-signal-topics`, `create-user`, `set-role`, `list-users`, `admission-code`.
+- **Сбор:** `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
+  `enqueue-external-scrape`, `enqueue-external-refetch`, `source-retry`, `stats`.
+- **Источники:** `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
+  `set-source-region`, `apply-source-overrides`, `source-audit`, `source-diagnose`, `source-probe`,
+  `source-dump-listing`.
+- **Суть и перевод ленты:** `process`, `process-full`, `process-articles`, `enqueue-process`, `summarize`,
+  `translate-titles`, `enqueue-translate`, `enqueue-resummarize`, `enqueue-title-edit`.
+- **Агенты:** `enqueue-otbor`, `enqueue-signal-summary`, `enqueue-signal-cards`, `enqueue-signal-scores`,
+  `enqueue-signal-card-history`, `otbor-materials`, `sync-feed-signals`.
+- **Радар:** `enqueue-daily-signal-discovery`, `enqueue-signal-discovery`, `radar-search-trial`, `signals`,
+  `radar-weekly-report`, `radar-recall`, `import-reference-signals`, `archive-signals`, `unarchive-signals`,
+  `unmerge-signal`, `refresh-signal-evidence-counts`.
+- **«Дедуп» ленты:** `find-reprints`, `reprints`.
+- **Экзамены агентов:** `otbor-expert-pack`, `otbor-markup-check`, `otbor-exam`, `otbor-exam-control`,
+  `card-scores-exam`, `card-scores-exam-control`, `signal-card-expert-pack`, `signal-card-exam`,
+  `signal-card-exam-judge`.
+- **Обратная связь и выгрузки:** `signal-feedback`, `import-signal-feedback`, `article-signal-feedback`,
+  `export-signal-training-jsonl`, `export-signal-context`, `import-signal-context`.
+- **Выпуск:** `digest-content`, `digest-save`.
+- **Терминология:** `validate-terminology`, `audit-terminology`, `repair-terminology`, `eval-terminology`.
+- **Ремонт данных:** `repair-article-bodies`, `repair-article-dates`, `repair-url-keys`, `repair-telegram-titles`,
+  `cleanup-future-dates`, `recheck-marked`, `recheck-purge`, `recheck-unmark`, `retire-tags`,
+  `migrate-shared-marks`, `article-candidates`.
+- **Переключение на «Отбор» (история 04.11):** `otbor-shadow`, `otbor-shadow-report`, `otbor-switch`.
+- **Процессы и обслуживание:** `jobs-worker`, `external-worker`, `tg-materials-bot`, `jobs-requeue-stale`,
+  `external-queues-status`, `check-lanes`, `live-ai-leases`, `worker-versions`, `scheduler-lock`,
+  `maintenance-cleanup`, `bench-readiness`, `ai-cost-report`, `ai-article-cost-report`.
 
-Обычно по одной из причин:
+## 8. API
 
-- еще не был запущен `process` или шаги «Карточки» (`enqueue-signal-cards`, `enqueue-signal-scores`);
-- «Отбор» еще не решил статью или отклонил ее;
-- стоит лимит батча и статья ждет следующего прохода.
+Все адреса в [`api.py`](../oiltech_digest/api.py); роли в [architecture.md](architecture.md), раздел 6.
 
-### Откуда берется стоимость?
+- **Вход:** `POST /api/auth/login`, `POST /api/auth/admit` (код допуска), `POST /api/auth/logout`,
+  `GET /api/auth/me`; учётки: `/api/users`.
+- **Служебное:** `GET /api/health`, `GET /api/readiness`, `/api/jobs`, `/api/maintenance/*`.
+- **Лента и сигналы:** `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
+  `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
+  `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,
+  `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `/api/feedback`.
+- **Выпуск:** `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
+  `POST /api/jobs/digest-export`, `/api/monthly-digests`, `PUT /api/issue-highlights/{month}`,
+  `PATCH /api/signals/{id}/issue-material`, `/api/digest-branding`.
+- **Материалы и документы:** `/api/materials`, `/api/documents`.
+- **Настройки:** `/api/sources` (с `scrape`, `diagnose`, `archive`), `GET /api/source-health`, `/api/tags`,
+  `/api/scoring-criteria`, `/api/company-parents`, `/api/company-description`.
+- **Отчёты:** `/api/reports/ai-cost`, `/api/reports/ai-article-cost`, `/api/stats/monthly`, `/api/analytics/monthly`.
+- **Внешние воркеры и бот:** `/api/external-worker/*`, только с токеном воркера.
 
-Из таблицы `ai_processing_runs`, где после каждого вызова OpenAI сохраняются
-`input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model`, `status`.
+## 9. Что видит пользователь
 
-## 13. С чего читать код новому человеку
+Меню в три группы (`frontend/src/app/App.tsx`):
 
-Лучший порядок чтения:
+- **Работа:** «Бизнес-лента» (бизнес-сигналы карточками событий, публикации снизу, атрибуты, фильтры и «всё про
+  компанию»), «Технологический радар», «Месячный дайджест» (сборка выпуска, предпросмотр PDF, правка материалов,
+  выгрузка), «Материалы» (материалы из бота и загруженные документы);
+- **Настройки:** «Источники», «Скоринг» (вкладки профилей), «Теги», «Дочерние общества», «Описание Компании»;
+- **Администрирование:** «Пользователи», «Статистика».
+
+Служебные экраны задач и обслуживания открываются по ссылке `?screen=jobs` и `?screen=maintenance`.
+
+## 10. Частые вопросы
+
+**Почему у статьи пустой или короткий текст?** RSS часто даёт только анонс. `fetch-full-text` пытается заменить
+его полным текстом страницы; если страница не прошла страж принадлежности, статус `mismatch` и прежний текст
+остаётся.
+
+**Почему статья не попала в базу?** Предфильтр счёл её шумом, она старше даты начала сбора источника
+(`sources.collect_since`) или её адрес уже есть.
+
+**Почему статья не дошла до темы и баллов?** Обычно одно из трёх: «Отбор» её ещё не решил или отклонил; шаг
+«Карточки» выключен (`SIGNAL_CARD_ENABLED=0`) или у агента не задана модель; статья ждёт следующего цикла из-за
+лимита шага.
+
+**Почему статьи нет на экране, хотя в базе она есть?** Лента показывает окно месяца (текущий месяц, а по 10-е число
+включительно и прошлый), перепечатка уходит из ленты к главной копии, отклонённое «Отбором» видно только
+администратору в «Отклонённых».
+
+**Откуда берётся стоимость?** Из `ai_processing_runs`: после каждого вызова модели там токены, стоимость, модель и
+статус. Отчёты: `ai-cost-report`, `ai-article-cost-report`, экран «Статистика».
+
+## 11. С чего читать код
 
 1. [README.md](../README.md)
-2. [project_guide.md](project_guide.md)
-3. [architecture.md](architecture.md)
-4. [cli.py](../oiltech_digest/cli.py)
-5. [api.py](../oiltech_digest/api.py)
-6. [repository.py](../oiltech_digest/db/repository.py)
-7. `ingestion/*`
-8. `processing/*`
-
-Этого достаточно, чтобы понять проект сверху вниз: продукт -> запуск -> данные -> SQL -> бизнес-логика.
+2. этот гид и [architecture.md](architecture.md)
+3. [cli.py](../oiltech_digest/cli.py) (функция `build_parser`) и [api.py](../oiltech_digest/api.py)
+4. [schema.sql](../oiltech_digest/db/schema.sql) и [repository.py](../oiltech_digest/db/repository.py)
+5. агенты по порядку конвейера: [otbor.py](../oiltech_digest/otbor.py),
+   [signal_card.py](../oiltech_digest/signal_card.py), [signal_scores.py](../oiltech_digest/signal_scores.py)
+6. `ingestion/` и `processing/`

@@ -4,7 +4,7 @@
 #   scripts/deploy-nl.sh [--ref origin/main] [СЕРВИС...]
 #   СЕРВИС (по умолчанию все): external-worker external-worker-bulk external-worker-fetch external-worker-browser external-worker-agents tg-materials-bot
 #
-# Запускать на NL в каталоге репозитория (/root/oiltech-digest). Шаги:
+# Запускать на NL в каталоге репозитория. Шаги:
 #   1. git fetch + reset --hard на REF, дальше работает версия скрипта из нового кода;
 #   2. сборка всех названных образов, пока старые воркеры работают (SHA коммита: в образ);
 #   3. по одному: up -d --no-deps: Docker шлёт SIGTERM, воркер возвращает задачи ядру
@@ -13,9 +13,9 @@
 #      контейнеры не трогаем;
 #   4. в конце: версии всех воркеров глазами ядра.
 #
-# Не во время ежедневного радара (в едином контуре, первый цикл планировщика после 00:00 МСК; до D, крон 07:15; прогон до ~20 мин): прогон в external-worker-agents по
-# частям не сохраняется (signal_discovery не в PARTIAL_KINDS) и начнётся заново: повторные запросы
-# к Brave и судье. На ядре: cli external-queues-status (external-agents: running=0). Страж: задача D.
+# Не во время прогона радара (первый цикл планировщика после 00:00 МСК, поиск модели до ~2 ч): прогон в
+# external-worker-agents по частям не сохраняется (signal_discovery не в PARTIAL_KINDS) и начнётся заново,
+# оплаченный поиск и «Дедуп» пойдут второй раз. На ядре: cli external-queues-status (external-agents: running=0).
 #
 # Ядро выкатывается раньше (scripts/deploy-core.sh на РФ): оно понимает и старых, и новых.
 set -eu

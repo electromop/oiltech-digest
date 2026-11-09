@@ -69,9 +69,9 @@ describe("экран «Скоринг»: вкладки наборов крит�
     expect(screen.getByRole("tab", { name: "Технологический радар" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Сумма весов: 65%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
-    // Профиль подключён к радару (ADR 0002, Б3): плашка больше не говорит «пока не входит».
-    expect(screen.getByRole("status")).toHaveTextContent("Этим набором оцениваются карточки технологического радара");
-    expect(screen.getByRole("status")).toHaveTextContent("со следующего прогона радара");
+    // Профиль подключён к баллам «Карточки» (#132): плашка больше не говорит «пока не входит».
+    expect(screen.getByRole("status")).toHaveTextContent("Этим набором «Карточка» оценивает технологические сигналы ленты и радара");
+    expect(screen.getByRole("status")).toHaveTextContent("Изменения действуют на следующие оценки");
     expect(screen.getByRole("status")).not.toHaveTextContent("пока не");
     expect(confirm).not.toHaveBeenCalled(); // правок не было: и спрашивать не о чем
   });

@@ -1,120 +1,115 @@
 # Тестирование OilTech Digest
 
-Этот документ описывает, как проверять проект по слоям: код, БД, ingestion,
-AI и UI/API.
+Как проверять проект: автоматические тесты бэкенда и фронта, затем проверки на собранной системе. Устройство
+системы: [architecture.md](architecture.md), запуск: [project_guide.md](project_guide.md).
 
-## 1. Unit-тесты
+## 1. Тесты бэкенда (pytest)
+
+Нужны Python 3.13 (как в образе), PostgreSQL 16 и зависимости разработки:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+. .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest -q
+python -m playwright install chromium   # для тестов печати PDF и браузерного сбора
 ```
 
-Без локального Python-окружения можно прогнать тот же набор в Docker:
+Без Chromium тесты, которым он нужен, пропускаются, остальные идут.
+
+**База.** Тесты берут строку подключения из `DATABASE_URL` (окружение или `.env` в корне); без неё `config.py`
+смотрит на локальный Postgres, базу `oiltech_digest` на порту 5432. Проще всего база из compose:
 
 ```bash
-docker compose run --rm test
+cp .env.example .env      # пароль базы и DATABASE_URL в нём согласованы
+docker compose up -d db   # слушает localhost:5432
 ```
 
-Фоновые API-задачи покрываются тестами `tests/test_background_jobs.py`,
-`tests/test_api.py` и `tests/test_api_integration.py`.
-
-Что покрыто сейчас:
-
-- full-text fetcher;
-- deterministic relevance prefilter;
-- HTML rendering дайджеста.
-
-## 2. Быстрый smoke через Docker
-
-Самый короткий сценарий:
+Запуск:
 
 ```bash
-cp .env.example .env
-docker compose --profile pipeline up -d --build
-docker compose logs -f scheduler
+python -m pytest -q                        # весь набор
+python -m pytest -q tests/test_lanes.py    # один файл
+python -m pytest -q -k feed_window         # по имени теста
 ```
 
-Ожидаемо:
+**Изоляция.** Фикстура `isolated_db` ([`tests/conftest.py`](../tests/conftest.py)) заводит каждому тесту свою схему
+`test_<uuid>` в той же базе, прогоняет в ней `init_db()` и подменяет `get_connection` у модулей `connection`,
+`repository`, `api`, `source_overrides` и `documents_repo`; после теста схема удаляется. Рабочие таблицы базы тесты не
+трогают, но учётке базы нужно право создавать схемы. Новый модуль, который берёт `get_connection` прямым импортом,
+нужно добавить в список подмен, иначе его тест пойдёт в настоящую схему.
 
-- `db`, `app`, `scheduler` стартуют;
-- scheduler проходит `init-db`, `seed-sources`, `seed-tags`, `seed-scoring`;
-- дальше начинается цикл `discover-rss -> parse -> fetch-full-text -> process -> stats`.
+**Сторож часов базы.** Фикстура `db_clock_steady` один раз на прогон, перед первым тестом с базой, около секунды
+сравнивает часы базы с часами машины ([`tests/db_clock_support.py`](../tests/db_clock_support.py)). Уходят часы базы
+больше чем на 5 мс в секунду или прыгают назад: прогон останавливается с объяснением. Причина строгости: выдача задач
+сравнивает `run_after` с `now()` базы, и при прыгающих часах тесты плавают (`claim` возвращает `None`). Обычный
+виновник: база в виртуальной машине, где спорят две службы синхронизации времени. Запустить всё равно:
+`OILTECH_TEST_ALLOW_CLOCK_DRIFT=1`.
 
-Проверка:
+**Настройки тестов.** `conftest.py` задаёт свои значения, чтобы прогон не зависел от `.env` разработчика:
+`AUTH_COOKIE_SECURE=False` (TestClient ходит по http), `FEED_ROLLOVER_DAY=5`, подставные модели поиска радара и
+«Дедупа», радар раз в сутки. Ключ OpenAI тестам не нужен: модель заменяет офлайн-клиент или подставной ответ.
+
+Тот же набор в Docker: `docker compose run --rm test` (профиль `test`: образ с dev-зависимостями, рабочая копия
+смонтирована в `/app`, база из сервиса `db`).
+
+## 2. Фронт
 
 ```bash
-docker compose ps
-curl http://127.0.0.1:8000/api/health
+cd frontend
+npm ci
+npx tsc -b       # проверка типов; в сборке образа её нет
+npx vitest run   # тесты экранов в jsdom; npm test запускает то же без параллельных файлов
+npx vite build   # сборка в frontend/dist, её отдаёт app на /
 ```
 
-## 3. Локальный smoke без OpenAI
+`npm run build` делает `tsc -b` и `vite build` подряд.
 
-Подходит, если нужно проверить связность системы без расходов на API.
+## 3. Быстрые проверки
 
 ```bash
-cp .env.example .env
-docker compose up -d db
-source .venv/bin/activate
+python -m compileall -q oiltech_digest
+git diff --check
+docker compose config -q
+bash -n scripts/*.sh
+```
 
+## 4. Проверка на собранной системе
+
+Команды ниже идут из корня репозитория; в Docker перед ними `docker compose exec app`.
+
+### База и сиды, без OpenAI
+
+```bash
 python -m oiltech_digest.cli init-db
 python -m oiltech_digest.cli seed-sources
 python -m oiltech_digest.cli seed-tags
 python -m oiltech_digest.cli seed-scoring
+python -m oiltech_digest.cli schema-check
 python -m oiltech_digest.cli stats
+curl http://localhost:8000/api/health
 ```
 
-Ожидаемо:
+Ожидаемо: схема создаётся без ошибок, `schema-check` пишет `ok`, `stats` показывает источники.
 
-- схема создается без ошибок;
-- каталог источников загружен;
-- теги и критерии появились;
-- `stats` показывает источники и статьи без падений.
-
-## 4. Проверка ingestion
-
-### RSS discovery
+### Сбор
 
 ```bash
 python -m oiltech_digest.cli discover-rss --workers 10 --timeout 4
-```
-
-Проверить:
-
-- у части источников появился `rss_url`;
-- `parse_strategy` распределяется по `rss / request / telegram / none`;
-- команда не падает на SSL fallback и 404.
-
-### Парсинг RSS
-
-```bash
 python -m oiltech_digest.cli parse --workers 10
+python -m oiltech_digest.cli fetch-full-text --limit 50 --min-chars 800
 python -m oiltech_digest.cli stats
 ```
 
-Проверить:
+Проверить: у части источников появился `rss_url`; статьи ложатся в `articles`, а повторный `parse` даёт в основном
+дубли; в выводе `parse` есть «отсеяно как шум». `fetch-full-text` раскладывает статьи по статусам: `ok`, `too_short`,
+`no_gain` (извлечённый текст не вдвое длиннее сохранённого: перезапись не нужна, это не сбой) и `mismatch` (страж
+принадлежности: прежний текст не затёрт).
 
-- статьи появляются в `articles`;
-- повторный запуск в основном дает дубли, а не лавинообразный рост;
-- в выводе `parse` есть поле `отсеяно как шум`.
+### ИИ
 
-### Дозагрузка полного текста
-
-```bash
-python -m oiltech_digest.cli fetch-full-text --limit 50 --min-chars 800
-```
-
-Проверить:
-
-- часть статей получает `full_text_status=ok`;
-- слишком короткие страницы получают `too_short`;
-- страницы, где извлечённый текст не вдвое длиннее уже сохранённого, получают
-  `no_gain` — это не сбой: текст у статьи есть, перезапись просто не нужна;
-- команда не ломает уже хорошие тексты.
-
-## 5. Offline AI smoke
+Агентам («Отбор», «Карточка», её баллы, «Суть и перевод» сигналов) нужна настоящая модель: офлайн-режима у них нет.
+Новая статья ждёт решения «Отбора», и до него суть и перевод её не берут. Без затрат проверяется только обработка уже
+принятых статей:
 
 ```bash
 python -m oiltech_digest.cli process --offline --limit 5
@@ -122,142 +117,61 @@ python -m oiltech_digest.cli ai-cost-report
 python -m oiltech_digest.cli ai-article-cost-report
 ```
 
-## 6. Проверка нефтегазовой терминологии
+С ключом и моделями агентов (`OTBOR_MODEL`, `SIGNAL_CARD_MODEL`, `SIGNAL_SCORES_MODEL`) шаги ставятся командами
+`enqueue-otbor`, `enqueue-signal-summary`, `enqueue-signal-cards`, `enqueue-signal-scores`, `enqueue-process`. Без
+внешнего контура задачи встают в местную очередь `ai`; их исполняет `jobs-worker` (сервис `worker`), а вне compose
+при `BACKGROUND_JOB_INLINE=1` (умолчание `config.py`) сам процесс команды. Проверить вручную:
+суть по-русски и без выдумок, русский заголовок не длиннее 90 знаков, без тире и названия издания, у сигнала тема из
+13 тематик и баллы, а в `ai_processing_runs` строка на каждый вызов. Отклонённые «Отбором» и ждущие его статьи
+`process` не берёт вовсе.
 
-Перед демо или массовым экспортом дайджеста проверьте словарь:
+Радар проверяется только через очередь и внешний контур: с адреса РФ OpenAI отвечает 403.
+
+```bash
+python -m oiltech_digest.cli enqueue-signal-discovery --topic <тема> --no-offline --dry-run
+python -m oiltech_digest.cli external-queues-status
+python -m oiltech_digest.cli check-lanes
+```
+
+С `--dry-run` поиск оплачивается, но ничего не пишется. Пробный прогон с оценкой цены до оплаты:
+`radar-search-trial` (без `--run` сухой).
+
+### Терминология
 
 ```bash
 python -m oiltech_digest.cli validate-terminology
-```
-
-Найти старые карточки с плохими терминами:
-
-```bash
 python -m oiltech_digest.cli audit-terminology --limit 1000 --show 50
-```
-
-Посмотреть, что будет исправлено без записи в БД:
-
-```bash
 python -m oiltech_digest.cli repair-terminology --dry-run --limit 1000 --show 50
 ```
 
-Применить исправления после ручной проверки dry-run:
+Применить исправления после просмотра сухого прогона: `repair-terminology --no-dry-run --limit 1000`.
+
+### Выпуск
 
 ```bash
-python -m oiltech_digest.cli repair-terminology --no-dry-run --limit 1000
+python -m oiltech_digest.cli digest-content 2026-11 --output digest.json --html-output digest.html
 ```
 
-Ожидаемо:
+Проверить: в JSON есть `issue`, `news`, `sections`, `cover`, `document`, `footer`; HTML открывается как письмо; у
+карточек заголовок, источник, суть и ссылка. PDF и выгрузку удобнее проверить на экране «Месячный дайджест»:
+предпросмотр PDF, «Обновить PDF», «Скачать PDF», DOCX и HTML. Для PDF нужен Chromium.
 
-- появляются `article_cards` (суть и русский заголовок);
-- в `ai_processing_runs` есть этапы `summary` и `translation` (гейт, тег и балл статьи сняты 08.11: новых
-  `article_tags` и `article_scores` нет, тему и баллы ставит «Карточка» у сигнала);
-- `ai-cost-report` и `ai-article-cost-report` читаются без ошибок.
+### Интерфейс
 
-## 6. OpenAI pilot
+После `npx vite build` и запуска `app` (локально нужен `AUTH_COOKIE_SECURE=0`) пройти руками:
 
-Перед этим в `.env` должен быть задан `OPENAI_API_KEY`.
+- вход: пароль, затем код допуска из `admission-code --email <почта>`;
+- «Бизнес-лента» и «Технологический радар»: карточки, фильтры, отметка «в дайджест», обратная связь;
+- «Месячный дайджест»: выборка месяца, предпросмотр PDF, правка материала, выгрузка;
+- «Материалы»: материалы бота и загрузка документа (загрузка требует внешнего контура: `scripts/run-local.sh`);
+- «Источники», «Скоринг» (сумма весов профиля 100, сохранение), «Теги», «Дочерние общества», «Описание Компании»;
+- под администратором «Пользователи» и «Статистика».
 
-```bash
-python -m oiltech_digest.cli summarize --limit 3
-python -m oiltech_digest.cli translate-titles --limit 3
-python -m oiltech_digest.cli ai-cost-report
-python -m oiltech_digest.cli ai-article-cost-report
-```
+## 5. Минимальный чек готовности
 
-Проверить вручную:
-
-- summary написан по-русски и не выглядит выдуманным;
-- русский заголовок короткий, без тире и названия издания;
-- токены и стоимость записываются в `ai_processing_runs`.
-
-«Брать или нет» решает «Отбор» (`enqueue-otbor`), тему и баллы «Карточка» (`enqueue-signal-cards`,
-`enqueue-signal-scores`): их проверка идёт через внешний контур, см. разделы #130 и #132 в `CLAUDE.md`.
-
-## 7. Проверка полного пайплайна одной командой
-
-```bash
-python -m oiltech_digest.cli process --limit 20
-```
-
-Проверить по выводу:
-
-- `summary` и `translate` обработаны только у статей, принятых «Отбором» (или гейтом до него, история);
-- `отклонено` показал число отклонённых статей, которые конвейер пропустил.
-
-## 8. Проверка digest
-
-### CLI
-
-```bash
-python -m oiltech_digest.cli digest-content 2026-05 \
-  --output /tmp/digest.json \
-  --html-output /tmp/digest.html \
-  --limit 5 \
-  --min-score 0
-```
-
-Проверить:
-
-- JSON содержит `issue`, `hero`, `news`, `footer`;
-- HTML открывается как email-ready шаблон;
-- у карточек есть title, source, summary, score и ссылка на источник.
-
-### API
-
-```bash
-curl "http://127.0.0.1:8000/api/digest-content?month=2026-05&limit=5&min_score=0"
-curl "http://127.0.0.1:8000/api/digest-email?month=2026-05&limit=5&min_score=0"
-curl -OJ "http://127.0.0.1:8000/api/digest-export?month=2026-05&limit=5&min_score=0&export_format=html"
-curl -OJ "http://127.0.0.1:8000/api/digest-export?month=2026-05&limit=5&min_score=0&export_format=doc"
-```
-
-## 9. Проверка UI
-
-Запуск:
-
-```bash
-uvicorn oiltech_digest.api:app --reload --host 127.0.0.1 --port 8000
-```
-
-Проверить руками в браузере:
-
-- `Все статьи`: список, фильтры, статусы, AI processing;
-- `Месячный дайджест`: открывается HTML и копируется JSON;
-- `Источники`: список, включение/выключение, изменение RSS, добавление RSS;
-- `Теги`: редактирование и сохранение;
-- `Скоринг`: редактирование весов и сохранение.
-
-## 10. Полезные диагностики
-
-### Compose
-
-```bash
-docker compose config -q
-docker compose build
-```
-
-### Код
-
-```bash
-python -m compileall oiltech_digest
-git diff --check
-```
-
-### API
-
-```bash
-curl http://127.0.0.1:8000/api/health
-```
-
-## 11. Минимальный чек готовности
-
-Считаем систему в рабочем состоянии, если:
-
-- unit-тесты зеленые;
-- Docker Compose собирается;
-- `init-db`, `seed-*`, `discover-rss`, `parse`, `fetch-full-text` работают;
-- `process` дает summary и translate (суть и русский заголовок) без системных ошибок;
-- UI открывается и читает реальные данные;
-- `digest-content` и `digest-email` успешно генерируются.
+- pytest зелёный, `npx tsc -b`, `npx vitest run` и `npx vite build` проходят;
+- `docker compose config -q` без ошибок, образ собирается;
+- `init-db`, сиды, `discover-rss`, `parse`, `fetch-full-text` работают;
+- на тестовом наборе статей «Отбор», суть и перевод, «Карточка» и баллы проходят без системных ошибок;
+- интерфейс открывается и читает реальные данные, `digest-content` собирается, PDF выгружается;
+- `check-lanes` без тревог.

@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="790" viewBox="0 0 1000 790" role="img" aria-labelledby="title desc">
+  <title id="title">Конвейер OilTech Digest</title>
+  <desc id="desc">Источники и сбор на ядре РФ, затем «Отбор», «Суть и перевод», «Карточка» и баллы на воркерах NL, итог на ядре: лента и радар, выпуск. Радар по расписанию: поиск модели, докачка страниц, «Дедуп», затем «Отбор».</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#4B5563"/>
+    </marker>
+    <style>
+      text { font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif; fill: #1F2328; }
+      .h1 { font-size: 24px; font-weight: 700; }
+      .lead { font-size: 15px; fill: #57606A; }
+      .lane { font-size: 14px; font-weight: 700; fill: #3B4650; letter-spacing: 0.06em; }
+      .lane-sub { font-size: 13px; fill: #57606A; }
+      .box-title { font-size: 17px; font-weight: 700; text-anchor: middle; }
+      .box-sub { font-size: 14px; fill: #57606A; text-anchor: middle; }
+      .edge { font-size: 13px; fill: #4B5563; }
+      .note { font-size: 14px; fill: #57606A; }
+      .plain { fill: #FFFFFF; stroke: #8C959F; stroke-width: 1.5; }
+      .model { fill: #DDEFE9; stroke: #2E7D6F; stroke-width: 1.5; }
+      .flow { stroke: #4B5563; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .trigger { stroke: #4B5563; stroke-width: 2; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect x="1" y="1" width="998" height="788" rx="18" fill="#FBFBF9" stroke="#D0D7DE" stroke-width="2"/>
+  <text class="h1" x="32" y="48">Конвейер OilTech Digest</text>
+  <text class="lead" x="32" y="76">ядро РФ ставит задачи и пишет итог, воркеры NL зовут модели и браузер</text>
+  <rect x="20" y="96" width="300" height="632" rx="14" fill="#EEF1F0"/>
+  <rect x="340" y="96" width="640" height="632" rx="14" fill="#F6F2EA"/>
+  <text class="lane" x="40" y="124">ЯДРО РФ</text>
+  <text class="lane-sub" x="40" y="144">FastAPI, PostgreSQL, планировщик</text>
+  <text class="lane" x="360" y="124">ВОРКЕРЫ NL</text>
+  <text class="lane-sub" x="360" y="144">модели и браузер, своей базы нет</text>
+  <text class="lane" x="705" y="124">ТЕХНОЛОГИЧЕСКИЙ РАДАР</text>
+  <text class="lane-sub" x="705" y="144">полоса external-agents</text>
+  <rect class="plain" x="45" y="160" width="250" height="64" rx="10"/>
+  <text class="box-title" x="170" y="188">Планировщик</text>
+  <text class="box-sub" x="170" y="210">цикл шагов, по умолчанию 6 ч</text>
+  <rect class="plain" x="45" y="256" width="250" height="64" rx="10"/>
+  <text class="box-title" x="170" y="284">Источники</text>
+  <text class="box-sub" x="170" y="306">RSS, сайты, Telegram</text>
+  <rect class="plain" x="45" y="352" width="250" height="64" rx="10"/>
+  <text class="box-title" x="170" y="380">Сбор</text>
+  <text class="box-sub" x="170" y="402">полный текст и дубли</text>
+  <rect class="plain" x="45" y="544" width="250" height="64" rx="10"/>
+  <text class="box-title" x="170" y="572">Лента и радар</text>
+  <text class="box-sub" x="170" y="594">экраны и отметки людей</text>
+  <rect class="plain" x="45" y="640" width="250" height="64" rx="10"/>
+  <text class="box-title" x="170" y="668">Выпуск</text>
+  <text class="box-sub" x="170" y="690">PDF, письмо, DOCX</text>
+  <rect class="plain" x="365" y="256" width="250" height="64" rx="10"/>
+  <text class="box-title" x="490" y="284">Бот Telegram</text>
+  <text class="box-sub" x="490" y="306">материалы коллег</text>
+  <rect class="model" x="365" y="352" width="250" height="64" rx="10"/>
+  <text class="box-title" x="490" y="380">«Отбор»</text>
+  <text class="box-sub" x="490" y="402">брать или нет, категория</text>
+  <rect class="model" x="365" y="448" width="250" height="64" rx="10"/>
+  <text class="box-title" x="490" y="476">«Суть и перевод»</text>
+  <text class="box-sub" x="490" y="498">суть и русский заголовок</text>
+  <rect class="model" x="365" y="544" width="250" height="64" rx="10"/>
+  <text class="box-title" x="490" y="572">«Карточка» и баллы</text>
+  <text class="box-sub" x="490" y="594">тема, атрибуты, баллы</text>
+  <rect class="model" x="705" y="160" width="250" height="64" rx="10"/>
+  <text class="box-title" x="830" y="188">Поиск модели</text>
+  <text class="box-sub" x="830" y="210">13 тем, встроенный поиск</text>
+  <rect class="plain" x="705" y="256" width="250" height="64" rx="10"/>
+  <text class="box-title" x="830" y="284">Докачка страниц</text>
+  <text class="box-sub" x="830" y="306">запрос, ядро РФ, браузер, PDF</text>
+  <rect class="model" x="705" y="352" width="250" height="64" rx="10"/>
+  <text class="box-title" x="830" y="380">«Дедуп»</text>
+  <text class="box-sub" x="830" y="402">с лентой и карточками</text>
+  <path class="flow" d="M170 320 V352"/>
+  <path class="flow" d="M295 384 H365"/>
+  <path class="flow" d="M490 320 V352"/>
+  <path class="flow" d="M705 384 H615"/>
+  <path class="flow" d="M490 416 V448"/>
+  <path class="flow" d="M490 512 V544"/>
+  <path class="flow" d="M365 576 H295"/>
+  <path class="flow" d="M170 608 V640"/>
+  <path class="flow" d="M830 224 V256"/>
+  <path class="flow" d="M830 320 V352"/>
+  <path class="trigger" d="M295 192 H705"/>
+  <text class="edge" x="330" y="375" text-anchor="middle">задача</text>
+  <text class="edge" x="330" y="567" text-anchor="middle">итог</text>
+  <text class="edge" x="660" y="375" text-anchor="middle">находки</text>
+  <text class="edge" x="499" y="341" text-anchor="start">материалы</text>
+  <text class="edge" x="500" y="183" text-anchor="middle">прогон радара раз в N суток</text>
+  <text class="lane" x="705" y="562">ОБОЗНАЧЕНИЯ</text>
+  <rect class="plain" x="705" y="580" width="30" height="20" rx="5"/>
+  <text class="edge" x="747" y="595">шаг без модели</text>
+  <rect class="model" x="705" y="612" width="30" height="20" rx="5"/>
+  <text class="edge" x="747" y="627">вызов модели</text>
+  <path class="flow" d="M705 654 H735"/>
+  <text class="edge" x="747" y="659">порядок шагов</text>
+  <path class="trigger" d="M705 686 H735"/>
+  <text class="edge" x="747" y="691">запуск по расписанию</text>
+  <text class="note" x="32" y="762">По умолчанию всё идёт на одном сервере: задачи моделей берёт локальный воркер очереди ai.</text>
+</svg>
