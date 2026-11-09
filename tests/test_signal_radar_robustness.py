@@ -249,14 +249,11 @@ def test_bare_compose_up_starts_only_core_services():
 
     unprofiled = {name for name, service in services.items() if not service.get("profiles")}
 
-    # Единый контур (D): стек MVP-1: приложение `app` и Caddy; конвейер: профилем
-    # `pipeline`, архивный трекер задач: профилем `archive`.
+    # Единый контур (D): стек MVP-1: приложение `app` и Caddy; конвейер профилем `pipeline`.
     assert unprofiled == {"db", "bootstrap", "app", "caddy"}
     for name in ("worker", "playwright-worker", "scheduler"):
         assert services[name]["profiles"] == ["pipeline"]
         assert services[name]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
-    assert services["tasks"]["profiles"] == ["archive"]
-    assert services["tasks"]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
 
 
 def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):

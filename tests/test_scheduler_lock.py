@@ -195,8 +195,6 @@ def test_bare_compose_up_cannot_start_pipeline_services():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("worker", "playwright-worker", "scheduler"):
         assert "pipeline" in (services[name].get("profiles") or []), name
-    # tasks, архивный модуль (сессия B): его голый `up` тоже не поднимает, но другим профилем.
-    assert services["tasks"].get("profiles"), "tasks"
     # Caddy: только у основного стека; у агентного до смены идентичности в D его нет.
     for name in ("db", _app_service(services), *(["caddy"] if "caddy" in services else [])):
         assert not services[name].get("profiles"), name
