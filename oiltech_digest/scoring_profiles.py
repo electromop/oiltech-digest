@@ -5,8 +5,8 @@
 
 Баллы ставит второй вызов «Карточки» у сигнала по профилю его категории (#132): бизнес набором
 business, технология набором tech_radar. Балл статьи ленты (снят 08.11) всегда считался профилем
-business, поэтому умолчание профиля business: у API, команд и выборок критериев без профиля, у
-песочницы агента источников и у балла статьи из истории.
+business, поэтому умолчание профиля business: у API, команд и выборок критериев без профиля и у
+балла статьи из истории.
 """
 
 from __future__ import annotations
@@ -82,8 +82,7 @@ SCORING_PRESETS: dict[str, dict[str, list[dict]]] = {
 # оценки (signals.criteria_snapshot; у балла статьи до 08.11 article_scores.criteria_snapshot).
 # Подпункты ссылаются на критерий по id, а его текст и вес с тех пор могли поменять на экране:
 # разбивка балла берёт имя и вес из снимка. Снимок строит тот, кто считает балл: ядро при записи
-# баллов «Карточки» (signal_scores.score_values), агент источников по критериям пакета
-# (normalize_score_payload). Сверка снимка для пересчёта балла статьи без ИИ снята 08.11.
+# баллов «Карточки» (signal_scores.score_values). Сверка снимка для пересчёта балла статьи без ИИ снята 08.11.
 
 
 def criterion_text_hash(criterion: dict[str, Any]) -> str:
@@ -116,14 +115,3 @@ def criteria_snapshot(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for criterion in criteria
     ]
-
-
-def profile_of(criteria: list[dict[str, Any]]) -> str | None:
-    """Профиль набора, которым считали. Набор — всегда один профиль; поля нет (пакет от ядра
-    до профилей) или профили разные — None: тогда его определит ядро по id подпунктов."""
-    profiles = {criterion.get("profile") for criterion in criteria}
-    if len(profiles) == 1:
-        (profile,) = profiles
-        if profile in SCORING_PROFILES:
-            return str(profile)
-    return None

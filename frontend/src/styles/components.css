@@ -36,7 +36,6 @@
 }
 
 .eyebrow,
-.panelKicker,
 .footLabel {
   color: var(--ot-text-secondary);
   font-size: var(--ot-size-caption);
@@ -53,8 +52,7 @@
   border: 1px solid var(--ot-border-subtle);
 }
 
-.panelHeader,
-.heroGrid {
+.panelHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -84,47 +82,6 @@
   flex-wrap: wrap;
 }
 
-.heroGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
-  align-items: stretch;
-}
-
-.accentPanel {
-  background: var(--ot-interactive);
-  border-color: var(--ot-interactive);
-  color: var(--ot-text-on-color);
-}
-
-.accentPanel p,
-.accentPanel .panelKicker,
-.accentPanel h2 {
-  color: inherit;
-}
-
-.stepList {
-  margin-top: var(--ot-space-05);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: var(--ot-space-03);
-}
-
-.stepCard {
-  padding: var(--ot-space-05);
-  background: var(--ot-layer-02);
-}
-
-.stepIndex {
-  font-family: var(--ot-font-display);
-  font-size: var(--ot-size-heading-03);
-  font-weight: var(--ot-weight-bold);
-  color: var(--ot-link);
-}
-
-.stepText {
-  margin-top: var(--ot-space-02);
-}
-
 /* --- Метки (Carbon tag): пилюля 24px, смысл всегда подписью, цвет — второй канал --- */
 .statusPill,
 .badge,
@@ -147,7 +104,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.badge.emphasis,
 .miniPill.draft,
 .miniPill.info {
   background: var(--sem-info-bg);
@@ -197,8 +153,7 @@
    опасные — красный контур, при наведении заливка. Высота 40px, в карточках 32px. --- */
 .primaryButton,
 .ghostButton,
-.dangerButton,
-.dangerGhostButton {
+.dangerButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -228,8 +183,7 @@
 }
 
 .dangerButton,
-.ghostButton.dangerButton,
-.dangerGhostButton {
+.ghostButton.dangerButton {
   background: transparent;
   border-color: var(--ot-button-danger);
   color: var(--ot-button-danger);
@@ -247,8 +201,7 @@
   }
 
   .dangerButton:not(:disabled):hover,
-  .ghostButton.dangerButton:not(:disabled):hover,
-  .dangerGhostButton:not(:disabled):hover {
+  .ghostButton.dangerButton:not(:disabled):hover {
     background: var(--ot-button-danger-hover);
     border-color: var(--ot-button-danger-hover);
     color: var(--ot-text-on-color);
@@ -265,8 +218,7 @@
   color: var(--ot-text-on-color);
 }
 
-.dangerButton:not(:disabled):active,
-.dangerGhostButton:not(:disabled):active {
+.dangerButton:not(:disabled):active {
   background: var(--ot-button-danger-active);
   border-color: var(--ot-button-danger-active);
   color: var(--ot-text-on-color);
@@ -278,8 +230,7 @@
 }
 
 .ghostButton:disabled,
-.dangerButton:disabled,
-.dangerGhostButton:disabled {
+.dangerButton:disabled {
   background: transparent;
   border-color: var(--ot-border-disabled);
   color: var(--ot-text-disabled);
@@ -611,32 +562,6 @@ input[type="radio"] {
   }
 }
 
-/* --- Полосы уровня (критерии балла): цвет по той же шкале, что у меток --- */
-.barReact {
-  height: 0.5rem;
-  margin: var(--ot-space-04) 0;
-  background: var(--ot-layer-accent);
-  overflow: hidden;
-}
-
-.barReact span {
-  display: block;
-  height: 100%;
-  background: var(--ot-interactive);
-}
-
-.barReact.ok span {
-  background: var(--ot-support-success);
-}
-
-.barReact.warn span {
-  background: var(--ot-support-warning);
-}
-
-.barReact.bad span {
-  background: var(--ot-support-error);
-}
-
 /* --- Кнопка «раскрыть» (иконка) --- */
 .expandButtonReact {
   flex: none;
@@ -916,11 +841,6 @@ input[type="radio"] {
 }
 
 /* --- Адаптив общих блоков --- */
-@media (max-width: 1100px) {
-  .heroGrid {
-    grid-template-columns: 1fr;
-  }
-}
 
 @media (max-width: 720px) {
   .pageHeader,

@@ -4,7 +4,6 @@
 расход под именем агента, остановка воркера (tests/otbor_support.py).
 """
 
-from pathlib import Path
 
 import pytest
 
@@ -289,31 +288,3 @@ def test_core_writes_decisions_only_for_the_articles_of_the_job(user, admin, con
     assert set(showcase(user)) == {"Программа бурения Equinor"}
     [error] = api_get(f"/api/jobs/{job['id']}", admin)["result"]["applied"]["errors"]
     assert error["error"] == "публикации нет в этой задаче"
-
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "otbor-before-deploy.sql"
-SIGNAL_COLUMNS = {"industry", "otbor_decision", "reject_reason", "otbor_disputed", "otbor_failure",
-                  "otbor_failure_reason", "otbor_recipe"}
-
-
-def _columns(table):
-    with connection.get_connection() as conn:
-        return {row[0] for row in conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
-            "AND table_name = %s", (table,))}
-
-
-def test_before_deploy_sql_adds_otbor_to_the_old_schema_and_repeats_safely(isolated_db):
-    with connection.get_connection() as conn:
-        for column in SIGNAL_COLUMNS:
-            conn.execute(f"ALTER TABLE signals DROP COLUMN {column}")
-        conn.execute("ALTER TABLE articles DROP COLUMN selector")
-        conn.commit()
-
-    for _ in range(2):  # повтор безопасен
-        with connection.get_connection() as conn:
-            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
-            conn.autocommit = True
-            conn.execute(SCRIPT.read_text(encoding="utf-8"))
-
-    assert SIGNAL_COLUMNS <= _columns("signals") and "selector" in _columns("articles")

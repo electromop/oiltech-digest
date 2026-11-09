@@ -84,8 +84,8 @@ def maturity_range(rubric: dict[str, Any], scale: list[dict[str, Any]], stage: s
 
 
 def final_score(item: dict[str, Any], *, keywords: bool) -> float | None:
-    """Балл критерия в итоге: с подмешиванием ключевых слов — как у статей ленты (pipeline.normalize_score_payload:
-    ключи добавляют вес, только когда совпадений много), без — балл модели или кода как есть. bounds — ступень, из
+    """Балл критерия в итоге: с подмешиванием ключевых слов (ключи добавляют вес, только когда совпадений много),
+    без них балл модели или кода как есть. bounds — ступень, из
     которой балл не выходит и с ключевыми словами («Зрелость» в ступени стадии карточки)."""
     score, keyword = item["ai_score"], item.get("keyword_score")
     if score is None or not keywords or keyword is None:

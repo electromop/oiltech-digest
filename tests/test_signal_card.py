@@ -4,7 +4,6 @@
 """
 
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -425,41 +424,6 @@ def test_judge_finding_again_takes_back_the_field_the_agent_filled(user, contour
     card = api_get("/api/signals", user)[0]
     assert (card["event_date"], card["event_date_source"], card["event_date_precision"]) == ("2026-09-05", None, None)
     assert card["card_set_by"]["event_date"] == "radar_judge"
-
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "signal-card-before-deploy.sql"
-NEW_COLUMNS = {"event_type", "region", "technology_class", "technology_maturity", "participants_json",
-               "event_date_source", "card_set_by", "card_recipe"}
-
-
-def _columns(table):
-    with connection.get_connection() as conn:
-        return {row[0] for row in conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
-            "AND table_name = %s", (table,))}
-
-
-def test_before_deploy_sql_adds_the_card_to_the_old_schema_and_repeats_safely(isolated_db):
-    with connection.get_connection() as conn:
-        for column in NEW_COLUMNS:
-            conn.execute(f"ALTER TABLE signals DROP COLUMN {column}")
-        conn.execute("ALTER TABLE ai_processing_runs DROP COLUMN signal_id")
-        conn.execute("INSERT INTO signals (signal_key, title, theme, event_date, oilfield_relevance) "
-                     "VALUES ('radar', 'Находка', 'Бурение', '2026-09-01', 'direct')")
-        conn.execute("INSERT INTO signals (signal_key, title, theme, origin) VALUES ('feed:1', 'Статья', 'Бурение', 'feed')")
-        conn.commit()
-
-    for _ in range(2):  # повтор безопасен
-        with connection.get_connection() as conn:
-            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
-            conn.autocommit = True
-            conn.execute(SCRIPT.read_text(encoding="utf-8"))
-
-    assert NEW_COLUMNS <= _columns("signals") and "signal_id" in _columns("ai_processing_runs")
-    with connection.get_connection() as conn:
-        rows = conn.execute("SELECT signal_key, card_set_by FROM signals ORDER BY signal_key").fetchall()
-    # Значения судьи у прежней находки — его; у сигнала ленты карточки ещё нет.
-    assert rows == [("feed:1", None), ("radar", {"event_date": "radar_judge", "oilfield_relevance": "radar_judge"})]
 
 
 def test_judge_finding_again_does_not_overwrite_a_human_correction(user, contour, monkeypatch):

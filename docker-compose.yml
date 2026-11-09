@@ -58,49 +58,11 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./BACKLOG.md:/app/BACKLOG.md
       - exports:/app/exports
       - branding:/app/branding
       - documents:/data/documents
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  # Архивный модуль «Трекер задач» (утверждён владельцем 23.09): в профиле `archive`,
-  # поэтому голый `compose up` его не поднимает. Вернуть:
-  # `docker compose --profile archive up -d --no-deps tasks` — флаг модуля у сервиса уже есть.
-  tasks:
-    build: .
-    container_name: oiltech_tasks
-    profiles:
-      - archive
-    depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
-      PYTHONUNBUFFERED: "1"
-      BACKGROUND_JOB_INLINE: "0"
-      TASKS_APP_MODE: "1"
-      ARCHIVED_MODULES: backlog
-      DIGEST_BRANDING_PATH: /app/branding/digest_branding.json
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    ports:
-      - "127.0.0.1:8010:8000"
-    volumes:
-      - ./BACKLOG.md:/app/BACKLOG.md
-      - exports:/app/exports
-      - branding:/app/branding
-      - documents:/data/documents
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/tasks', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -190,13 +152,7 @@ services:
       # 20.09 так радар из external-ai ушёл в OpenAI с РФ-адреса. Код теперь и сам не
       # исполняет внешние очереди на месте (background_jobs.runs_inline).
       BACKGROUND_JOB_INLINE: "0"
-      # Агентный слой (единый контур, D): агент источников и ежедневный радар. Радар
-      # ставится первым циклом после 00:00 МСК и уходит на NL в полосу external-agents.
-      SOURCE_DISCOVERY_MODE: ${SOURCE_DISCOVERY_MODE:-plan}
-      SOURCE_DISCOVERY_MAX_ITERATIONS: ${SOURCE_DISCOVERY_MAX_ITERATIONS:-3}
-      SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS: ${SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS:-4}
-      SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES: ${SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES:-100}
-      SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS: ${SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS:-100}
+      # Радар ставится первым циклом после 00:00 МСК и уходит на NL в полосу external-agents.
       SIGNAL_DISCOVERY_DAILY_ENABLED: ${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}
       SIGNAL_DISCOVERY_DAILY_EVERY_DAYS: ${SIGNAL_DISCOVERY_DAILY_EVERY_DAYS:-1}
       SIGNAL_DISCOVERY_DAYS: ${SIGNAL_DISCOVERY_DAYS:-14}

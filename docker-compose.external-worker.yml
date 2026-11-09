@@ -99,7 +99,7 @@ services:
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
     stop_grace_period: 120s
 
-  # Агенты — радар сигналов и оценка кандидатов агента источников (ADR 0001). Прогон
+  # Агенты: радар сигналов (ADR 0001). Прогон
   # радара (поиск GPT, докачка страниц, «Дедуп») идёт до 2 ч: в общей полосе с потоком дня
   # пакет статей ждал бы его, а радар ждал бы пакеты. SIGNAL_DEDUP_MODEL обязана быть в
   # .env.external-worker: без неё прогон радара падает с причиной до поиска.
@@ -116,7 +116,6 @@ services:
       EXTERNAL_WORKER_ID: nl-agents-1
       EXTERNAL_WORKER_QUEUES: external-agents
       EXTERNAL_WORKER_CAPABILITIES: openai
-      SOURCE_DISCOVERY_SEARCH_PROVIDER: brave
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
     stop_grace_period: 120s
 

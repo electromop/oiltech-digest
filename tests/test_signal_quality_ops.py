@@ -1,55 +1,12 @@
-"""Качество радара, выкат и эксплуатация: SQL до выката, архив из CLI, прогон из CLI с настройками поиска ядра,
-своя модель «Дедупа», расход радара на экране «Статистика»."""
+"""Качество радара и эксплуатация: архив из CLI, прогон из CLI с настройками поиска ядра, своя модель «Дедупа»,
+расход радара на экране «Статистика»."""
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from oiltech_digest import cli, config, signal_dedup, signal_discovery
 from oiltech_digest.db import connection, repository
 from oiltech_digest.processing.openai_client import AIResponse
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "radar" / "radar-quality-before-deploy.sql"
-NEW_COLUMNS = {
-    "signal_category", "event_date", "mixed_events", "mixed_events_reason", "score_profile",
-    "score_items_json", "criteria_snapshot", "archived_at", "archive_reason",
-    "oilfield_relevance", "oilfield_application", "filter_stage", "filter_reason",
-    "verdict_reason", "decision_log",
-}
-
-
-def _signal_columns() -> set[str]:
-    with connection.get_connection() as conn:
-        return {row[0] for row in conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'signals'"
-        )}
-
-
-def _run_script() -> None:
-    with connection.get_connection() as conn:
-        conn.commit()
-        conn.autocommit = True
-        conn.execute(SCRIPT.read_text(encoding="utf-8"))
-
-
-def test_before_deploy_sql_adds_columns_to_old_schema_and_repeats_safely(isolated_db):
-    with connection.get_connection() as conn:
-        for column in NEW_COLUMNS:
-            conn.execute(f"ALTER TABLE signals DROP COLUMN IF EXISTS {column}")
-        conn.execute("INSERT INTO signals (signal_key, title, theme) VALUES ('old', 'Старая карточка', 'Бурение')")
-        conn.commit()
-
-    _run_script()
-    _run_script()  # повтор безопасен
-
-    assert NEW_COLUMNS <= _signal_columns()
-    with connection.get_connection() as conn:
-        # Массовых UPDATE нет: у прежней карточки поля пустые — видимость читает её «до правки».
-        assert conn.execute("SELECT signal_category, event_date, archived_at FROM signals").fetchall() == [(None, None, None)]
-
-
-def test_schema_sql_has_the_same_columns_as_the_deploy_script(isolated_db):
-    assert NEW_COLUMNS <= _signal_columns()
 
 
 def _card(key, theme, first_seen):
@@ -126,19 +83,6 @@ def test_dedup_judge_uses_dedup_model(monkeypatch):
 
     assert recorder.calls and recorder.calls[0]["model"] == "gpt-5-mini"
     assert recorder.calls[0]["budget"] == 700 + 2000
-
-
-def test_search_queries_budget_follows_reasoning(monkeypatch):
-    from oiltech_digest.source_discovery import agent
-
-    recorder = _Recorder({"queries": ["q1"]})
-    monkeypatch.setattr(agent, "make_client", lambda offline: recorder)
-    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
-    monkeypatch.setattr(config, "OPENAI_REASONING_EFFORT", "medium")
-
-    agent.generate_search_queries("бурение", offline=False, limit=3)
-
-    assert recorder.calls[0]["budget"] == 1200 + 6000
 
 
 # --- Расход радара — на экран «Статистика» ---------------------------------------------------

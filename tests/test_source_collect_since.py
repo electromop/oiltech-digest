@@ -99,14 +99,12 @@ def test_new_source_starts_two_weeks_before_it_is_added_by_any_path(isolated_db)
     repository.upsert_source({"name": "Из таблицы", "source_type": "Journal", "url": "https://journal.example",
                               "rss_url": None, "enabled": True, "parse_strategy": "request", "category": None,
                               "priority": None})
-    candidate = repository.upsert_source_candidate({"url": "https://agent.example/news", "name": "Находка агента"})
-    agent = repository.approve_source_candidate(candidate)
 
     # Сверка по часам базы, а не по часам теста: часы ВМ colima после сна Mac отстают на минуты (07.11 на 15).
     with connection.get_connection() as conn:
         starts = conn.execute("SELECT id, collect_since, created_at FROM sources WHERE id = ANY(%s)",
-                              ([screen, _source_id("Из таблицы"), agent],)).fetchall()
-    assert len(starts) == 3
+                              ([screen, _source_id("Из таблицы")],)).fetchall()
+    assert len(starts) == 2
     for source_id, since, created in starts:
         assert since == created - timedelta(days=14), source_id
 

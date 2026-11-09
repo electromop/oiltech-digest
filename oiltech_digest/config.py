@@ -153,7 +153,7 @@ PROXY_HOST_OVERRIDES: dict[str, str] = _parse_proxy_host_overrides(
 
 # --- OpenAI / AI processing ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-# Основная модель: умолчание всех стадий без своей модели (ИИ-оценка агента источников, откат перевода и сути). Только
+# Основная модель: умолчание стадий без своей модели (откат перевода и сути). Только
 # линейка gpt-6 (решение владельца 08.11): gpt-5, gpt-5-mini и gpt-5-nano снимают 11.12.2026.
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -167,14 +167,13 @@ OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or
 OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
 # Суть — своя модель (переезд с gpt-5 до 11.12.2026, как в ветке моста feat/explicit-stage-models): раньше она сидела
-# на OPENAI_MODEL вместе с тегами, судьёй перепечаток и ИИ-оценкой агента источников. По проверке на эталоне выпуска
+# на OPENAI_MODEL вместе с тегами и судьёй перепечаток. По проверке на эталоне выпуска
 # эксперта (#150, владелец 28.10) «Суть и перевод» — gpt-6.1-terra, low: строки в .env воркера NL. Пусто — откат на
 # OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки.
 OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Гейт ленты, тег и балл статьи сняты 08.11 вместе со своими ключами (OPENAI_RELEVANCE_*, OPENAI_TAG_*,
-# OPENAI_SCORE_*): решает «Отбор», тему и баллы ставит «Карточка». Агент источников зовёт их стадии на
-# OPENAI_MODEL (source_discovery/legacy_stages.py).
+# OPENAI_SCORE_*): решает «Отбор», тему и баллы ставит «Карточка».
 
 # «Дедуп» ленты: судья перепечаток (processing/reprints.py). Модель — явная настройка без отката на модель ленты
 # (спека #128, история 48): пусто — задача перепечаток падает с понятной причиной до первого вызова, а не судит
@@ -237,26 +236,6 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5.6-terra": (2.0, 12.0),
     "gpt-5.6-sol": (4.0, 20.0),
 }
-
-# --- Source discovery ---
-# Агент источников выключен в коде (решение владельца 08.11: «Он нам не нужен»; код не удалять). Флаг .env
-# SOURCE_DISCOVERY_ENABLED его больше не включает: планировщик не ставит шаги агента (scripts/docker-scheduler.sh),
-# ядро не ставит и не исполняет его задачи (background_jobs.SOURCE_AGENT_KINDS), команды и эндпоинты запуска
-# отказывают. Чтение истории (кандидаты, память, прогоны) остаётся. Вернуть агента: False здесь, строка флага в
-# планировщике и выкат.
-SOURCE_AGENT_DISABLED = True
-SOURCE_AGENT_DISABLED_MESSAGE = "агент источников выключен (решение владельца 08.11)"
-# По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
-# Поддержанные провайдеры: none / brave / serpapi.
-SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
-SOURCE_DISCOVERY_SEARCH_TIMEOUT = int(os.environ.get("SOURCE_DISCOVERY_SEARCH_TIMEOUT", "20"))
-# Агент поиска источников должен отсеивать старые архивы и разделы без живого
-# потока. Порог намеренно отдельный от основного парсинга: тут мы оцениваем новый
-# источник, а не историческую догрузку уже принятого источника.
-SOURCE_DISCOVERY_FRESHNESS_DAYS = int(os.environ.get("SOURCE_DISCOVERY_FRESHNESS_DAYS", "180"))
-SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE = int(os.environ.get("SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", "1"))
-BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
-SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 
 # --- Signal discovery ---
 # Прогон радара ставит планировщик в очередь один раз за окно (суточный шаг): поиск GPT находит материалы, решает
@@ -367,8 +346,8 @@ SIGNAL_SCORE_BANDS = tuple(int(value) for value in
                            os.environ.get("SIGNAL_SCORE_BANDS", "80,65,40").replace(" ", "").split(","))
 # «Решение платформы»: сильный сигнал с таким числом публикаций и больше — «подтверждено», меньше — «кандидат».
 SIGNAL_CONFIRMED_PUBLICATIONS = max(1, int(os.environ.get("SIGNAL_CONFIRMED_PUBLICATIONS", "3")))
-# Подмешивание ключевых слов в балл критерия (как у статей ленты, pipeline.normalize_score_payload): хранятся оба
-# итога, в score — этот вариант; какой оставить, решает экзамен (#133) по близости к эксперту.
+# Подмешивание ключевых слов в балл критерия (signal_scoring.final_score): хранятся оба итога, в score этот
+# вариант; какой оставить, решает экзамен (#133) по близости к эксперту.
 SIGNAL_SCORES_KEYWORDS = os.environ.get("SIGNAL_SCORES_KEYWORDS", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
@@ -417,30 +396,6 @@ FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", str(F
 # (экран «Источники») и CLI source-health / source-retry без явного порога берут его
 # отсюда. Меньше 1 правило теряет смысл: при 0 требует внимания каждый источник.
 SOURCE_STALE_DAYS = max(1, int(os.environ.get("SOURCE_STALE_DAYS", "7")))
-
-# --- Архивные модули (ADR 0001 п. 7 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md;
-#     список утверждён владельцем 23.09) ---
-# Убраны из меню, маршрутов и контейнеров, но не удалены из кода. По умолчанию все
-# выключены. Вернуть модуль — перечислить его ключ в ARCHIVED_MODULES через запятую и
-# перезапустить app:
-#   analytics-preview — макет «Аналитика для БРБ»;
-#   tech-preview      — макет «Технологии»;
-#   backlog           — трекер задач: /tasks и /api/backlog* (сервис tasks — профиль
-#                       compose `archive`, флаг у него уже прописан);
-#   articles          — прежний экран «Бизнес-сигналы» (список статей ленты; убран из меню
-#                       решением владельца 23.10, вход открывается «Бизнес-лентой»);
-#   source-agent      — экраны «Агент источников» и «Кандидаты источников» (убраны из меню
-#                       решением владельца 24.10; сам агент работает по SOURCE_DISCOVERY_ENABLED).
-# У справки /help (сервис docs) кода в приложении нет: она возвращается профилем compose
-# `archive` и блоком /help* в Caddyfile. Незнакомые ключи игнорируются.
-ARCHIVED_MODULE_KEYS = ("analytics-preview", "tech-preview", "backlog", "articles", "source-agent")
-
-
-def parse_archived_modules(raw: str) -> frozenset[str]:
-    return frozenset(key for key in (item.strip() for item in raw.split(",")) if key in ARCHIVED_MODULE_KEYS)
-
-
-ARCHIVED_MODULES = parse_archived_modules(os.environ.get("ARCHIVED_MODULES", ""))
 
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")

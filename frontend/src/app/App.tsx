@@ -1,11 +1,7 @@
-import { Suspense, lazy, useEffect, useRef, useState, type FormEvent } from "react";
-import { listArticles } from "../api/articles";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError } from "../api/client";
 import { admit, getSession, login, logout, register } from "../api/auth";
-import { getDashboardStats } from "../api/stats";
-import type { Article, AuthResponse, DashboardStats, User } from "../api/types";
-import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
-import { BacklogPage } from "../features/backlog/BacklogPage";
+import type { AuthResponse, User } from "../api/types";
 import { CompanyDescriptionPage } from "../features/companies/CompanyDescriptionPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
@@ -15,30 +11,17 @@ import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { SignalRadarPage } from "../features/signals/SignalRadarPage";
-import { SourceAgentPage } from "../features/sources/SourceAgentPage";
-import { SourceCandidatesPage } from "../features/sources/SourceCandidatesPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
 
-// Прототипы грузятся ОТДЕЛЬНЫМИ чанками (lazy): это статичные макеты, которые открывают по прямой
-// ссылке считаные разы, и рабочее приложение не должно тащить их вес на каждой загрузке.
-const AnalyticsPreview = lazy(() =>
-  import("../features/previews/AnalyticsPreview").then((m) => ({ default: m.AnalyticsPreview })),
-);
-const TechnologiesPreview = lazy(() =>
-  import("../features/previews/TechnologiesPreview").then((m) => ({ default: m.TechnologiesPreview })),
-);
-
 type ScreenId =
-  | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
-  | "company-parents" | "company-description" | "statistics" | "analytics-preview" | "tech-preview";
+  | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "scoring" | "tags" | "users" | "jobs"
+  | "maintenance" | "company-parents" | "company-description" | "statistics";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
-// Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
-// случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
-  "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
+  "sources", "scoring", "tags", "users", "jobs", "maintenance",
   // Список «дочка → мать» правят, как теги, только админы (сервер — require_admin).
   "company-parents",
   // Описание Компании для агента гипотезы (#162): права как у тегов (ADR 0004).
@@ -47,17 +30,7 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
   "statistics",
-  "analytics-preview", "tech-preview",
 ]);
-
-// Архивные модули (утверждены владельцем 23.09): из меню и маршрутов убраны, код оставлен.
-// Экран виден, только если сервер включил его флагом ARCHIVED_MODULES (приходит с сессией).
-// «Бизнес-сигналы» (старый список статей) — архивный с 23.10 (решение владельца: экран не используется).
-// «Агент источников» с его кандидатами — архивный с 24.10 (решение владельца): экраны убраны, сам агент на сервере
-// работает по своему флагу SOURCE_DISCOVERY_ENABLED.
-const ARCHIVED_SCREENS = new Set<ScreenId>(["analytics-preview", "tech-preview", "articles", "source-agent", "source-candidates"]);
-// Ключ флага, которым экран возвращается, если он не равен имени экрана: кандидаты — часть агента.
-const SCREEN_MODULE: Partial<Record<ScreenId, string>> = { "source-candidates": "source-agent" };
 
 type ScreenDef = {
   id: ScreenId;
@@ -75,19 +48,8 @@ type NavGroup = {
 
 const screens: ScreenDef[] = [
   {
-    id: "articles",
-    // «Сигналы» → «Бизнес-сигналы» по документу заказчика «Главная страница» (19.09):
-    // бизнес-сигналы — отобранное и оценённое для бизнеса, технологический радар — отдельно.
-    label: "Бизнес-сигналы",
-    eyebrow: "Лента",
-    title: "Поток бизнес-сигналов",
-    description: "Рабочий каталог бизнес-сигналов: фильтры, группировка, ИИ-суть, балл и редактор статусов уже живут в новом интерфейсе.",
-    status: "Экран активен",
-  },
-  {
     id: "business-feed",
-    // #97 (спека #93): бизнес-сигналы карточками, как радар, — одна карточка на событие, публикации
-    // снизу. Старый список статей («Бизнес-сигналы») остаётся рядом, пока новая лента не принята.
+    // #97 (спека #93): бизнес-сигналы карточками, как радар: одна карточка на событие, публикации снизу.
     label: "Бизнес-лента",
     eyebrow: "Лента",
     title: "Бизнес-лента",
@@ -127,14 +89,6 @@ const screens: ScreenDef[] = [
     eyebrow: "Источники",
     title: "Каталог источников",
     description: "Упрощённые карточки, фильтры, диагностика и настройки парсинга теперь собраны в отдельном экране.",
-    status: "Экран активен",
-  },
-  {
-    id: "source-agent",
-    label: "Агент источников",
-    eyebrow: "Поиск источников",
-    title: "Агент поиска источников",
-    description: "Поиск новых источников, проверка кандидатов, память агента и рекомендации по действиям доступны только администраторам.",
     status: "Экран активен",
   },
   {
@@ -187,37 +141,12 @@ const screens: ScreenDef[] = [
     description: "Месячные результаты платформы и работа пользователей: воронка от сбора до дайджеста, затраты на ИИ, разметка по каждому и общий итог (только для администратора).",
     status: "Экран активен",
   },
-  {
-    id: "tech-preview",
-    label: "Технологии",
-    eyebrow: "Прототип",
-    title: "Технологии",
-    description: "Статичный прототип каталога технологий: демонстрационные данные, без логики.",
-    status: "Прототип",
-  },
-  {
-    id: "analytics-preview",
-    label: "Аналитика для БРБ",
-    eyebrow: "Прототип",
-    title: "Аналитика для БРБ",
-    description: "Статичный прототип раздела аналитики: демонстрационные данные, без логики.",
-    status: "Прототип",
-  },
-];
-
-const appHighlights = [
-  "Общий auth gate и session flow",
-  "Typed API client поверх текущего backend",
-  "Источники и диагностика",
-  "Месячный дайджест и экспорт",
-  "Скоринг и дерево тегов",
-  "Каталог бизнес-сигналов",
 ];
 
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["business-feed", "signal-radar", "digest", "colleague-materials", "articles"],
+    screens: ["business-feed", "signal-radar", "digest", "colleague-materials"],
   },
   {
     label: "Настройки",
@@ -225,23 +154,15 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Администрирование",
-    screens: ["users", "statistics", "source-agent"],
-  },
-  // Прототипы будущих разделов — архивные модули с 23.09: без флага ARCHIVED_MODULES фильтр
-  // ниже вычистит оба экрана, visibleScreens станет пустым и группа не отрисуется. Оба экрана
-  // ещё и в ADMIN_SCREENS: даже включённые флагом, они не видны обычному пользователю.
-  {
-    label: "Прототипы",
-    screens: ["tech-preview", "analytics-preview"],
+    screens: ["users", "statistics"],
   },
 ];
 
-// Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
-// прототипы и прежний список статей — за флагом, параметр нужен, чтобы ссылкой можно было поделиться, а без флага
-// ссылка честно сменилась на ленту. ?screen=documents (прежний раздел документов) ведёт в «Материалы».
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "articles", "sources", "source-candidates", "source-agent", "signal-radar", "business-feed", "digest", "colleague-materials"];
+// Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке).
+// ?screen=documents (прежний раздел документов) ведёт в «Материалы».
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "sources", "signal-radar", "business-feed", "digest", "colleague-materials"];
 
-// Первый экран — «Бизнес-лента» (23.10: «Бизнес-сигналы» убраны в архивные модули).
+// Первый экран: «Бизнес-лента».
 const DEFAULT_SCREEN: ScreenId = "business-feed";
 
 function screenFromUrl(): ScreenId | null {
@@ -256,7 +177,6 @@ function initialScreenFromUrl(): ScreenId {
 }
 
 export function App() {
-  const isTasksApp = window.location.pathname.replace(/\/+$/, "") === "/tasks";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(initialScreenFromUrl);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Мобильное меню (до 1056px): кнопка в шапке раскрывает список разделов поверх экрана.
@@ -272,25 +192,14 @@ export function App() {
   const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
   const [admissionCode, setAdmissionCode] = useState("");
   const [toast, setToast] = useState<{ text: string; tone: "default" | "error" } | null>(null);
-  const [articles, setArticles] = useState<Article[]>([]);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [archivedModules, setArchivedModules] = useState<string[]>([]);
-  const screenEnabled = (screenId: ScreenId) =>
-    !ARCHIVED_SCREENS.has(screenId) || archivedModules.includes(SCREEN_MODULE[screenId] ?? screenId);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
   const isAdmin = (user?.role ?? "user") === "admin";
-  // Пункт меню виден: роль пускает и модуль не в архиве (или включён флагом).
-  const screenInMenu = (screenId: ScreenId) => (isAdmin || !ADMIN_SCREENS.has(screenId)) && screenEnabled(screenId);
+  // Пункт меню виден, если роль пускает.
+  const screenInMenu = (screenId: ScreenId) => isAdmin || !ADMIN_SCREENS.has(screenId);
 
   useEffect(() => {
     void loadSession();
   }, []);
-
-  // Прямая ссылка на архивный экран (?screen=tech-preview) без флага ведёт в ленту:
-  // модуля для посетителя нет, как нет и пункта меню.
-  useEffect(() => {
-    if (user && !screenEnabled(activeScreen)) switchScreen(DEFAULT_SCREEN);
-  }, [user, archivedModules, activeScreen]);
 
   // Обычное уведомление уходит само через 2,8 с; ошибка остаётся, пока её не закроют:
   // за 2,8 с текст ошибки не всегда успевают прочитать.
@@ -329,39 +238,6 @@ export function App() {
         <div className="statusPill">{active.status}</div>
       </header>
 
-      <section className="heroGrid">
-        <article className="panel accentPanel">
-          <div className="panelKicker">Админ-панель</div>
-          <h2>Новая админ-панель уже собрана вокруг текущего API</h2>
-          <p>
-            Новый интерфейс уже покрывает ключевые редакторские и конфигурационные сценарии.
-            Старая страница пока остаётся как запасной вариант, но основной каркас интерфейса уже здесь.
-          </p>
-        </article>
-
-        <article className="panel">
-          <div className="panelKicker">Что уже есть</div>
-          <p>
-            Мы переехали без смены серверных контрактов: это упрощает проверку соответствия и даёт
-            возможность спокойно дотягивать поведение экран за экраном.
-          </p>
-        </article>
-      </section>
-
-      <section className="panel">
-        <div className="panelHeader">
-          <h2>Текущее покрытие</h2>
-          <span className="badge">{appHighlights.length} зон</span>
-        </div>
-        <div className="stepList">
-          {appHighlights.map((step, index) => (
-            <div className="stepCard" key={step}>
-              <div className="stepIndex">{String(index + 1).padStart(2, "0")}</div>
-              <div className="stepText">{step}</div>
-            </div>
-          ))}
-        </div>
-      </section>
     </section>
   );
 
@@ -369,31 +245,8 @@ export function App() {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  // Архивный экран без флага не монтируется даже на миг до перехода в ленту: иначе он успевал бы слать свои запросы
-  // (ревью 24.10; ADR 0001, п. 7 — модуль скрыт и в интерфейсе, и в коде).
-  if (activeScreen === "source-candidates" && screenEnabled("source-candidates")) {
-    currentScreen = <SourceCandidatesPage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
-  if (activeScreen === "source-agent" && screenEnabled("source-agent")) {
-    currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
   if (activeScreen === "colleague-materials" || activeScreen === "documents") {
     currentScreen = <MaterialsPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
-  }
-
-  if (activeScreen === "articles" && screenEnabled("articles")) {
-    currentScreen = (
-      <ArticlesPage
-        onUnauthorized={resetSession}
-        showToast={showToast}
-        initialArticles={articles}
-        initialStats={stats}
-        onArticlesReloaded={setArticles}
-        onStatsReloaded={setStats}
-      />
-    );
   }
 
   // Лента и радар — один экран в двух витринах. Ключ — экран: при переходе между ними состояние
@@ -411,7 +264,7 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} />;
+    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "scoring") {
@@ -436,24 +289,6 @@ export function App() {
 
   if (activeScreen === "maintenance") {
     currentScreen = <MaintenancePage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
-  // Статичные прототипы будущих разделов (демо-данные, без логики и без обращений к API).
-  // Архивные модули: рисуются, только если включены флагом.
-  if (activeScreen === "analytics-preview" && screenEnabled("analytics-preview")) {
-    currentScreen = (
-      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
-        <AnalyticsPreview />
-      </Suspense>
-    );
-  }
-
-  if (activeScreen === "tech-preview" && screenEnabled("tech-preview")) {
-    currentScreen = (
-      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
-        <TechnologiesPreview />
-      </Suspense>
-    );
   }
 
   if (activeScreen === "users") {
@@ -497,11 +332,7 @@ export function App() {
     try {
       setAuthLoading(true);
       const payload = await getSession();
-      applyArchivedModules(payload.archived_modules ?? []);
       setUser(payload.user);
-      if (!isTasksApp) {
-        await loadDashboardData(payload.archived_modules ?? []);
-      }
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) {
         showToast(error instanceof Error ? error.message : "Не удалось загрузить сессию", "error");
@@ -543,54 +374,26 @@ export function App() {
   }
 
   async function enter(payload: AuthResponse, message: string) {
-    applyArchivedModules(payload.archived_modules ?? []);
     setUser(payload.user);
     setAdmissionNotice(null);
     setAdmissionCode("");
-    if (!isTasksApp) {
-      await loadDashboardData(payload.archived_modules ?? []);
-    }
     setPassword("");
     showToast(message);
   }
 
-  // Сброс сессии при 401. ВАЖНО: чистим не только user, но и данные — иначе после
-  // протухания куки в открытой вкладке в стейте остаются статьи и счётчики прежнего
-  // пользователя, и следующий вошедший видит их кадром до прихода своих данных
-  // (аудит изоляции 24.07: handleLogout чистил, а onUnauthorized — нет).
+  // Сброс сессии при 401: данные экранов живут в самих экранах и уходят вместе с ними.
   function resetSession() {
     setUser(null);
-    setArticles([]);
-    setStats(null);
-    setArchivedModules([]);
   }
 
   async function handleLogout() {
     try {
       await logout();
       setUser(null);
-      setArticles([]);
-      setStats(null);
-      setArchivedModules([]);
       showToast("Сессия завершена");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Не удалось выйти", "error");
     }
-  }
-
-  // Архивные модули с сессией. Включённый флагом «articles» возвращает и прежний первый экран — «Бизнес-сигналы»,
-  // если адрес не просит другой: модуль из архива работает так, как работал.
-  function applyArchivedModules(modules: string[]) {
-    setArchivedModules(modules);
-    if (modules.includes("articles") && screenFromUrl() === null) setActiveScreen("articles");
-  }
-
-  // Данные «Бизнес-сигналов» (сотни статей и счётчики) грузятся, только если экран включён.
-  async function loadDashboardData(modules: string[] = archivedModules) {
-    if (!modules.includes("articles")) return;
-    const [articlesPayload, statsPayload] = await Promise.all([listArticles(DEFAULT_SIGNAL_ARTICLE_QUERY), getDashboardStats()]);
-    setArticles(articlesPayload);
-    setStats(statsPayload);
   }
 
   function showToast(text: string, tone: "default" | "error" = "default") {
@@ -649,13 +452,11 @@ export function App() {
       <div className="authShellReact">
         <main className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
-          <h1>{authMode === "register" ? "Регистрация" : isTasksApp ? "Вход в трекер задач" : "Вход в админ-панель"}</h1>
+          <h1>{authMode === "register" ? "Регистрация" : "Вход в админ-панель"}</h1>
           <p>
             {authMode === "register"
-              ? "Создайте аккаунт, чтобы работать с задачами и редакторскими инструментами."
-              : isTasksApp
-                ? "Войдите в аккаунт, чтобы открыть скрытую доску проекта."
-                : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
+              ? "Создайте аккаунт, чтобы работать с редакторскими инструментами."
+              : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
           </p>
           {/* Форма: Enter в поле пароля отправляет вход (раньше срабатывала только кнопка). */}
           <form noValidate onSubmit={(event) => void submitAuth(event)}>
@@ -695,31 +496,6 @@ export function App() {
           <div className="authSwitchText">
             Нет доступа? Обратитесь к администратору платформы.
           </div>
-        </main>
-        {toastRegion}
-      </div>
-    );
-  }
-
-  if (isTasksApp) {
-    return (
-      <div className="tasksAppShell">
-        <a className="skipLink" href="#main-content">Перейти к содержимому</a>
-        <header className="shellHeader">
-          <div className="brand">
-            <span className="brandTitle">OilTech Digest</span>
-            <span className="brandSubtitle">Трекер задач</span>
-          </div>
-          <div className="shellHeaderActions">
-            <span className="shellUser">{user.email}</span>
-            <button type="button" className="shellHeaderButton" onClick={() => void handleLogout()}>
-              <UtilityIcon kind="logout" collapsed={false} />
-              Выйти
-            </button>
-          </div>
-        </header>
-        <main id="main-content" className="tasksAppContent" tabIndex={-1}>
-          <BacklogPage onUnauthorized={resetSession} showToast={showToast} />
         </main>
         {toastRegion}
       </div>
@@ -900,15 +676,6 @@ function UtilityIcon(props: { kind: "toggle" | "logout"; collapsed: boolean }) {
 
 function ScreenIcon(props: { screenId: ScreenId }) {
   const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true };
-
-  if (props.screenId === "articles") {
-    return (
-      <svg {...common}>
-        <rect x="2.5" y="2.5" width="11" height="11" rx="2.2" />
-        <path d="M5 6h6M5 8.5h6M5 11h4" />
-      </svg>
-    );
-  }
 
   if (props.screenId === "business-feed") {
     // Карточки событий стопкой: одна карточка — несколько публикаций.

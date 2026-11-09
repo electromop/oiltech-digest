@@ -3,7 +3,6 @@
 страны события (до трёх) и страна каждого участника; написания сводятся к имени справочника, чужое отбрасывается.
 """
 
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -80,27 +79,6 @@ def test_country_filter_finds_a_signal_by_the_event_country_and_by_a_participant
     # Значения фильтра на экране — имена справочника стран, без написаний.
     countries = api_get("/api/signals/dictionaries", user)["country"]
     assert {"ОАЭ", "США", "Россия", "Норвегия"} <= set(countries) and "USA" not in countries
-
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "card-country-before-deploy.sql"
-
-
-def test_before_deploy_sql_adds_the_event_countries_to_the_old_schema_and_repeats_safely(isolated_db):
-    with connection.get_connection() as conn:
-        conn.execute("ALTER TABLE signals DROP COLUMN event_countries")
-        conn.commit()
-
-    for _ in range(2):  # повтор безопасен
-        with connection.get_connection() as conn:
-            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
-            conn.autocommit = True
-            conn.execute(SCRIPT.read_text(encoding="utf-8"))
-
-    with connection.get_connection() as conn:
-        found = conn.execute(
-            "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() "
-            "AND table_name = 'signals' AND column_name = 'event_countries'").fetchone()
-    assert found == ("ARRAY",)
 
 
 def test_participant_country_goes_with_the_participants_and_a_human_list_stays_without_it(user, contour,

@@ -30,8 +30,6 @@ RUN python -m playwright install --with-deps chromium
 
 # Код приложения и статика админки
 COPY oiltech_digest ./oiltech_digest
-COPY BACKLOG.md ./BACKLOG.md
-COPY web ./web
 COPY --from=frontend-build /frontend/dist ./frontend/dist
 COPY scripts ./scripts
 COPY data/seed ./data/seed

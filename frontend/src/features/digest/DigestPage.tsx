@@ -17,7 +17,6 @@ type ToastWriter = (text: string, tone?: "default" | "error") => void;
 type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
-  onArticlesChanged?: () => void;
 };
 
 const DIGEST_PREVIEW_LIMIT = 500;
@@ -29,7 +28,7 @@ const NO_ARTICLES: Article[] = [];
 // Месячный дайджест (пересмотр 23-24.10): «Сборка выпуска» — всегда выпуск, который собирается сейчас: слева состав,
 // справа тот же выпуск в PDF и действия с ним. Прошлые выпуски — только во вкладке «Архив выпусков» и только на
 // просмотр (решение владельца 24.10). Оформление выпуска с экрана убрано: шапка и подвал — из сохранённого на сервере.
-export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
+export function DigestPage({ onUnauthorized, showToast }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -239,7 +238,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       setBusy(true);
       await updateArticle(articleId, { status: "archive" });
       await reload();
-      onArticlesChanged?.();
       showToast("Статья убрана из дайджеста");
     } catch (error) {
       handleError(error, "Не удалось убрать статью из дайджеста");

@@ -5,19 +5,15 @@
 процесса: срок кода и интервал выдачи считает Postgres (now())."""
 
 import re
-from pathlib import Path
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import admission, api, config
-from oiltech_digest.config import DATABASE_URL
 from oiltech_digest.db import connection, repository
 
 PASSWORD = "long-enough-password"
 EMAIL = "newcomer.person@example.test"
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "admission" / "admission-before-deploy.sql"
 
 
 @pytest.fixture()
@@ -406,35 +402,6 @@ def test_retryable_failure_keeps_text_for_next_attempt(newcomer, notify_on, work
     _, _, _, payload, status = _notify_jobs()[0]
     assert status == "queued"
     assert "text" in payload
-
-
-# --- выкат: нынешние учётки допущены, один раз ------------------------------------------------
-
-
-def _run_script():
-    with psycopg.connect(DATABASE_URL) as conn:
-        conn.execute(f'SET search_path TO "{_schema()}"')
-        conn.execute(SCRIPT.read_text())
-        conn.commit()
-
-
-def _schema():
-    with connection.get_connection() as conn:
-        return conn.execute("SELECT current_schema()").fetchone()[0]
-
-
-def test_before_deploy_script_admits_existing_accounts_once(isolated_db):
-    _sql("ALTER TABLE users DROP COLUMN admitted_at")
-    _sql("DROP TABLE admission_codes")
-    old = repository.create_user("old@example.test", PASSWORD, "user")
-
-    _run_script()
-    assert _admitted(old["id"])
-
-    admission.revoke(old["id"])
-    _run_script()
-    connection.init_db()
-    assert not _admitted(old["id"])
 
 
 def test_jobs_list_does_not_show_the_code(newcomer, notify_on, admin_and_member):

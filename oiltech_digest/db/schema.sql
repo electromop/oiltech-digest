@@ -203,10 +203,8 @@ ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS criteria_snapshot JSONB;
 -- радар» (tech_radar). Колонка с умолчанием, без UPDATE: строки, что были до профилей,
 -- читаются как business, и лента считается тем же набором, что и раньше. Имя уникально в
 -- пределах профиля: «Технологическая новизна» есть и в наборе радара, и в старом сиде.
--- На живой базе эти строки выполняются вручную ДО выката кода (scripts/g/), выкат —
--- --no-schema. Глобальный индекс имён снимается ПОСЛЕ выката: старый код пишет
--- ON CONFLICT (name) и без этого индекса не сохранил бы новый критерий. Блок — после
--- article_scores: порядок таблиц как у записи балла и у шага 1 выката.
+-- Глобальный индекс имён снят: имя уникально в пределах профиля. Блок после article_scores:
+-- порядок таблиц как у записи балла.
 ALTER TABLE scoring_criteria ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'business';
 DO $$
 BEGIN
@@ -378,8 +376,7 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
 
 -- Допуск по коду (#113, admission.py). Время допуска пусто — учётка ждёт допуска; новые учётки
 -- создаются без него. Учётки, которые были до колонки, допускаются один раз — при её
--- добавлении: повторный init-db не должен вернуть допуск тем, с кого его сняли. На живой базе
--- то же делает scripts/admission/admission-before-deploy.sql до выката кода.
+-- добавлении: повторный init-db не должен вернуть допуск тем, с кого его сняли.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
@@ -992,8 +989,7 @@ ALTER TABLE signals ALTER COLUMN maturity DROP NOT NULL;
 -- Поля материала выпуска (#162, ADR 0006): живут на сигнале, у статьи ленты на её сигнале ленты. Подпись выпуска
 -- (пусто: подпись по типу события), «Гипотеза для Компании» (кто поставил: card_set_by->>'hypothesis', agent или human;
 -- когда и почта человека), выбор картинки (placeholder: заглушка темы вместо своей; пусто: своя). Заголовок и суть
--- правятся записью журнала ОС (corrected_title, corrected_thesis), как у находок радара. На живой базе этими же
--- ALTER до выката кода (scripts/digest/issue-edits-before-deploy.sql).
+-- правятся записью журнала ОС (corrected_title, corrected_thesis), как у находок радара.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS issue_label TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis_set_at TIMESTAMPTZ;

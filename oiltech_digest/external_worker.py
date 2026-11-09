@@ -283,7 +283,6 @@ _JOB_STALL_SECONDS = {
     "refetch_text": 600,
     # Радар подаёт beat на каждую тему, кластер, запрос поиска, страницу и пару дедупа —
     # между ними один вызов модели или одна страница, как у ИИ-видов.
-    "source_candidate_evaluate": 1200,
     "signal_discovery": 1200,
     # Карточка сигнала: шаг — один вызов модели на сигнал; «Отбор» — один-два на публикацию; «Суть и перевод»
     # сигналов — суть и перевод заголовка на сигнал; баллы «Карточки» — один вызов на сигнал.
@@ -439,8 +438,7 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "scrape_source": (external_fetch, "process_payload"),
     "reprint_review": (external_ai, "process_reprint_review_payload"),
     "refetch_text": (external_fetch, "process_refetch_text_payload"),
-    # Агентные виды (полоса external-agents): оценка кандидата в источники и радар сигналов.
-    "source_candidate_evaluate": (external_ai, "process_source_candidate_payload"),
+    # Агентный вид (полоса external-agents): радар сигналов.
     "signal_discovery": (signal_discovery, "process_external_payload"),
     # Агент «Карточка сигнала» (#96, контракт 2): поток дня и полоса пересчётов.
     "signal_card": (signal_card, "process_payload"),

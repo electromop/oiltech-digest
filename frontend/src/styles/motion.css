@@ -71,14 +71,18 @@
 
 /* --- Нажатие кнопки: короткое сжатие до 0.96; неактивная не сжимается --- */
 @media (prefers-reduced-motion: no-preference) {
-  :is(.primaryButton, .ghostButton, .dangerButton, .dangerGhostButton) {
+  :is(.primaryButton,
+  .ghostButton,
+  .dangerButton {
     transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
       border-color var(--ot-duration-fast-02) var(--ot-ease-standard),
       color var(--ot-duration-fast-02) var(--ot-ease-standard),
       scale 150ms ease-out;
   }
 
-  :is(.primaryButton, .ghostButton, .dangerButton, .dangerGhostButton):not(:disabled):active {
+  :is(.primaryButton,
+  .ghostButton,
+  .dangerButton {
     scale: 0.96;
   }
 }

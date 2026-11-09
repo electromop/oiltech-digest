@@ -1,10 +1,5 @@
 import { apiFetch } from "./client";
-import type { DashboardStats, FeedWindowPayload, MonthlyAnalytics, MonthlyStats } from "./types";
-
-// Счётчики ленты по тому же окну, что и сама лента; с `month` — за этот месяц (архив).
-export function getDashboardStats(month?: string) {
-  return apiFetch<DashboardStats>(month ? `/api/stats?month=${encodeURIComponent(month)}` : "/api/stats");
-}
+import type { FeedWindowPayload, MonthlyAnalytics, MonthlyStats } from "./types";
 
 // Открытые месяцы окна и прошлые месяцы для переключателя «Архив».
 export function getFeedWindow() {

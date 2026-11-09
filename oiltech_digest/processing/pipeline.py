@@ -1,7 +1,6 @@
-"""Обработка статей ленты: суть и перевод заголовка; общий с баллами сигнала счёт балла по критериям.
+"""Обработка статей ленты: суть и перевод заголовка; ключевые слова и ступень балла критерия, общие с баллами сигнала.
 
-С 08.11 ленту решает только «Отбор» (#130), тему и баллы ставит «Карточка» (#132): гейт ленты, тег и балл статьи сняты.
-Их стадии нужны только выключенному агенту источников и лежат у него (source_discovery/legacy_stages.py)."""
+Ленту решает «Отбор» (#130), тему и баллы ставит «Карточка» (#132): гейт ленты, тег и балл статьи сняты 08.11."""
 
 from __future__ import annotations
 
@@ -12,7 +11,7 @@ from typing import Any
 
 import logging
 
-from oiltech_digest import config, scoring_profiles
+from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
@@ -337,64 +336,6 @@ def _needs_translation(title: str) -> bool:
 SCORE_KEYWORD_WEIGHT = 0.2
 SCORE_AI_WEIGHT = 0.8
 
-# #54: потолок подпункта статьи-инцидента без решения. Правило «инциденты — низко» жило только
-# в промпте, без числа, рядом с якорем «40-64: косвенно» — и удар по складу ГСМ взял ровно 60.
-# Модель теперь только классифицирует (incident_without_solution в ответе), а
-# потолок ставит код; число в промпте балла (у агента источников: legacy_stages.SCORING_INSTRUCTIONS) то же.
-INCIDENT_CRITERION_CAP = 30
-
-
-def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[str, Any]) -> dict:
-    by_id = {int(c["id"]): c for c in criteria}
-    ai_items = {int(item["criterion_id"]): item for item in payload.get("items", []) if item.get("criterion_id") in by_id}
-    items = []
-    weighted_total = 0.0
-    for criterion in criteria:
-        criterion_id = int(criterion["id"])
-        weight = float(criterion["weight"])
-        keyword_score = keyword_score_for_criterion(article, criterion)
-        ai_item = ai_items.get(criterion_id)
-        # Явная проверка наличия: легитимный ai_score=0 — это оценка, а не «нет ответа».
-        # Только если модель вообще не вернула критерий — падаем на детерминистский keyword.
-        if ai_item is not None and ai_item.get("ai_score") is not None:
-            ai_score = _clamp(float(ai_item["ai_score"]), 0, 100)
-        else:
-            ai_score = keyword_score
-        ai_score_raw = ai_score
-        if payload.get("incident_without_solution") is True:
-            # Потолок на оба слагаемых, а не на итог: признака инцидента среди сохранённых подпунктов нет,
-            # и final, пересчитанный из ai_score и keyword_score, иначе потерял бы потолок.
-            keyword_score = min(keyword_score, INCIDENT_CRITERION_CAP)
-            ai_score = min(ai_score, INCIDENT_CRITERION_CAP)
-        blended = (keyword_score * SCORE_KEYWORD_WEIGHT) + (ai_score * SCORE_AI_WEIGHT)
-        final_score = round(max(ai_score, blended), 2)
-        weighted_total += final_score * weight / 100
-        items.append(
-            {
-                "criterion_id": criterion_id,
-                "keyword_score": keyword_score,
-                "ai_score": ai_score,
-                # Оценка до потолка инцидента (#54). В базу не пишется (схема прежняя), а в итоге
-                # задачи остаётся (background_jobs.result_json): по ней видно, что срезал потолок.
-                "ai_score_raw": ai_score_raw,
-                "final_score": final_score,
-                "rationale": (ai_items.get(criterion_id) or {}).get("rationale") or "Keyword/AI blended score",
-            }
-        )
-    total_score = round(_clamp(weighted_total, 0, 100), 2)
-    return {
-        # Признак модели (#54) — тоже только в итоге задачи: ложное «да» уводит статью из ленты.
-        "incident_without_solution": payload.get("incident_without_solution") is True,
-        "total_score": total_score,
-        "score_label": score_label(total_score),
-        "explanation": payload.get("explanation") or "",
-        "items": items,
-        # Происхождение (сессия G): каким профилем и каким набором критериев посчитан балл —
-        # веса снимка те же, что дали итог выше. На NL — из критериев пакета.
-        "profile": scoring_profiles.profile_of(criteria),
-        "criteria_snapshot": scoring_profiles.criteria_snapshot(criteria),
-    }
-
 
 def keyword_score_for_criterion(article: dict, criterion: dict) -> float:
     text = _search_text(article)
@@ -415,7 +356,7 @@ def score_label(score: float) -> str:
     return "Низкая"
 
 
-# Сколько знаков текста статьи видит модель сути (и стадии агента источников). По нему же fulltext_recompute решает,
+# Сколько знаков текста статьи видит модель сути. По нему же fulltext_recompute решает,
 # стоит ли пересчитывать суть после замены обрывка полным текстом.
 ARTICLE_PROMPT_TEXT_CHARS = 6000
 
@@ -432,8 +373,7 @@ def _otbor_lines(article: dict) -> list[str]:
 
 
 def _article_prompt(article: dict, *, otbor: bool = False) -> str:
-    """Вход сути по публикации (и тега и балла агента источников); otbor: с полями «Отбора» (только «Суть и перевод»,
-    #131)."""
+    """Вход сути по публикации; otbor: с полями «Отбора» (только «Суть и перевод», #131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",

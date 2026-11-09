@@ -52,8 +52,8 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # Первый прогон восьми разделов принёс 23 статьи — ровно технологические
     # («Autonomous Robot for Gas Detection», «Digital Twin of Completions Operations»,
     # «Quantum Computing Use Cases for the Oil and Gas Industry»).
-    # Сами строки источников заводит scripts/add_jpt_sections.sql — реестр их только
-    # настраивает: apply_overrides UPDATE'ит существующие, а не создаёт.
+    # Строки источников заведены в базе разово, реестр их только настраивает: apply_overrides
+    # обновляет существующие, а не создаёт.
     # 28.09 разделы — через NL (network_region external → очередь external-playwright). С РФ
     # jpt.spe.org (CloudFront) принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа —
     # 206 КБ за 1,4 с, рендер раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.

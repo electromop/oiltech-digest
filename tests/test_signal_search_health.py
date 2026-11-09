@@ -118,7 +118,7 @@ def _daily_through_worker(monkeypatch, *, force: bool = False) -> dict:
         def no_database(*args, **kwargs):
             raise RuntimeError("у воркера NL нет базы")
 
-        for name in ("get_connection", "list_enabled_tags", "list_signal_agent_memory", "list_agent_memory"):
+        for name in ("get_connection", "list_enabled_tags", "list_signal_agent_memory"):
             worker.setattr(repository, name, no_database)
         result = signal_discovery.process_external_payload(json.loads(json.dumps(claimed["payload"])))
     completed = client.post(

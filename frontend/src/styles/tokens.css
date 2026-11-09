@@ -273,11 +273,4 @@
   --brand: var(--ot-interactive);
   --brand-soft: var(--ot-selected-subtle);
   --radius: var(--ot-radius);
-  /* Имена, которые CSS использовал, но нигде не объявлял: номер кандидата источника рисовался
-     белым по прозрачному фону (var(--primary) пуст) и был не виден. */
-  --text: var(--ot-text-primary);
-  --primary: var(--ot-interactive);
-  --muted: var(--ot-text-secondary);
-  --blue: var(--ot-link);
-  --border: var(--ot-border-subtle);
 }

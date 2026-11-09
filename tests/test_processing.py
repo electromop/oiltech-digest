@@ -242,47 +242,6 @@ def test_default_scoring_weights_equal_100_in_each_profile():
         assert len({item["name"] for item in criteria}) == len(criteria)
 
 
-def test_incident_without_solution_is_capped_by_code():
-    """#54: признак «инцидент без решения» ограничивает балл кодом, а не просьбой к модели.
-    Правило «инциденты — низко» жило только в промпте, и удар по складу ГСМ получил ровно 60."""
-    criteria = [{"id": 1, "name": "Стратегическая значимость", "weight": 60, "keywords_json": [], "keywords_en_json": []},
-                {"id": 2, "name": "Достоверность и актуальность", "weight": 40, "keywords_json": [], "keywords_en_json": []}]
-    answer = {"incident_without_solution": True, "explanation": "удар по складу ГСМ",
-              "items": [{"criterion_id": 1, "ai_score": 60, "rationale": "."},
-                        {"criterion_id": 2, "ai_score": 85, "rationale": "."}]}
-    article = {"title": "Удар по складу ГСМ", "raw_text": "…"}
-
-    result = pipeline.normalize_score_payload(article, criteria, answer)
-
-    assert result["total_score"] <= pipeline.INCIDENT_CRITERION_CAP  # старый код: 70.0
-    assert result["score_label"] == "Низкая"
-    # Ревью #79: признак и оценка модели до потолка не теряются — по ним находится ложное «да».
-    assert result["incident_without_solution"] is True
-    assert [item["ai_score_raw"] for item in result["items"]] == [60, 85]
-    # Страж: признак false или его нет (воркер NL старой сборки) — потолка нет, 60·0,6 + 85·0,4.
-    for flag in ({"incident_without_solution": False}, {}):
-        plain = {"explanation": answer["explanation"], "items": answer["items"], **flag}
-        unflagged = pipeline.normalize_score_payload(article, criteria, plain)
-        assert unflagged["total_score"] == 70.0
-        assert unflagged["incident_without_solution"] is False
-        assert [item["ai_score_raw"] for item in unflagged["items"]] == [60, 85]
-
-
-def test_incident_flag_without_items_caps_the_keyword_fallback():
-    """E5 (ревью #79): признак без подпунктов — критерий падает на ключевой балл, и потолок
-    ложится на него: 30/30/30, исходные 100 — в ai_score_raw."""
-    criteria = [{"id": 1, "name": "Значимость", "weight": 100,
-                 "keywords_json": ["удар", "гсм", "пожар"], "keywords_en_json": []}]
-    article = {"title": "Удар по складу ГСМ", "raw_text": "После удара начался пожар."}
-
-    result = pipeline.normalize_score_payload(article, criteria, {"incident_without_solution": True, "items": []})
-
-    item = result["items"][0]
-    assert (item["keyword_score"], item["ai_score"], item["final_score"]) == (30, 30, 30)
-    assert item["ai_score_raw"] == 100
-    assert result["incident_without_solution"] is True and result["total_score"] == 30
-
-
 def test_glossary_prompt_selects_relevant_oilfield_terms():
     article = {
         "title": "Electric frac fleet expands hydraulic fracturing operations",

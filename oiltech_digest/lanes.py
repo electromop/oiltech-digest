@@ -29,7 +29,7 @@ NOTIFY = "external-notify"
 _AI_KINDS = frozenset({"process_articles", "translate_titles", "process_document", "reprint_review",
                        "signal_card", "otbor", "signal_summary", "signal_scores"})
 _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
-_AGENT_KINDS = frozenset({"signal_discovery", "source_candidate_evaluate"})
+_AGENT_KINDS = frozenset({"signal_discovery"})
 
 EXTERNAL_LANES: dict[str, frozenset[str]] = {
     # Поток дня: пакеты планировщика, перепечатки, документы пользователей.
@@ -42,8 +42,8 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
                         "signal_scores"}),
     FETCH: _FETCH_KINDS,
     BROWSER: _FETCH_KINDS,
-    # Радар и оценка кандидатов агента источников (ADR 0001): прогон радара — минуты,
-    # а не секунды, и в общей полосе пакет статей дня ждал бы его, а радар — пакеты.
+    # Радар (ADR 0001): прогон радара длится минуты, а не секунды, и в общей полосе пакет статей дня ждал бы его,
+    # а радар пакеты.
     AGENTS: _AGENT_KINDS,
     # Короткие сообщения людям — код допуска в Telegram (#113, контракт 3). Слушает воркер сбора:
     # несколько потоков и простой не дольше 30 с, — код не ждёт долгих задач ИИ и радара.
@@ -82,11 +82,9 @@ def serves(queue_name: str | None, kind: str | None) -> bool:
 def route(queue_name: str | None, kind: str | None) -> str | None:
     """Очередь, в которую задача встанет на самом деле.
 
-    Код радара и агента источников ставит свои задачи в ИИ-полосу: маршрутом ИИ
-    (network_policy.route_ai_processing) или строкой "external-ai" (source_discovery/
-    loop.py). Код был зоной Германа и не менялся (граница снята 04.11), поэтому полосу агентам
-    выбирает постановка, в одном месте. Из других полос не переносим: радар в полосе сбора — ошибка
-    вызывающего, и check_enqueue откажет ему громко."""
+    Код радара ставит свои задачи в ИИ-полосу маршрутом ИИ (network_policy.route_ai_processing), поэтому
+    полосу агентам выбирает постановка, в одном месте. Из других полос не переносим: радар в полосе сбора
+    это ошибка вызывающего, и check_enqueue откажет ему громко."""
     if str(kind or "") in _AGENT_KINDS and queue_name in (AI_LIVE, AI_BULK):
         return AGENTS
     return queue_name

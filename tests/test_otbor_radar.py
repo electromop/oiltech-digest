@@ -3,7 +3,6 @@
 (tests/otbor_radar_support.py). Поиск только находит: решает «Отбор».
 """
 
-from pathlib import Path
 
 from oiltech_digest import background_jobs, cli, signal_card, signal_discovery
 from oiltech_digest.db import repository
@@ -227,29 +226,6 @@ def test_finding_waiting_for_otbor_is_shown_nowhere_and_gets_no_card(user, admin
     assert _sections(admin) == {}
     # «Карточка» берёт только принятое «Отбором»: ждущей его решения находке модель не платится.
     assert model.calls == []
-
-
-def test_before_deploy_sql_adds_the_columns_to_the_old_schema_and_repeats_safely(isolated_db):
-    script = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "otbor-radar-before-deploy.sql"
-    with repository.get_connection() as conn:
-        conn.execute("ALTER TABLE signals DROP COLUMN selector")
-        conn.execute("ALTER TABLE colleague_materials DROP COLUMN notified_outcome, DROP COLUMN notified_at")
-        conn.execute("ALTER TABLE signal_feedback_events DROP COLUMN author")
-        conn.commit()
-
-    for _ in range(2):  # повтор безопасен
-        with repository.get_connection() as conn:
-            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
-            conn.autocommit = True
-            conn.execute(script.read_text(encoding="utf-8"))
-
-    with repository.get_connection() as conn:
-        columns = {(row[0], row[1]) for row in conn.execute(
-            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()")}
-        indexes = {row[0] for row in conn.execute("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")}
-    assert {("signals", "selector"), ("colleague_materials", "notified_outcome"), ("colleague_materials", "notified_at"),
-            ("signal_feedback_events", "author")} <= columns
-    assert "idx_signals_otbor_waiting" in indexes
 
 
 # --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте, — ссылка его карточки ----------------

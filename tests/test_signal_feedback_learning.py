@@ -150,20 +150,6 @@ def test_card_without_links_is_hidden_and_human_corrections_survive_rediscovery(
     assert rows[shown]["original_title_ru"] == "Новый текст модели"
 
 
-def test_rejected_source_candidate_is_not_revived_by_rediscovery(isolated_db):
-    url = "https://example.com/newsroom"
-    candidate = repository.upsert_source_candidate({"url": url, "status": "new", "discovered_by": "agent"})
-    with repository.get_connection() as conn:
-        conn.execute("UPDATE source_candidates SET status = 'rejected' WHERE id = %s", (candidate,))
-        conn.commit()
-
-    repository.upsert_source_candidate({"url": url, "status": "new", "discovered_by": "agent"})
-
-    with repository.get_connection() as conn:
-        status = conn.execute("SELECT status FROM source_candidates WHERE id = %s", (candidate,)).fetchone()[0]
-    assert status == "rejected"
-
-
 def test_listing_marks_themes_outside_customer_topics(isolated_db):
     repository.upsert_tag({"parent_id": None, "name": THEME, "name_en": "Drilling", "description": "",
                            "keywords_json": ["бурение"], "keywords_en_json": ["drilling"], "sort_order": 1})

@@ -7,19 +7,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import psycopg
 from psycopg.types.json import Jsonb
 import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api, scoring_profiles
 from oiltech_digest.db import connection, repository
-from oiltech_digest.processing import pipeline
 from oiltech_digest.processing.seed import DEFAULT_SCORING_PROFILES, seed_default_scoring_criteria
-
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts" / "g"
 
 
 def _criterion(conn, name: str, weight: float, *, profile: str | None = None, enabled: bool = True,
@@ -44,33 +39,6 @@ def _rows(profile: str) -> list[tuple]:
         ).fetchall()
 
 
-def _indexes() -> set[str]:
-    with connection.get_connection() as conn:
-        return {row[0] for row in conn.execute(
-            "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'scoring_criteria'"
-        )}
-
-
-def _run_script(name: str) -> None:
-    """Файл из scripts/g — так, как его выполнит владелец: целиком, со своими BEGIN/COMMIT."""
-    with connection.get_connection() as conn:
-        conn.commit()  # тестовое подключение открыло транзакцию своим SET search_path
-        conn.autocommit = True
-        conn.execute((SCRIPTS / name).read_text(encoding="utf-8"))
-
-
-def _to_schema_before_profiles() -> None:
-    """Схема базы на ae2ada1: без профилей, имя критерия уникально глобально."""
-    with connection.get_connection() as conn:
-        conn.execute("DROP INDEX IF EXISTS idx_scoring_criteria_profile_name")
-        conn.execute("ALTER TABLE scoring_criteria DROP CONSTRAINT IF EXISTS scoring_criteria_profile_check")
-        conn.execute("ALTER TABLE scoring_criteria DROP COLUMN IF EXISTS profile")
-        conn.execute("ALTER TABLE article_scores DROP COLUMN IF EXISTS profile")
-        conn.execute("ALTER TABLE article_scores DROP COLUMN IF EXISTS criteria_snapshot")
-        conn.execute("CREATE UNIQUE INDEX idx_scoring_criteria_name ON scoring_criteria(name)")
-        conn.commit()
-
-
 def _admin_client(conn) -> TestClient:
     user_id = conn.execute(
         "INSERT INTO users (email, password_salt, password_hash, role) "
@@ -81,64 +49,6 @@ def _admin_client(conn) -> TestClient:
     api.app.dependency_overrides[api.require_admin] = lambda: user
     api.app.dependency_overrides[api.require_user] = lambda: user
     return TestClient(api.app)
-
-
-# --- Схема: только добавления ----------------------------------------------------------------
-
-
-def test_live_database_keeps_its_criteria_as_business_through_every_rollout_step(isolated_db):
-    """Порядок выката ADR 0002 на базе со схемой ae2ada1: SQL до выката → код → SQL после.
-
-    Каждый шаг повторяем — второй прогон не падает. Прежние строки (и выключенные) становятся
-    business без UPDATE, старый код между шагами пишет по-старому (ON CONFLICT (name)), а
-    init-db после всех шагов не возвращает глобальный индекс имён."""
-    _to_schema_before_profiles()
-    with connection.get_connection() as conn:
-        live = [_criterion(conn, f"Прод {n}", w, sort_order=n) for n, w in enumerate((30, 25, 20, 15, 10), 1)]
-        _criterion(conn, "Технологическая новизна", 35, enabled=False, sort_order=9)
-        conn.commit()
-
-    _run_script("scoring-profiles-before-deploy.sql")
-    _run_script("scoring-profiles-before-deploy.sql")
-
-    with connection.get_connection() as conn:
-        assert conn.execute("SELECT DISTINCT profile FROM scoring_criteria").fetchall() == [("business",)]
-        # Старый код до выката: сид и «Сохранить» целятся в глобальный индекс имён.
-        conn.execute(
-            "INSERT INTO scoring_criteria (name, description, weight, keywords_json, keywords_en_json, enabled, sort_order) "
-            "VALUES ('Технологическая новизна', 'из сида', 35, '[]', '[]', TRUE, 10) "
-            "ON CONFLICT (name) DO UPDATE SET description = COALESCE(scoring_criteria.description, EXCLUDED.description)"
-        )
-        added = conn.execute(
-            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Новый с экрана', 0, TRUE, 60) "
-            "ON CONFLICT (name) DO UPDATE SET weight = EXCLUDED.weight, enabled = TRUE RETURNING id"
-        ).fetchone()[0]
-        conn.commit()
-    assert _indexes() >= {"idx_scoring_criteria_name", "idx_scoring_criteria_profile_name"}
-    # Новый код видит ровно прежний набор ленты (выключенная строка старого сида — нет).
-    enabled = repository.list_enabled_scoring_criteria()
-    assert [int(row["id"]) for row in enabled] == [*live, added]
-    assert sum(float(row["weight"]) for row in enabled) == 100
-
-    _run_script("scoring-profiles-after-deploy.sql")
-    _run_script("scoring-profiles-after-deploy.sql")
-    connection.init_db()
-    connection.init_db()
-
-    assert "idx_scoring_criteria_name" not in _indexes()
-    assert "idx_scoring_criteria_profile_name" in _indexes()
-    with connection.get_connection() as conn:
-        with pytest.raises(psycopg.errors.CheckViolation):
-            conn.execute("UPDATE scoring_criteria SET profile = 'digest' WHERE id = %s", (live[0],))
-
-
-def test_readonly_check_after_rollout_runs_and_changes_nothing(isolated_db):
-    seed_default_scoring_criteria()
-    before = _rows("business") + _rows("tech_radar")
-
-    _run_script("scoring-profiles-check.sql")
-
-    assert _rows("business") + _rows("tech_radar") == before
 
 
 # --- Кто что видит ----------------------------------------------------------------------------
@@ -367,28 +277,6 @@ def _history_score(article_id: int, items: list[dict], *, profile: str | None = 
                 (score_id, item["criterion_id"], item["keyword_score"], item["ai_score"], item["final_score"]),
             )
         conn.commit()
-
-
-def test_score_carries_profile_and_snapshot_of_the_criteria_it_was_computed_with():
-    criteria = [
-        {"id": 1, "name": "А", "weight": 60, "description": "d", "keywords_json": ["x"], "keywords_en_json": [],
-         "profile": "business"},
-        {"id": 2, "name": "Б", "weight": 40, "description": "", "keywords_json": [], "keywords_en_json": [],
-         "profile": "business"},
-    ]
-
-    result = pipeline.normalize_score_payload(
-        {"title": "t", "raw_text": "x"}, criteria,
-        {"items": [{"criterion_id": 1, "ai_score": 50}, {"criterion_id": 2, "ai_score": 100}]},
-    )
-
-    assert result["profile"] == "business"
-    snapshot = result["criteria_snapshot"]
-    assert [(s["id"], s["name"], s["weight"]) for s in snapshot] == [(1, "А", 60.0), (2, "Б", 40.0)]
-    assert [s["text_hash"] for s in snapshot] == [scoring_profiles.criterion_text_hash(c) for c in criteria]
-    # Итог складывается из подпунктов по весам снимка — по ним его и можно пересчитать.
-    finals = {item["criterion_id"]: item["final_score"] for item in result["items"]}
-    assert result["total_score"] == round(sum(finals[s["id"]] * s["weight"] / 100 for s in snapshot), 2)
 
 
 def test_text_hash_ignores_weight_but_not_what_the_model_and_keywords_see():
