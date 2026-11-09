@@ -125,7 +125,7 @@ const EMPTY_FEEDBACK_DRAFT: FeedbackDraft = {
   comment: "",
 };
 
-// Шкала заказчика (список Виктора от 13.09). Это оценка ЧЕЛОВЕКА и она намеренно
+// Шкала заказчика (список эксперта заказчика от 13.09). Это оценка ЧЕЛОВЕКА и она намеренно
 // отличается от maturity выше: та — оценка модели. «Наблюдать» встречается в обеих,
 // поэтому машинная подписана в карточке как «Решение платформы», а эта — как «Оценка сигнала».
 const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> = [
@@ -312,7 +312,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const [tile, setTile] = useState<SignalTile | "">("");
   // Отметка «В дайджест» только что поставлена — короткая подсветка кнопки карточки и плашки «В дайджесте».
   const [digestFlash, setDigestFlash] = useState<number | null>(null);
-  // «Отклонённые» — только админу (решение владельца 05.10; заказчик Виктор — админ): все разделы «кто убрал →
+  // «Отклонённые» — только админу (решение владельца 05.10; эксперт заказчика тоже админ): все разделы «кто убрал →
   // причина» (#130) одним списком в обеих витринах, причина — в самой карточке (решение владельца 23.10).
   const [showHidden, setShowHidden] = useState(false);
   // Фильтры атрибутов карточки (#97) и справочники для их списков.
@@ -1127,7 +1127,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                           <p>{signal.why_now || "Нет объяснения"}</p>
                         </div>
                       )}
-                      {/* «Релевантности мало» (Виктор 29.09): судья называет, где это применить. */}
+                      {/* «Релевантности мало» (эксперт заказчика, 29.09): судья называет, где это применить. */}
                       {signal.oilfield_application ? (
                         <div>
                           <span>
@@ -1151,7 +1151,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                           <p>{why.text}</p>
                         </div>
                       ) : null}
-                      {/* Ответ на «оценки завышены» (Виктор 29.09): видно, за что балл. Итог — сумма «балл × вес / 100»,
+                      {/* Ответ на «оценки завышены» (эксперт заказчика, 29.09): видно, за что балл. Итог — сумма «балл × вес / 100»,
                           как у статей ленты. */}
                       {breakdown.length ? (
                         <div className="signalScoreBreakdown">

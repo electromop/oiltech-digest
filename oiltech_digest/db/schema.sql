@@ -754,7 +754,7 @@ CREATE INDEX IF NOT EXISTS idx_signals_maturity_score ON signals(maturity, score
 CREATE INDEX IF NOT EXISTS idx_signals_theme_seen ON signals(theme, last_seen_at DESC);
 
 -- Материалы коллег из Telegram (бот tg_materials_bot.py на NL): ссылка, файл или событие
--- своими словами и оценка автора по шкале Виктора (те же вердикты, что у карточки радара,
+-- своими словами и оценка автора по шкале эксперта заказчика (те же вердикты, что у карточки радара,
 -- signal_feedback._normalize_verdict). Не статья: у материала нет источника в каталоге, и
 -- в articles его взяли бы дозагрузка, гейт релевантности и дедуп (тот же довод, что у
 -- documents). Карточка сигнала из материала — следующий шаг (signal_id), пока — хранение.
@@ -900,7 +900,7 @@ CREATE INDEX IF NOT EXISTS idx_signals_merged_into ON signals(merged_into_signal
 -- Ревью пачки (21.09): насколько сигнал интересен НА ФОНЕ своей пачки и почему.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS interest_score NUMERIC;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS why_interesting TEXT;
--- Качество радара (замечания Виктора 29.09): поля судьи и архив. Скрытие — в видимости карточки
+-- Качество радара (замечания эксперта заказчика 29.09): поля судьи и архив. Скрытие — в видимости карточки
 -- (repository._RADAR_VISIBLE_SQL), карточка при этом хранится. NULL — карточка до правки.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_category TEXT;     -- technology / business / other
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date DATE;          -- дата самого события

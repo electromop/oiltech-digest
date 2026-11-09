@@ -16,8 +16,8 @@ DIRECTIONS_SHEET = "Направления"
 KEYWORDS_SHEET = "Ключевые слова"
 
 
-# Набор по умолчанию для пустого профиля — набор заказчика «viktor» (scoring_profiles.SCORING_PRESETS).
-DEFAULT_SCORING_PROFILES: dict[str, list[dict]] = SCORING_PRESETS["viktor"]
+# Набор по умолчанию для пустого профиля — набор заказчика «customer» (scoring_profiles.SCORING_PRESETS).
+DEFAULT_SCORING_PROFILES: dict[str, list[dict]] = SCORING_PRESETS["customer"]
 
 
 TAG_SIGNAL_ENRICHMENT = [

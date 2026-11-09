@@ -14,7 +14,7 @@ from oiltech_digest.db import connection, repository
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
-VIKTOR_BUSINESS = [
+CUSTOMER_BUSINESS = [
     ("Стратегическая значимость для нефтесервиса", 30.0),
     ("Потенциальный бизнес-эффект", 25.0),
     ("Рыночная возможность / изменение рынка", 20.0),
@@ -89,7 +89,7 @@ def test_dry_run_shows_before_and_after_and_writes_nothing(isolated_db, capsys):
     _business_before_the_decision()
     business, tech = _rows("business"), _rows("tech_radar")
 
-    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "customer")
 
     out = capsys.readouterr().out
     assert "сухой прогон" in out
@@ -108,15 +108,15 @@ def test_apply_leaves_exactly_the_preset_active_and_keeps_old_scores_whole(isola
     ids = _business_before_the_decision()
     tech = _rows("tech_radar")
 
-    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "customer", "--apply")
 
-    assert _active("business") == VIKTOR_BUSINESS
+    assert _active("business") == CUSTOMER_BUSINESS
     assert sum(weight for _, weight in _active("business")) == 100
     rows = {row[1]: row for row in _rows("business")}
     reused = rows["Потенциальный бизнес-эффект"]
     assert reused[0] == ids["Потенциальный бизнес-эффект"], "совпавший по имени критерий включён, а не заведён заново"
     assert reused[6] == ["пилот"], "ключевые слова, правленные на экране, набор не стирает"
-    assert reused[2] == SCORING_PRESETS["viktor"]["business"][1]["description"]
+    assert reused[2] == SCORING_PRESETS["customer"]["business"][1]["description"]
     assert all(not rows[f"Свой {n}"][4] for n in range(1, 6)), "прежний набор выключен"
     assert len(rows) == 7 + 4, "ничего не удалено: 7 прежних строк и 4 новых"
     assert _rows("tech_radar") == tech
@@ -128,11 +128,11 @@ def test_apply_leaves_exactly_the_preset_active_and_keeps_old_scores_whole(isola
 
 def test_second_apply_changes_nothing(isolated_db, capsys):
     _business_before_the_decision()
-    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "customer", "--apply")
     business, tech = _rows("business"), _rows("tech_radar")
     capsys.readouterr()
 
-    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "customer", "--apply")
 
     assert "изменений нет" in capsys.readouterr().out
     assert _rows("business") == business and _rows("tech_radar") == tech
@@ -142,7 +142,7 @@ def test_radar_profile_seeded_with_the_same_preset_is_already_applied(isolated_d
     _business_before_the_decision()
     tech = _rows("tech_radar")
 
-    _cli("apply-scoring-preset", "--profile", "tech_radar", "--preset", "viktor", "--apply")
+    _cli("apply-scoring-preset", "--profile", "tech_radar", "--preset", "customer", "--apply")
 
     assert "изменений нет" in capsys.readouterr().out
     assert _rows("tech_radar") == tech
@@ -165,7 +165,7 @@ def test_stale_scoring_tab_cannot_revert_the_applied_set(isolated_db):
 
         client = TestClient(api.app)
         stale = client.get("/api/scoring-criteria").json()   # вкладка открыта до смены набора
-        _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+        _cli("apply-scoring-preset", "--profile", "business", "--preset", "customer", "--apply")
         applied = _rows("business")
         stale[0]["keywords_json"] = ["правка заказчика"]
         saved = client.put("/api/scoring-criteria", json=stale)
@@ -174,7 +174,7 @@ def test_stale_scoring_tab_cannot_revert_the_applied_set(isolated_db):
 
     assert saved.status_code == 400 and "устарел" in saved.json()["detail"]
     assert _rows("business") == applied
-    assert _active("business") == VIKTOR_BUSINESS
+    assert _active("business") == CUSTOMER_BUSINESS
 
 
 def test_broken_preset_is_refused_before_any_write(isolated_db):

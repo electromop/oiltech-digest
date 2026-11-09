@@ -68,7 +68,7 @@ def test_pairs_found_by_title_or_company_but_never_between_two_reviewed_cards():
     pairs = {(nodes[i]["id"] if "id" in nodes[i] else "new", nodes[j].get("id", "new")) for i, j, _ in signal_dedup.find_pairs(nodes)}
 
     assert (18, 40) in pairs and (19, 40) in pairs
-    assert (18, 19) not in pairs  # оба разобраны Виктором
+    assert (18, 19) not in pairs  # оба разобраны экспертом
     assert (7, 8) not in pairs  # оба старые и неразобранные
     assert (50, "new") not in pairs  # общий только издатель
 
@@ -88,7 +88,7 @@ def test_star_not_chain_and_reviewed_card_is_never_hidden():
     # Одобренная — главная, даже с меньшим баллом; 41 связана с ней только через 40 — не склеена.
     assert assigned[1] == (0, "та же сделка")
     assert 2 not in assigned
-    # Отклонённая Виктором остаётся на месте, свежий повтор уходит в неё.
+    # Отклонённая экспертом остаётся на месте, свежий повтор уходит в неё.
     assert 3 not in assigned
     assert assigned[4] == (3, "тот же завод")
 
@@ -227,7 +227,7 @@ def test_merge_hides_repeat_counts_it_and_spares_reviewed(isolated_db):
 
     assert repository.mark_signal_merged(repeat, main, "та же сделка") is True
     assert repository.mark_signal_merged(repeat, main) is False  # уже скрыта
-    assert repository.mark_signal_merged(reviewed, main) is False  # вердикт Виктора — не прячем
+    assert repository.mark_signal_merged(reviewed, main) is False  # вердикт эксперта — не прячем
     assert repository.mark_signal_merged(main, repeat) is False  # в свою же группу не уходит
     # Главная, указанная через скрытую карточку, — корень группы.
     assert repository.mark_signal_merged(later, repeat) is True
@@ -372,7 +372,7 @@ def test_core_sets_dedup_cap_for_worker(monkeypatch):
 
 def test_earlier_unreviewed_card_stays_main_even_with_fewer_links():
     """19.09: вчерашняя №55 FleetRabbit ушла в сегодняшнюю №99 — у той было на одну
-    ссылку больше, и номер карточки, на который ссылается Виктор, сменился."""
+    ссылку больше, и номер карточки, на который ссылается эксперт, сменился."""
     older = _existing(55, "FleetRabbit: диспетчеризация", ["FleetRabbit"], score=55, urls=["u1"])
     newer = _existing(99, "FleetRabbit: оптимизация диспетчеризации", ["FleetRabbit"], score=55, urls=["u2", "u3"])
     older["signal"]["first_seen_day"] = "2026-09-18"
@@ -419,7 +419,7 @@ def test_hidden_card_does_not_absorb_a_fresh_finding_unless_it_was_rejected():
     # скрытая числится дублем новой, но склейку «сохранённая → новая» ядро не пишет (_dedupe_run).
     assert 1 not in assigned
     assert assigned[0] == (1, "та же сделка")
-    # Отклонённая Виктором — главная, хоть и скрыта: её повтор не возвращается.
+    # Отклонённая экспертом — главная, хоть и скрыта: её повтор не возвращается.
     assert assigned[3] == (2, "тот же завод")
     # Одобренная, но убранная в архив, свежую не поглощает и сама дублем не становится.
     assert 4 not in assigned and 5 not in assigned

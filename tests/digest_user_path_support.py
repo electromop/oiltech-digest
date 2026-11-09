@@ -222,7 +222,7 @@ def breakdown(profile: str, *scores: float | None, ids_from: int = 1) -> dict:
     набора эксперта) и баллы по критериям; None — «Свежесть» без даты события, в итог не входит."""
     from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
-    preset = SCORING_PRESETS["viktor"][profile]
+    preset = SCORING_PRESETS["customer"][profile]
     snapshot = [{"id": ids_from + index, "name": item["name"], "weight": item["weight"]}
                 for index, item in enumerate(preset)]
     items = [{"criterion_id": ids_from + index, "final_score": 0 if score is None else score,

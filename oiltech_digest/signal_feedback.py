@@ -413,7 +413,7 @@ def _normalize_verdict(value: Any) -> str | None:
     }
     verdict = aliases.get(verdict, verdict)
     allowed = {
-        # Шкала заказчика (список Виктора от 13.09): оценка человека, а не модели.
+        # Шкала заказчика (список эксперта заказчика от 13.09): оценка человека, а не модели.
         "strong_signal",
         "approved",
         "watch_later",

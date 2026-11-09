@@ -915,7 +915,7 @@ describe("SignalRadarPage", () => {
   });
 });
 
-describe("качество радара на экране (Виктор 29.09)", () => {
+describe("качество радара на экране (эксперт заказчика, 29.09)", () => {
   const scored: Signal = {
     ...baseSignal,
     id: 501,

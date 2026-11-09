@@ -34,7 +34,7 @@ def pipeline(monkeypatch, contour):
     monkeypatch.setattr(api.config, "SIGNAL_SCORES_MODEL", SCORES_MODEL)
     for name, keywords in THEMES.items():
         theme(name, keywords)
-    # Сид заводит в оба пустых профиля набор заказчика (SCORING_PRESETS["viktor"]).
+    # Сид заводит в оба пустых профиля набор заказчика (SCORING_PRESETS["customer"]).
     seed_default_scoring_criteria()
 
 
@@ -103,7 +103,7 @@ def scores(points, *, named_customer=None, why="Так по линейке"):
 
 def profile_names(profile):
     """Имена критериев набора заказчика у профиля (business или tech_radar), по порядку."""
-    return [criterion["name"] for criterion in SCORING_PRESETS["viktor"][profile]]
+    return [criterion["name"] for criterion in SCORING_PRESETS["customer"][profile]]
 
 
 def even(profile, value, **overrides):

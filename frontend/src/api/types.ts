@@ -104,7 +104,7 @@ export type Signal = {
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
-  // Поля судьи (замечания Виктора 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
+  // Поля судьи (замечания эксперта заказчика 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
   // поступления на радар; null — у карточки до правки или судья даты не нашёл.
   event_date?: string | null;
   signal_category?: "technology" | "business" | "other" | string | null;

@@ -1071,14 +1071,14 @@ def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
     with connection.get_connection() as conn:
         conn.execute(
             "INSERT INTO tags (name, name_en, enabled, sort_order, keywords_json, keywords_en_json) "
-            "VALUES ('Бурение', 'Drilling', TRUE, 1, '[\"правка Виктора\"]'::jsonb, '[\"viktor edit\"]'::jsonb)"
+            "VALUES ('Бурение', 'Drilling', TRUE, 1, '[\"правка эксперта\"]'::jsonb, '[\"expert edit\"]'::jsonb)"
         )
         conn.commit()
 
     repository.upsert_tag({
         "parent_id": None, "name": "Бурение", "name_en": "Drilling",
         "description": "из сида",
-        "keywords_json": ["бурение", "правка Виктора"],
+        "keywords_json": ["бурение", "правка эксперта"],
         "keywords_en_json": ["drilling", "自动化钻机"],
         "sort_order": 1,
     })
@@ -1088,11 +1088,11 @@ def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
             "SELECT keywords_json, keywords_en_json FROM tags WHERE name = 'Бурение'"
         ).fetchone()
 
-    assert "правка Виктора" in ru, "сид затёр ручную правку"
+    assert "правка эксперта" in ru, "сид затёр ручную правку"
     assert "бурение" in ru, "сид не добавил своё ключевое слово"
-    assert "viktor edit" in en and "自动化钻机" in en
-    # Без дублей: «правка Виктора» пришла и из базы, и из сида.
-    assert ru.count("правка Виктора") == 1
+    assert "expert edit" in en and "自动化钻机" in en
+    # Без дублей: «правка эксперта» пришла и из базы, и из сида.
+    assert ru.count("правка эксперта") == 1
 
 
 def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
@@ -1289,20 +1289,20 @@ def test_seed_does_not_disable_tags_renamed_by_customer(isolated_db):
     from oiltech_digest.processing.seed import seed_tags_13, retire_old_tags
 
     with connection.get_connection() as conn:
-        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Тег Виктора', TRUE, 1)")
+        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Тег эксперта', TRUE, 1)")
         conn.commit()
 
     stats = seed_tags_13()
     assert stats["disabled"] == 0, "сид не имеет права ничего выключать"
 
     with connection.get_connection() as conn:
-        alive, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег Виктора'").fetchone()
+        alive, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег эксперта'").fetchone()
     assert alive is True, "сид погасил тег, которого нет в его файле"
 
     # Смена таксономии — отдельная осознанная команда.
     assert retire_old_tags()["disabled"] >= 1
     with connection.get_connection() as conn:
-        retired, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег Виктора'").fetchone()
+        retired, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег эксперта'").fetchone()
     assert retired is False
 
 

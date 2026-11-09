@@ -410,10 +410,18 @@ def test_density_rule_does_not_apply_to_docx():
 
 # --- калибровка на реальных файлах (пропускается, если файлов нет) ---------
 
-ROSATOM_PDF = "/Users/apple/Downloads/Росатом_позиция_+_заключение_экспертизы.pdf"
-BPMN_PDF = "/Users/apple/Downloads/BPMN_2_0.pdf"
-RADAR_PPTX = "/Users/apple/Downloads/Нефтесервисный радар.pptx"
-NIR_DOCX = "/Users/apple/Downloads/Отчёт_НИР_Липскеров_МАС_нефтегаз_1.docx"
+# Файлы калибровки лежат вне репозитория: каталог задаёт OILTECH_CALIBRATION_DIR, без него тесты пропускаются.
+CALIBRATION_DIR = os.environ.get("OILTECH_CALIBRATION_DIR", "")
+
+
+def _calibration(name: str) -> str:
+    return os.path.join(CALIBRATION_DIR, name) if CALIBRATION_DIR else ""
+
+
+HALF_SCANNED_PDF = _calibration("half-scanned.pdf")
+TEXT_PDF = _calibration("text.pdf")
+SLIDES_PPTX = _calibration("slides.pptx")
+REPORT_DOCX = _calibration("report.docx")
 
 
 def _read(path: str) -> bytes:
@@ -421,9 +429,9 @@ def _read(path: str) -> bytes:
         return handle.read()
 
 
-@pytest.mark.skipif(not os.path.exists(ROSATOM_PDF), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(HALF_SCANNED_PDF), reason="нет файла калибровки")
 def test_calibration_half_scanned_pdf():
-    data = _read(ROSATOM_PDF)
+    data = _read(HALF_SCANNED_PDF)
     assert detect_kind(data) == "pdf"
     document = parse_document(data)  # не должен упасть как «скан»
     assert len(document.anchors) == 107
@@ -433,17 +441,17 @@ def test_calibration_half_scanned_pdf():
     assert looks_scanned(document.anchors, "pdf") is False
 
 
-@pytest.mark.skipif(not os.path.exists(BPMN_PDF), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(TEXT_PDF), reason="нет файла калибровки")
 def test_calibration_full_text_pdf():
-    document = parse_document(_read(BPMN_PDF))
+    document = parse_document(_read(TEXT_PDF))
     assert len(document.anchors) == 299
     assert all(a.text for a in document.anchors)
     assert document.total_chars > 600_000
 
 
-@pytest.mark.skipif(not os.path.exists(RADAR_PPTX), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(SLIDES_PPTX), reason="нет файла калибровки")
 def test_calibration_real_pptx():
-    data = _read(RADAR_PPTX)
+    data = _read(SLIDES_PPTX)
     assert detect_kind(data) == "pptx"
     document = parse_document(data)
     assert len(document.anchors) == 13
@@ -451,9 +459,9 @@ def test_calibration_real_pptx():
     assert [a.number for a in document.anchors] == list(range(1, 14))
 
 
-@pytest.mark.skipif(not os.path.exists(NIR_DOCX), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(REPORT_DOCX), reason="нет файла калибровки")
 def test_calibration_real_docx():
-    data = _read(NIR_DOCX)
+    data = _read(REPORT_DOCX)
     assert detect_kind(data) == "docx"
     document = parse_document(data)
     # 90 непустых абзацев + 4 таблицы отдельными блоками

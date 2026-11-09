@@ -79,7 +79,7 @@ def test_dictionaries_and_rubric_drafts_are_versioned_data():
     assert [(band["code"], band["min"], band["max"]) for band in rubrics["bands"]] == [
         ("strong", 80, 100), ("useful", 65, 79), ("watch", 40, 64), ("weak", 0, 39)]
     # Линейка у каждого из десяти критериев двух профилей заказчика.
-    for profile, criteria in SCORING_PRESETS["viktor"].items():
+    for profile, criteria in SCORING_PRESETS["customer"].items():
         assert [one["name"] for one in rubrics["profiles"][profile]] == [one["name"] for one in criteria]
         for criterion in rubrics["profiles"][profile]:
             assert set(criterion["bands"]) == {"strong", "useful", "watch", "weak"}, criterion["name"]
