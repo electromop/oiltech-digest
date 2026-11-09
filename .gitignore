@@ -45,6 +45,10 @@ scripts/digest-*/edits_*.py
 # Tooling / caches
 .pytest_cache/
 .claude-flow/
+
+# Служебные файлы среды разработки: правила и настройки живут вне репозитория
+/CLAUDE.md
+/.claude/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
