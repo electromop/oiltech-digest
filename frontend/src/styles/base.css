@@ -1,35 +1,34 @@
 /* Дизайн-система v2: шрифт, базовые элементы, фокус, движение.
-   GPN Din подключён из src/assets: Vite кладёт файлы в /assets, их отдаёт API и прод.
-   Прежний путь /fonts/* не обслуживался ни API, ни Caddy (на проде 404), и вместо
-   корпоративного шрифта показывался запасной. */
+   Шрифт бренда приходит с сервера (/brand/fonts/, файлы в томе брендинга), в сборке его нет. Нет файла: браузер
+   берёт следующий шрифт из списка семейства в tokens.css. */
 
 @font-face {
-  font-family: "GPN Din";
-  src: url("../assets/fonts/GPN_DIN-Regular.ttf") format("truetype");
+  font-family: "Brand Sans";
+  src: url("/brand/fonts/brand-sans-regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "GPN Din";
-  src: url("../assets/fonts/GPN_DIN-Bold.ttf") format("truetype");
+  font-family: "Brand Sans";
+  src: url("/brand/fonts/brand-sans-bold.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "GPN Din Condensed";
-  src: url("../assets/fonts/GPN_DIN_Condensed-Regular.ttf") format("truetype");
+  font-family: "Brand Sans Condensed";
+  src: url("/brand/fonts/brand-sans-condensed-regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "GPN Din Condensed";
-  src: url("../assets/fonts/GPN_DIN_Condensed-Bold.ttf") format("truetype");
+  font-family: "Brand Sans Condensed";
+  src: url("/brand/fonts/brand-sans-condensed-bold.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -178,7 +177,7 @@ textarea:focus-visible {
   outline-offset: -4px;
 }
 
-/* Числа в счётчиках и колонках — моноширинными цифрами GPN Din. */
+/* Числа в счётчиках и колонках: моноширинные цифры шрифта бренда. */
 .tabularNums {
   font-variant-numeric: tabular-nums;
 }

@@ -97,7 +97,9 @@ def test_letter_and_docx_are_built_as_before_the_expert_pdf(issue):
     assert hashlib.sha256(document_xml).hexdigest() == _DOCX_BEFORE_EXPERT_PDF, "DOCX изменился"
 
 
-_LETTER_BEFORE_EXPERT_PDF = "ff92679c244d70511a05f72c49db8b5c5acb4ca548c330fad8fb2a3f3dba64fc"
+# Письмо снято заново 09.11 (#181): шрифт бренда с сервера, в репозитории файлов нет. Разница с прежним только в
+# шрифте (имена семейств и встроенный @font-face), сверено кодом: обратная замена даёт прежний отпечаток ff92679c.
+_LETTER_BEFORE_EXPERT_PDF = "26cb4b67cec63a5372ce83f5de4788d5097cd0455737773c95983318c400ada0"
 _DOCX_BEFORE_EXPERT_PDF = "a22e75104e8e8684dadbd7aec404fa9e40de279a180152969d2877a47131b284"
 
 

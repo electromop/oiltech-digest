@@ -1,5 +1,5 @@
 /* Дизайн-система OilTech Digest v2: токены.
-   Основа — IBM Carbon (плотность productive, прямоугольные формы), шрифт — корпоративный GPN Din, цвета — палитра
+   Основа — IBM Carbon (плотность productive, прямоугольные формы), шрифт — шрифт бренда с сервера, цвета — палитра
    «Как в выпуске» (выбор владельца 01.11): синий и оранжевый месячного выпуска, тёмно-синий шапки, холодные нейтральные.
    Два слоя: примитивы называют значение (--slate-80) и в компонентах не используются;
    семантические токены называют роль (--ot-text-secondary) — только их берут компоненты.
@@ -201,9 +201,9 @@
   --viz-good: var(--green-60);
   --viz-bad: var(--red-70);
 
-  /* --- Шрифт: GPN Din (400 и 700 — других начертаний у семейства нет) --- */
-  --ot-font-sans: "GPN Din", "Helvetica Neue", Arial, sans-serif;
-  --ot-font-display: "GPN Din Condensed", "GPN Din", "Arial Narrow", Arial, sans-serif;
+  /* --- Шрифт бренда с сервера (400 и 700, base.css); без файла следующий в списке --- */
+  --ot-font-sans: "Brand Sans", "Helvetica Neue", Arial, sans-serif;
+  --ot-font-display: "Brand Sans Condensed", "Brand Sans", "Arial Narrow", Arial, sans-serif;
   --ot-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ot-weight-regular: 400;
   --ot-weight-bold: 700;

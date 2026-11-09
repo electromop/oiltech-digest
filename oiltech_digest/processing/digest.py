@@ -127,6 +127,12 @@ def _load_digest_branding() -> dict:
             "feedback_email": "",
             "platform_note": "",
         },
+        # Шрифт DOCX: имя шрифта бренда, установленного у читателя. Значения только на сервере, в репозитории пусто:
+        # пустое имя, и Word берёт Arial. Письмо и PDF рисуются шрифтом бренда с сервера (brand_fonts).
+        "fonts": {
+            "office_family": "",
+            "office_condensed_family": "",
+        },
         "highlights": {
             "analytics_source_keywords": [
                 "mckinsey",
@@ -200,6 +206,7 @@ def _load_digest_branding() -> dict:
         "issue": {**defaults["issue"], **(loaded.get("issue") or {})},
         "footer": {**defaults["footer"], **(loaded.get("footer") or {})},
         "cover": {**defaults["cover"], **(loaded.get("cover") or {})},
+        "fonts": {**defaults["fonts"], **(loaded.get("fonts") or {})},
         "highlights": {**defaults["highlights"], **(loaded.get("highlights") or {})},
     }
 
@@ -230,6 +237,7 @@ def save_digest_branding(payload: dict) -> dict:
         },
         # Обложку PDF правят на сервере (файлы рядом с брендингом): экран её не присылает, сохранение её не теряет.
         "cover": current["cover"],
+        "fonts": current["fonts"],
         "highlights": {
             **current["highlights"],
             **(payload.get("highlights") or {}),
@@ -478,7 +486,7 @@ def render_digest_email(content: dict) -> str:
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
-        # Шрифт выпуска, как у PDF; почтовые клиенты его вырезают, остаётся Arial.
+        # Шрифт бренда, как у PDF; почтовые клиенты его вырезают, остаётся Arial.
         "font_face_style": digest_pdf.font_faces(),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
@@ -648,7 +656,7 @@ def _render_highlights_section(issue: dict, highlights: list[dict]) -> str:
               <table class="highlights-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #d9e3f3;border-radius:8px;background:#f7faff;">
                 <tr>
                   <td style="padding:18px 18px 16px 18px;">
-                    <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{_html(title)}</div>
+                    <div style="font-family:'Brand Sans Condensed','Brand Sans',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{_html(title)}</div>
                     {highlights_html}
                   </td>
                 </tr>
@@ -760,7 +768,7 @@ def _render_footer_socials(socials: list[dict]) -> str:
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
             'text-align:center;line-height:36px;display:inline-block;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
-            "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;"
+            "font-weight:bold;font-size:13px;font-family:'Brand Sans',Arial,Helvetica,sans-serif;"
             f'" title="{_html(item.get("label"))}">{icon}</div>'
             "</td>"
         )
@@ -1145,6 +1153,9 @@ def render_digest_docx(content: dict) -> bytes:
     news_items = content.get("news") or content.get("items") or []
     footer = content.get("footer") or {}
     header = (content.get("branding") or {}).get("header") or {}
+    fonts = (content.get("branding") or {}).get("fonts") or {}
+    office_family = fonts.get("office_family") or "Arial"
+    office_condensed = fonts.get("office_condensed_family") or office_family
 
     BRAND_HEX = "003DA6"
     ACCENT_HEX = "E83D08"
@@ -1153,17 +1164,17 @@ def render_digest_docx(content: dict) -> bytes:
     GREY = RGBColor(0x66, 0x66, 0x66)
 
     doc = Document()
-    # Корпоративный шрифт во всём документе (рендерится у получателей с установленным
-    # GPN Din; иначе Word подставит замену). Базовый стиль Normal наследуют все абзацы.
-    doc.styles["Normal"].font.name = "GPN Din"
+    # Шрифт бренда во всём документе (рендерится у получателей, у которых он установлен; иначе Word подставит
+    # замену). Имя из брендинга на сервере. Базовый стиль Normal наследуют все абзацы.
+    doc.styles["Normal"].font.name = office_family
     if "Title" in doc.styles:
-        doc.styles["Title"].font.name = "GPN Din Condensed"
+        doc.styles["Title"].font.name = office_condensed
         doc.styles["Title"].font.bold = True
     if "Heading 1" in doc.styles:
-        doc.styles["Heading 1"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 1"].font.name = office_condensed
         doc.styles["Heading 1"].font.bold = True
     if "Heading 2" in doc.styles:
-        doc.styles["Heading 2"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 2"].font.name = office_condensed
         doc.styles["Heading 2"].font.bold = True
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.6)

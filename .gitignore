@@ -49,6 +49,12 @@ scripts/digest-*/edits_*.py
 # Служебные файлы среды разработки: правила и настройки живут вне репозитория
 /CLAUDE.md
 /.claude/
+
+# Шрифт бренда живёт на сервере (том брендинга), в репозитории его нет
+*.ttf
+*.otf
+*.woff
+*.woff2
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo

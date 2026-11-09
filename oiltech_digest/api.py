@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import admission, auth, background_jobs, colleague_materials, config, feed_window
+from oiltech_digest import admission, auth, background_jobs, brand_fonts, colleague_materials, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -69,7 +69,7 @@ if (FRONTEND_DIST_DIR / "assets").exists():
 
 @app.middleware("http")
 async def log_requests(request, call_next):
-    if request.url.path.startswith("/assets"):
+    if request.url.path.startswith(("/assets", "/brand/fonts/")):
         return await call_next(request)
 
     started = time.perf_counter()
@@ -383,6 +383,16 @@ def index() -> FileResponse:
     if not page.exists():
         raise HTTPException(status_code=404, detail="Интерфейс не собран: npm run build в frontend/")
     return FileResponse(page)
+
+
+@app.get("/brand/fonts/{name}", response_model=None)
+def brand_font(name: str) -> FileResponse:
+    """Шрифт бренда для интерфейса: файл с сервера (brand_fonts), в сборке фронта его нет. Без сессии: им рисуется и
+    экран входа. Нет файла: 404, и браузер берёт запасной шрифт из списка семейства."""
+    path = brand_fonts.font_path(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"})
 
 
 def require_user(session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME)) -> dict[str, Any]:

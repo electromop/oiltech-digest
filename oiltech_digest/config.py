@@ -377,6 +377,9 @@ def price_for_model(model: str | None) -> tuple[float, float]:
 # нетронутую. Пользователь видел изменения в превью и не видел в выгрузке. Плюс любая
 # пересборка образа возвращала git-версию поверх правок.
 DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
+# Каталог шрифта бренда (brand_fonts.py): файлы на сервере, в репозитории их нет. Пусто: каталог fonts рядом с
+# файлом брендинга (на сервере /app/branding/fonts), без брендинга шрифта нет и работает запасной.
+BRAND_FONTS_DIR = os.environ.get("BRAND_FONTS_DIR", "").strip()
 
 # --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
 # Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
