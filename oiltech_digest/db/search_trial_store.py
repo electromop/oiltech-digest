@@ -1,7 +1,7 @@
 """Хранилище пробного прогона широкого поиска (#138, signal_search_trial): находки пробного прогона (signals.selector =
-SIGNAL_SELECTOR_TRIAL) и чтения для отчёта. Решения «Отбора» по находкам — в таблице проверки #134 (otbor_shadow_store).
+SIGNAL_SELECTOR_TRIAL) и чтения для отчёта. Решения «Отбора» по находкам: в таблице проверки #134 (otbor_shadow_store).
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в signal_card_store):
 изоляция тестов держится на подмене этого атрибута.
 """
 
@@ -18,7 +18,7 @@ from oiltech_digest.db.repository import SIGNAL_SELECTOR_TRIAL
 
 
 def evidence_owners(urls: Sequence[str]) -> dict[str, dict[str, Any]]:
-    """Каким сигналам (любым) принадлежат ссылки: {url: {id, selector}} — пробный прогон чужих ссылок не берёт."""
+    """Каким сигналам (любым) принадлежат ссылки: {url: {id, selector}}: пробный прогон чужих ссылок не берёт."""
     urls = [url for url in urls if url]
     if not urls:
         return {}
@@ -51,7 +51,7 @@ def findings(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
 
 
 def platform_cards(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Сигналы платформы, которые пробный прогон нашёл снова, — карточками для замера полноты: заголовки, суть,
+    """Сигналы платформы, которые пробный прогон нашёл снова, карточками для замера полноты: заголовки, суть,
     компании и ссылки (свои и склеенных дублей)."""
     ids = sorted({int(value) for value in signal_ids if value is not None})
     if not ids:
@@ -109,7 +109,7 @@ def otbor_jobs(search_job_id: int) -> list[dict[str, Any]]:
 
 
 def costs(job_ids: Sequence[int]) -> dict[str, float]:
-    """Фактический расход задач пробного прогона по стадиям (ai_processing_runs), USD: поиск — с платой за вызовы
+    """Фактический расход задач пробного прогона по стадиям (ai_processing_runs), USD: поиск: с платой за вызовы
     web_search, как его пишет ядро."""
     ids = sorted({int(value) for value in job_ids})
     if not ids:
@@ -124,7 +124,7 @@ def costs(job_ids: Sequence[int]) -> dict[str, float]:
 
 def search_call_history() -> dict[str, float] | None:
     """Средний вызов поиска GPT по прошлым прогонам радара (стадия radar_research): токены входа, выхода и вызовы
-    web_search на вызов модели. Вызовов строка хранит в error_message («calls=N web_search=M»). Нет истории — None."""
+    web_search на вызов модели. Вызовов строка хранит в error_message («calls=N web_search=M»). Нет истории: None."""
     with connection.get_connection() as conn:
         row = conn.execute(
             """

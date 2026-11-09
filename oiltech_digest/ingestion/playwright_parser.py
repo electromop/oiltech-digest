@@ -1,6 +1,6 @@
 """Playwright-based parser for JS-rendered listing and article pages.
 
-Используется для источников с parse_strategy='playwright' — сайты, где контент
+Используется для источников с parse_strategy='playwright': сайты, где контент
 рендерится JavaScript или стоит WAF-проверка (Cloudflare challenge и т.п.),
 которую lxml/requests не проходят.
 
@@ -49,7 +49,7 @@ def _playwright_proxy_for(url: str) -> dict[str, str] | None:
     """Прокси в playwright-формате ({server, username, password}) для URL, или None.
 
     Переиспользует логику http_client (PROXY_HOST_OVERRIDES имеет приоритет над
-    глобальным PROXY_URL): через прокси идут только хосты из overrides — это и есть
+    глобальным PROXY_URL): через прокси идут только хосты из overrides: это и есть
     точечный канал для Hard-WAF (Cloudflare/Akamai), чтобы не гонять платный
     резидентский трафик для всех playwright-источников. Headless Chromium с
     резидентским IP нужен сайтам, блокирующим и по JS-challenge, и по IP-репутации.
@@ -79,7 +79,7 @@ def _playwright_proxy_for(url: str) -> dict[str, str] | None:
 _BLOCK_STATUSES = {403, 429, 503}
 
 # Чем закончилась последняя загрузка в этом потоке: ok:200, blocked:403, error:TimeoutError.
-# fetch_rendered возвращает None и на блок, и на сбой — а задача внешнего сбора до 18.09
+# fetch_rendered возвращает None и на блок, и на сбой: а задача внешнего сбора до 18.09
 # завершалась «ok» с нулями, и стена защиты (S&P: 403) выглядела как «нового нет».
 _last_fetch = threading.local()
 
@@ -92,10 +92,10 @@ def with_base_href(html_text: str, final_url: str) -> str:
     """Вписать в отрисованную страницу `<base href>` с КОНЕЧНЫМ адресом.
 
     Относительные ссылки браузер разрешает от адреса, на котором страница оказалась
-    после переадресации, а разбор листинга — от адреса из настройки. У CNOOC лента
+    после переадресации, а разбор листинга: от адреса из настройки. У CNOOC лента
     `/zxzx/gsxw/` скриптом уходит на `/zxzx/gsxw/gsxw/`, ссылки на ней вида
-    `./202609/t….html` — и парсер собирал адреса без одного звена пути: все 404.
-    Если `<base>` на странице уже есть — не трогаем, он главнее.
+    `./202609/t….html`: и парсер собирал адреса без одного звена пути: все 404.
+    Если `<base>` на странице уже есть: не трогаем, он главнее.
     """
     if not final_url or re.search(r"<base\s", html_text[:20000], re.I):
         return html_text
@@ -106,15 +106,15 @@ def with_base_href(html_text: str, final_url: str) -> str:
     return tag + html_text
 
 
-# Срок рендера сверх его собственных сроков: goto ограничен timeout_ms, пауза — settle_ms,
+# Срок рендера сверх его собственных сроков: goto ограничен timeout_ms, пауза: settle_ms,
 # а page.content() и browser.close() у Playwright не ограничены ничем. 24.09 content() у
 # листинга JPT не вернулся 20 ч 45 мин и держал весь шаг parse; 25.09 его отпустило
-# убийство chrome («Target page, context or browser has been closed»). Запас — на запуск,
+# убийство chrome («Target page, context or browser has been closed»). Запас: на запуск,
 # new_page, content() и close(): в норме это секунды.
 RENDER_DEADLINE_SLACK_SECONDS = 30.0
 
 # Метка рендера в командной строке его браузера: Chromium чужой ключ пропускает и хелперам
-# не передаёт — она есть только у процесса браузера, лидера его группы (проверено 28.09 на
+# не передаёт: она есть только у процесса браузера, лидера его группы (проверено 28.09 на
 # headless shell 1.62: macOS и Linux).
 _RENDER_MARKER = "--oiltech-render"
 _PROC = Path("/proc")
@@ -145,10 +145,10 @@ def _process_command_lines() -> list[tuple[int, str]]:
 
 
 def _browser_pid(marker: str) -> int | None:
-    """PID браузера этого рендера — по метке в его командной строке. Сбой — None, не исключение.
+    """PID браузера этого рендера: по метке в его командной строке. Сбой: None, не исключение.
 
     В API Playwright PID нет. До 28.09 его спрашивали у CDP (SystemInfo.getProcessInfo), но у
-    вызова CDP-сессии нет срока, а снятие браузера его не отпускает — дочерние сессии Playwright
+    вызова CDP-сессии нет срока, а снятие браузера его не отпускает: дочерние сессии Playwright
     при обрыве связи не закрывает (замер 28.09: вызов к замолчавшему браузеру держался, пока жив
     драйвер). Из-за этого и срок нельзя было взвести раньше: чтобы снять браузер, нужен PID.
     Таблица процессов не зависит ни от браузера, ни от драйвера."""
@@ -158,7 +158,7 @@ def _browser_pid(marker: str) -> int | None:
     except Exception as exc:  # noqa: BLE001 - без PID рендер идёт; сторож поищет браузер ещё раз по сроку
         logger.warning("playwright: PID браузера не получен (%s)", exc)
         return None
-    # 0 и 1 — не браузер: killpg(0) снял бы группу самого шага (скрипт, сторож), 1 — init.
+    # 0 и 1, не браузер: killpg(0) снял бы группу самого шага (скрипт, сторож), 1: init.
     if len(pids) != 1 or pids[0] <= 1:
         logger.warning("playwright: PID браузера не получен — по метке найдено %s", pids)
         return None
@@ -171,7 +171,7 @@ def _kill_browser(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
         return
     except ProcessLookupError:
-        pass  # не лидер группы — тогда хотя бы сам процесс
+        pass  # не лидер группы: тогда хотя бы сам процесс
     except PermissionError as exc:
         logger.warning("playwright: группу браузера %s не снять: %s", pid, exc)
     try:
@@ -183,11 +183,11 @@ def _kill_browser(pid: int) -> None:
 class _RenderDeadline:
     """Сторож срока одного рендера: по истечении снимает браузер.
 
-    Вызов Playwright, который ждёт мёртвый браузер, отпускает с ошибкой «closed» — так
+    Вызов Playwright, который ждёт мёртвый браузер, отпускает с ошибкой «closed»: так
     25.09 и сняли зависший parse руками; так же отпускает и зависший launch() (замер 28.09).
     Взводится до запуска браузера: launch() без ответа браузера Playwright ждёт 180 с. PID
-    сообщает рендер после запуска (watch); если срок вышел раньше — сторож ищет браузер по
-    метке сам (locate). Бьёт только в свой браузер: рендеры идут и параллельно (API — пул
+    сообщает рендер после запуска (watch); если срок вышел раньше: сторож ищет браузер по
+    метке сам (locate). Бьёт только в свой браузер: рендеры идут и параллельно (API: пул
     потоков), и «все chrome процесса» задели бы чужие. После cancel() сторож не убьёт уже
     ничего: снятие и отмена идут под одним замком.
     """
@@ -236,7 +236,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
     с постоянной сетевой активностью (аналитика/реклама/websockets) и упирается в
     timeout (наблюдалось на bcg.com). После загрузки даём JS дорендериться фиксированной
     паузой settle_ms (важно для JS-листингов и прохождения лёгких challenge).
-    Возвращает None при блокировке (403/429/503) — чтобы не разбирать challenge-страницу.
+    Возвращает None при блокировке (403/429/503): чтобы не разбирать challenge-страницу.
     Весь рендер от запуска браузера до его закрытия идёт под сроком (_RenderDeadline).
     """
     _last_fetch.status = None
@@ -263,7 +263,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
             if proxy:
                 launch_kwargs["proxy"] = proxy
                 logger.info("playwright %s — через прокси %s", url, proxy.get("server"))
-            # Срок — с запуска: зависший launch() снимается так же, как зависший content().
+            # Срок, с запуска: зависший launch() снимается так же, как зависший content().
             deadline = _RenderDeadline(deadline_seconds, url, lambda: _browser_pid(marker))
             try:
                 browser = pw.chromium.launch(**launch_kwargs)
@@ -305,7 +305,7 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
     """Parse a JS-rendered listing page via Playwright, insert new articles.
 
     Delegates link extraction and dedup logic to request_parser after fetching
-    the rendered DOM — same pipeline, different fetch backend.
+    the rendered DOM: same pipeline, different fetch backend.
     """
     if not is_available():
         logger.error(
@@ -338,7 +338,7 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
 
 
 # Сколько ждать, пока страница дорисуется: первая попытка и вторая, если первая дала
-# пусто. Одна попытка — это то, на чём сидел NL-воркер: у ядра повтор для листинга
+# пусто. Одна попытка это то, на чём сидел NL-воркер: у ядра повтор для листинга
 # был (замечено на bakerhughes.com: «то 6, то 0 кандидатов»), а воркер его не
 # унаследовал, как и heartbeat 17.09. Страница статьи повтора не имела нигде.
 LISTING_SETTLE_MS = (5000, 12000)
@@ -346,10 +346,10 @@ ARTICLE_SETTLE_MS = (3500, 9000)
 
 
 def render_listing_candidates(source: dict, listing_url: str, limit: int = REQUEST_ARTICLE_LIMIT) -> list:
-    """Отрисовать листинг и извлечь кандидатов; пусто — ещё раз с ожиданием дольше.
+    """Отрисовать листинг и извлечь кандидатов; пусто: ещё раз с ожиданием дольше.
 
     Единственное место этой логики: ядро, NL-воркер и диагностика зовут её, а не свою
-    копию, — иначе одна из копий снова останется без повтора.
+    копию, иначе одна из копий снова останется без повтора.
     """
     from oiltech_digest.ingestion.request_parser import extract_candidate_links
 
@@ -364,9 +364,9 @@ def render_listing_candidates(source: dict, listing_url: str, limit: int = REQUE
 
 
 def render_article(candidate, source: dict) -> ArticleFetch:
-    """Статья через браузер. Текст короче порога — ещё попытка с ожиданием дольше.
+    """Статья через браузер. Текст короче порога: ещё попытка с ожиданием дольше.
 
-    Блок (403/429/503) повтором не лечится — тогда выходим сразу. Возвращает
+    Блок (403/429/503) повтором не лечится: тогда выходим сразу. Возвращает
     ArticleFetch: запись для вставки или причину, почему её нет.
     """
     from oiltech_digest.ingestion.request_parser import parse_article_page
@@ -394,7 +394,7 @@ def render_article(candidate, source: dict) -> ArticleFetch:
 
 
 def rendered_article(candidate, source: dict) -> dict | None:
-    """Запись статьи или None — для кода, которому причина не нужна (зарубежный воркер)."""
+    """Запись статьи или None: для кода, которому причина не нужна (зарубежный воркер)."""
     return render_article(candidate, source).article
 
 

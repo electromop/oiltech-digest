@@ -1,22 +1,22 @@
 """Счёт экзамена «Карточки» (#133, спека #128): тема основного вызова и баллы второго против разметки эксперта.
 
 Мерится то, что дошло бы до сигнала: карточка после проверки кодом ядра (signal_card.card_values) и баллы после
-signal_scores.score_values, итог в двух вариантах подмешивания ключевых слов (signal_scoring.totals). Сбой — промах.
+signal_scores.score_values, итог в двух вариантах подмешивания ключевых слов (signal_scoring.totals). Сбой: промах.
 
 - Ступень итога (границы SIGNAL_SCORE_BANDS) против общей оценки эксперта (EXPERT_BANDS): доля совпавших ответов.
-- Порядок: пары строк с разной ступенью эксперта; верно, если итог выше у строки с более высокой ступенью, ничья —
-  половина, сбой — промах; среднее по прогонам. Константа — 50%.
+- Порядок: пары строк с разной ступенью эксперта; верно, если итог выше у строки с более высокой ступенью, ничья:
+  половина, сбой: промах; среднее по прогонам. Константа: 50%.
 - По каждому критерию: средняя ошибка и сдвиг (модель минус эксперт) там, где число есть у обоих; у «Свежести» ещё
   совпадение «есть дата / нет даты» (её считает код по дате основного вызова).
-- Тема основного вызова — доля совпавших с темой эксперта; ошибки «Рынок против темы отрасли» (#149) отдельно.
-- Страна события основного вызова (#137) — против региона эксперта #98 по таблице «страна → регион», без порога.
+- Тема основного вызова: доля совпавших с темой эксперта; ошибки «Рынок против темы отрасли» (#149) отдельно.
+- Страна события основного вызова (#137): против региона эксперта #98 по таблице «страна → регион», без порога.
 
-Решение и правило прохождения — по строкам пакета: с ними сравниваются константа, эксперт сам с собой (итог по весам из
+Решение и правило прохождения, по строкам пакета: с ними сравниваются константа, эксперт сам с собой (итог по весам из
 его же баллов) и контроль с ядра (балл и тег ленты, балл и тема судьи). «Сильные сверх пакета» (выбранное «в дайджест»,
-эталонный ТОП) — отдельной строкой: доля ответов «сильный» и порядок вместе с ними; иначе их число решало бы, кто
+эталонный ТОП), отдельной строкой: доля ответов «сильный» и порядок вместе с ними; иначе их число решало бы, кто
 прошёл (константа «всегда сильный» на смеси). Правило утвердил владелец 27.10: ступень лучше нынешних баллов ядра
-(контроль) на тех же строках, порядок от 85%; порог темы в решение второго вызова не входит. Эксперт сам с собой —
-для сведения: как порог он оказался потолком, а не полом. rules_text (с границами итога) — в отметке утверждения.
+(контроль) на тех же строках, порядок от 85%; порог темы в решение второго вызова не входит. Эксперт сам с собой:
+для сведения: как порог он оказался потолком, а не полом. rules_text (с границами итога): в отметке утверждения.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from oiltech_digest import config, signal_scoring
 from oiltech_digest.signal_scoring import BAND_ORDER, STRONG, USEFUL, WATCH, WEAK
 
 THRESHOLDS = {"order": 0.85, "theme": 0.65}
-# Порог ступени — не число, а нынешние баллы ядра на тех же строках (control_agreement): модель их заменяет.
+# Порог ступени, не число, а нынешние баллы ядра на тех же строках (control_agreement): модель их заменяет.
 BAND_RULE = "control"
 BAND_RULE_RU = "лучше нынешних баллов ядра на тех же строках"
 VARIANTS = ("keywords", "plain")
@@ -41,19 +41,19 @@ EXTRA = "strong_extra"
 _RANK = {STRONG: 3, USEFUL: 2, WATCH: 1, WEAK: 0}
 NO_DATE = "нет даты"
 
-# Значения по прогонам: номер строки → по значению на прогон (None — сбой).
+# Значения по прогонам: номер строки → по значению на прогон (None: сбой).
 Finals = Mapping[str, Sequence[Mapping[str, Any] | None]]
 
 
 def rules_text() -> str:
-    """Пороги и границы итога словами — их называет отметка утверждения владельцем: другие — другое утверждение."""
+    """Пороги и границы итога словами, их называет отметка утверждения владельцем: другие: другое утверждение."""
     bands = "/".join(str(bound) for bound in config.SIGNAL_SCORE_BANDS)
     return (f"пороги: границы итога {bands}, ступень {BAND_RULE_RU}, порядок {THRESHOLDS['order']:.0%}, "
             f"тема {THRESHOLDS['theme']:.0%}")
 
 
 def evaluate(rows: list[dict[str, Any]], finals: Finals, control: Mapping[str, Any]) -> dict[str, Any]:
-    """Метрики модели второго вызова в обоих вариантах, правило прохождения и вариант ближе к эксперту; control —
+    """Метрики модели второго вызова в обоих вариантах, правило прохождения и вариант ближе к эксперту; control:
     нынешние баллы ядра по строке: ступень модели на строках с ними должна быть выше их ступени там же."""
     core = control_agreement(rows, control)
     variants = {variant: _variant(rows, finals, variant, core) for variant in VARIANTS}
@@ -66,7 +66,7 @@ def evaluate(rows: list[dict[str, Any]], finals: Finals, control: Mapping[str, A
 
 
 def _closer(variants: dict[str, Any], candidates: list[str]) -> str:
-    """Вариант ближе к эксперту: выше доля ступени, затем порядок; при равенстве — нынешняя настройка."""
+    """Вариант ближе к эксперту: выше доля ступени, затем порядок; при равенстве: нынешняя настройка."""
     current = "keywords" if config.SIGNAL_SCORES_KEYWORDS else "plain"
     return max(candidates, key=lambda variant: (variants[variant]["band"]["agent"] or 0,
                                                 variants[variant]["order"]["agent"] or 0, variant == current))
@@ -80,7 +80,7 @@ def _variant(rows: list[dict[str, Any]], finals: Finals, variant: str, core: Map
     band = {**_band(pack, totals), "same_rows": same, "floor": core["band"],
             "extra_strong": _share(extra.count(STRONG), len(extra))}
     order = {**order_share(pack, totals), "with_extra": order_share(rows, totals)["agent"]}
-    # Ступень — строго лучше ядра (равная его не заменяет), порядок — от порога.
+    # Ступень: строго лучше ядра (равная его не заменяет), порядок: от порога.
     checks = {"band": same is not None and core["band"] is not None and same > core["band"],
               "order": order["agent"] is not None and order["agent"] >= THRESHOLDS["order"]}
     failed = [name for name, passed in checks.items() if not passed]
@@ -96,7 +96,7 @@ def _total(final: Mapping[str, Any] | None, variant: str) -> float | None:
 
 
 def _band(rows: list[dict[str, Any]], totals: Mapping[str, Sequence[float | None]]) -> dict[str, Any]:
-    """Доля ответов со ступенью эксперта; устойчивость — одна ступень во всех прогонах без сбоев."""
+    """Доля ответов со ступенью эксперта; устойчивость: одна ступень во всех прогонах без сбоев."""
     pairs = [(row["band"], signal_scoring.band(total)) for row in rows for total in totals[row["id"]]]
     stable = sum(all(total is not None for total in totals[row["id"]])
                  and len({signal_scoring.band(total) for total in totals[row["id"]]}) == 1 for row in rows)
@@ -105,8 +105,8 @@ def _band(rows: list[dict[str, Any]], totals: Mapping[str, Sequence[float | None
 
 
 def order_share(rows: list[dict[str, Any]], totals: Mapping[str, Sequence[float | None]]) -> dict[str, Any]:
-    """Доля верно упорядоченных пар строк с разной ступенью эксперта (ничья — половина, нет итога — промах), среднее
-    по прогонам; по профилю — пары внутри профиля."""
+    """Доля верно упорядоченных пар строк с разной ступенью эксперта (ничья: половина, нет итога: промах), среднее
+    по прогонам; по профилю: пары внутри профиля."""
     runs = max((len(values) for values in totals.values()), default=0)
     pairs = [(high, low) for high in rows for low in rows if _RANK[high["band"]] > _RANK[low["band"]]]
     if not pairs or not runs:
@@ -132,7 +132,7 @@ def _concordant(high: float | None, low: float | None) -> float:
 
 def _bands(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
     """Ступень эксперта против ступени модели (ответов, строки пакета) и точность «сильного»: «сильный» даёт
-    «кандидата» «Решения платформы», так что его точность — доля кандидатов, которых эксперт счёл сильными."""
+    «кандидата» «Решения платформы», так что его точность: доля кандидатов, которых эксперт счёл сильными."""
     matrix: dict[str, Counter[str]] = {band: Counter() for band in BAND_ORDER}
     for row in rows:
         if row["extra"]:
@@ -161,7 +161,7 @@ def _totals_by_rating(rows: list[dict[str, Any]], finals: Finals, variant: str) 
 
 
 def _criteria(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
-    """Средняя ошибка и сдвиг балла критерия против эксперта (строки пакета) — где число есть у обоих."""
+    """Средняя ошибка и сдвиг балла критерия против эксперта (строки пакета): где число есть у обоих."""
     diffs: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         for final in finals[row["id"]]:
@@ -175,7 +175,7 @@ def _criteria(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[
 
 
 def _freshness(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
-    """«Свежесть» (её считает код по дате основного вызова): есть ли дата — как у эксперта (строки пакета)."""
+    """«Свежесть» (её считает код по дате основного вызова): есть ли дата: как у эксперта (строки пакета)."""
     pairs = []
     for row in rows:
         expert = next((value for name, value in row["scores"].items() if name in row["computed"]), None)
@@ -191,7 +191,7 @@ def _freshness(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
 
 
 def theme(rows: list[dict[str, Any]], cards: Finals, market: str | None = None) -> dict[str, Any]:
-    """Тема основного вызова против темы эксперта — у строк пакета; сбой — промах. market — имя темы рынка в списке
+    """Тема основного вызова против темы эксперта: у строк пакета; сбой: промах. market: имя темы рынка в списке
     (signal_themes.market): по нему ошибки «Рынок против темы отрасли» (#149)."""
     pack = [row for row in rows if not row["extra"]]
     pairs = [(row["id"], row["theme"], (card or {}).get("theme")) for row in pack for card in cards[row["id"]]]
@@ -202,7 +202,7 @@ def theme(rows: list[dict[str, Any]], cards: Finals, market: str | None = None) 
 
 def _market_errors(pairs: list[tuple[str, Any, Any]], market: str | None) -> dict[str, Any] | None:
     """Ошибки «Рынок против темы отрасли» (#149): у эксперта тема рынка, у модели другая из списка (missed), и
-    наоборот (extra) — ответы и строки; «не определено» и сбой — не тема отрасли. Темы рынка в списке нет — None."""
+    наоборот (extra): ответы и строки; «не определено» и сбой: не тема отрасли. Темы рынка в списке нет: None."""
     if market is None:
         return None
 
@@ -215,15 +215,15 @@ def _market_errors(pairs: list[tuple[str, Any, Any]], market: str | None) -> dic
                              if given == market and expert not in (None, market)])}
 
 
-# Регионы эксперта, с которыми страну не сверить: у «глобально» страны нет, «не определено» — регион не понят.
+# Регионы эксперта, с которыми страну не сверить: у «глобально» страны нет, «не определено»: регион не понят.
 _REGIONS_WITHOUT_COUNTRY = frozenset({"глобально", "не определено"})
 
 
 def country_region(items: list[dict[str, Any]], cards: Finals, countries: Any) -> dict[str, Any]:
     """Страна события основного вызова против региона эксперта #98 по таблице «страна → регион» (#137; эксперт страну
     не размечает): ответ совпал, если регион эксперта среди регионов хоть одной страны события; без стран и без
-    карточки — промах. Строки с регионом «глобально» и «не определено» не сверяются. Порога нет: расхождения и
-    совпавшие (страна могла быть не та, но в том же регионе) — списками для глаз. countries — справочник стран
+    карточки: промах. Строки с регионом «глобально» и «не определено» не сверяются. Порога нет: расхождения и
+    совпавшие (страна могла быть не та, но в том же регионе): списками для глаз. countries: справочник стран
     (signal_card_countries.Countries)."""
     compared = [item for item in items if item["labels"]["region"] not in _REGIONS_WITHOUT_COUNTRY]
     hits = empty = 0
@@ -245,9 +245,9 @@ def country_region(items: list[dict[str, Any]], cards: Finals, countries: Any) -
 
 def baseline(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, float]],
              control: Mapping[str, Any]) -> dict[str, Any]:
-    """То, с чем сравнивается модель, — без её ответов: константа (самая частая ступень и тема эксперта, его среднее по
+    """То, с чем сравнивается модель, без её ответов: константа (самая частая ступень и тема эксперта, его среднее по
     критерию), эксперт сам с собой (итог по весам из его баллов) и контроль с ядра (балл и тег ленты, балл и тема
-    судьи) — на строках пакета, контроль — где он есть."""
+    судьи): на строках пакета, контроль: где он есть."""
     pack = [row for row in rows if not row["extra"]]
     common_band = _most_common([row["band"] for row in pack])
     common_theme = _most_common([row["theme"] for row in pack])
@@ -276,7 +276,7 @@ def control_agreement(rows: list[dict[str, Any]], control: Mapping[str, Any]) ->
 
 
 def expert_agreement(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
-    """Эксперт сам с собой на строках пакета: итог по весам из его баллов против его общей оценки — ступень и порядок.
+    """Эксперт сам с собой на строках пакета: итог по весам из его баллов против его общей оценки: ступень и порядок.
     Для сведения: как порог он оказался потолком, а не полом."""
     pack = [row for row in rows if not row["extra"]]
     totals = {row["id"]: [expert_total(row, weights[row["profile"]])] for row in pack}
@@ -284,7 +284,7 @@ def expert_agreement(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[s
 
 
 def expert_total(row: Mapping[str, Any], weights: Mapping[str, float]) -> float | None:
-    """Итог по весам из баллов эксперта; «нет даты» у «Свежести» — критерий в итог не входит (как у кода)."""
+    """Итог по весам из баллов эксперта; «нет даты» у «Свежести»: критерий в итог не входит (как у кода)."""
     items = [{"weight": weight, "ai_score": value if isinstance(value, (int, float)) else None, "keyword_score": None}
              for name, weight in weights.items() for value in [row["scores"].get(name)]]
     return signal_scoring.totals(items)["plain"]

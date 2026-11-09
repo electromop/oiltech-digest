@@ -1,8 +1,7 @@
 """Проба источника (`source-probe`): путь сбора, вердикт рубежей вставки, ни одной записи.
 
-25.09 молчащие источники объяснила разовая проба «только чтение» (docs/handoff_2026-09-25_
-stale-sources.md): путь сбора, но вместо вставки — вердикт по каждому кандидату. Здесь она
-становится командой, и главное требование — вердикт считают ТЕ ЖЕ функции, что и настоящая
+25.09 молчащие источники объяснила разовая проба «только чтение»: путь сбора, но вместо вставки: вердикт по каждому кандидату. Здесь она
+становится командой, и главное требование: вердикт считают ТЕ ЖЕ функции, что и настоящая
 вставка. Поэтому каждый тест пути здесь же прогоняет настоящий сбор на той же базе и
 сверяет: вставилось ровно то, про что проба сказала WOULD_INSERT.
 """
@@ -32,13 +31,13 @@ FOOTBALL = "Футбольный клуб выиграл матч чемпион
 WIDGET = "Чтобы сменить тему, очистите чат и задайте новый вопрос помощнику сайта. "
 
 
-# Ссылок на листинге в тестах больше шести: лимит — не из .env разработчика.
+# Ссылок на листинге в тестах больше шести: лимит: не из .env разработчика.
 ARTICLE_LIMIT = 12
 
 
 @pytest.fixture(autouse=True)
 def _static_prefilter(monkeypatch):
-    """Предфильтр — на статическом словаре: тематики, прочитанные другими тестами (кэш
+    """Предфильтр, на статическом словаре: тематики, прочитанные другими тестами (кэш
     на 5 минут), не должны менять вердикт."""
     monkeypatch.setattr(relevance_filter, "tag_keywords", lambda: ((), ()))
 
@@ -58,7 +57,7 @@ def _source(**fields) -> dict:
 
 
 def _article(source: dict, url: str, title: str, body: str, *, hidden: bool = False) -> None:
-    """Статья в базе — той же вставкой, что у сбора; скрытая — как после пометки гейта."""
+    """Статья в базе: той же вставкой, что у сбора; скрытая: как после пометки гейта."""
     assert repository.insert_article({
         "source_id": source["id"], "title": title, "url": url, "published_at": None,
         "raw_text": body, "text_truncated": False, "language": "ru", "content_hash": f"h-{url}",
@@ -120,12 +119,12 @@ def _would_insert(report: dict) -> set[str]:
 
 
 def test_insert_article_decides_by_the_verdict_the_probe_reads(isolated_db, monkeypatch):
-    """Вердикт пробы и решение настоящей вставки — одна функция, insert_verdict.
+    """Вердикт пробы и решение настоящей вставки: одна функция, insert_verdict.
 
     По каждому рубежу: сперва вердикт в соединении только для чтения (путь пробы), затем
-    настоящая insert_article на той же базе — она обязана решить ТЕМ ЖЕ вердиктом и
+    настоящая insert_article на той же базе: она обязана решить ТЕМ ЖЕ вердиктом и
     вставить ровно тогда, когда проба сказала WOULD_INSERT. Вставка знает только «ключ
-    занят» (DUP_URL_KEY); та же ли это статья — разметка пробы, её тесты ниже."""
+    занят» (DUP_URL_KEY); та же ли это статья: разметка пробы, её тесты ниже."""
     source = _source()
     other = _source(name="Другой", url="https://other.example")
     _article(source, "https://site.example/news/3", "Третья статья", "скрытое тело " * 20, hidden=True)
@@ -144,12 +143,12 @@ def test_insert_article_decides_by_the_verdict_the_probe_reads(isolated_db, monk
         # Та же статья в другом написании: схема, www, хвостовой слэш.
         (rec(source, "http://www.site.example/news/1/?from=main", "Первая", "другое тело " * 20),
          verdicts.DUP_URL_KEY),
-        # Ключ тот же, а адрес и заголовок другие: для вставки — тот же отказ.
+        # Ключ тот же, а адрес и заголовок другие: для вставки: тот же отказ.
         (rec(source, f"{base}/1?from=feed", "Совсем другая статья", "четвёртое тело " * 20),
          verdicts.DUP_URL_KEY),
         # То же тело у видимой статьи того же источника.
         (rec(source, f"{base}/2", "Вторая статья", DRILLING), verdicts.DUP_BODY_HASH),
-        # То же тело у ДРУГОГО источника — не рубеж: перепечатки — задача дедупа.
+        # То же тело у ДРУГОГО источника, не рубеж: перепечатки: задача дедупа.
         (rec(other, "https://other.example/2", "Перепечатка", DRILLING), verdicts.WOULD_INSERT),
         # Адрес уже занят скрытой статьёй: ключ и тело свободны, держит уникальность url.
         (rec(source, f"{base}/3", "Третья статья", "новое тело " * 20), verdicts.KNOWN),
@@ -181,7 +180,7 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
         f"{base}/2": _page("Вторая статья в новом написании", "Новый текст второй статьи про бурение. " * 6),
         f"{base}/3?from=feed": _page("Новая буровая установка на шельфе", "Текст про буровую на шельфе. " * 8),
         f"{base}/40": twin_page,
-        # /news/6 нет — страница не скачивается.
+        # /news/6 нет: страница не скачивается.
         f"{base}/7": _page("Короткая", "Коротко."),
         f"{base}/8": _page("Футбольный клуб выиграл матч чемпионата", FOOTBALL * 3),
         f"{base}/9": _page("Новая скважина дала первую нефть", DRILLING * 2),
@@ -189,7 +188,7 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
         f"{base}/11": _page("Виджет вместо статьи одиннадцать", WIDGET * 4),
     }
     monkeypatch.setattr(request_parser, "fetch", pages.get)
-    # Лимит ссылок — явно: умолчание (REQUEST_ARTICLE_LIMIT) вычисляется при импорте из .env, и
+    # Лимит ссылок, явно: умолчание (REQUEST_ARTICLE_LIMIT) вычисляется при импорте из .env, и
     # с локальным REQUEST_ARTICLE_LIMIT=6 проба честно обрывалась на шестой из одиннадцати.
     real_listing = request_parser.listing_candidates
     monkeypatch.setattr(request_parser, "listing_candidates",
@@ -230,7 +229,7 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
 
 
 def test_probe_shows_article_redirected_to_home_page_as_its_own_verdict(isolated_db, monkeypatch):
-    """Сколково Energy: сайт отдаёт 301 со ЛЮБОЙ статьи на свою главную. Это не сбой загрузки —
+    """Сколково Energy: сайт отдаёт 301 со ЛЮБОЙ статьи на свою главную. Это не сбой загрузки:
     fetch_failed отправил бы искать маршрут (NL, браузер), а лечится сменой ленты или архивом.
     Проба показывает причину отдельным вердиктом с конечным адресом, сбор такое не вставляет."""
     source = _source(listing_url="https://site.example/news", article_link_selector="a.news")
@@ -300,9 +299,9 @@ def test_rss_probe_matches_real_collection(isolated_db, monkeypatch):
 ])
 def test_malformed_link_breaks_neither_collection_nor_probe(isolated_db, monkeypatch, capsys, broken):
     """Ревью #72: разметка SAME/OTHER звала urlsplit без except ValueError внутри
-    insert_verdict — то есть и в настоящей вставке. Статья с кривым адресом, собранная в
+    insert_verdict: то есть и в настоящей вставке. Статья с кривым адресом, собранная в
     прошлом цикле, в следующем роняла бы parse_source источника целиком (и complete итогов
-    NL — 500). Прежний insert_article на ней просто возвращал False."""
+    NL: 500). Прежний insert_article на ней просто возвращал False."""
     source = _source(parse_strategy="rss", rss_url="https://feed.example/rss", url="https://feed.example")
     _article(source, broken, "Статья с кривым адресом о бурении", "тело кривой статьи " * 20)
     feed = _feed([
@@ -324,18 +323,18 @@ def test_malformed_link_breaks_neither_collection_nor_probe(isolated_db, monkeyp
 
 
 @pytest.mark.parametrize("stored, fresh, expected", [
-    # Ключ срезает якорь: две новости одной страницы пресс-центра — разные статьи.
+    # Ключ срезает якорь: две новости одной страницы пресс-центра: разные статьи.
     ("https://site.example/press/#n1", "https://site.example/press/#n2", verdicts.DUP_URL_KEY_OTHER),
     # Ключ снижает регистр всего адреса, а номер статьи в query бывает с регистром.
     ("https://site.example/news?id=AbC", "https://site.example/news?id=aBc", verdicts.DUP_URL_KEY_OTHER),
     ("https://site.example/News/Item", "https://site.example/news/item", verdicts.DUP_URL_KEY_OTHER),
-    # Схема, www, регистр хоста и хвостовой слэш — оформление одного адреса.
+    # Схема, www, регистр хоста и хвостовой слэш: оформление одного адреса.
     ("https://site.example/news/7", "http://www.SITE.example/news/7/", verdicts.DUP_URL_KEY_SAME),
 ])
 def test_same_article_means_same_address_up_to_scheme_www_and_slash(isolated_db, monkeypatch, stored, fresh,
                                                                      expected):
     """Ревью #72: разметка повторяла нормализации ключа (регистр всего адреса, якорь), и
-    разные статьи, склеенные ключом по якорю или регистру, получали SAME — потеря выглядела
+    разные статьи, склеенные ключом по якорю или регистру, получали SAME: потеря выглядела
     нормой. Заголовки здесь разные, так что вердикт решает только адрес."""
     source = _source(parse_strategy="rss", rss_url="https://feed.example/rss", url="https://feed.example")
     _article(source, stored, "Первая новость о бурении", "первое тело " * 20)
@@ -350,7 +349,7 @@ def test_same_article_means_same_address_up_to_scheme_www_and_slash(isolated_db,
 
 def test_telegram_probe_follows_last_seen_rules_of_collection(isolated_db, monkeypatch):
     """Состояние прошлого сбора собрано так, чтобы пройти все ветки: последний увиденный
-    пост (11) в ленте есть, а его дата — позже поста 12 (так бывает, когда пост правили)."""
+    пост (11) в ленте есть, а его дата: позже поста 12 (так бывает, когда пост правили)."""
     source = _source(
         name="Канал", source_type="Telegram", url="https://t.me/probechan", parse_strategy="telegram",
         last_seen_article_url="https://t.me/probechan/11",

@@ -120,7 +120,7 @@ def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_
     )
 
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user)
-    # Выбор — пример «Сильный сигнал»; вердикт человека из формы он не трогает.
+    # Выбор: пример «Сильный сигнал»; вердикт человека из формы он не трогает.
     assert _active("signal_verdict", signal) == ["reject", "strong_signal"]
 
     signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
@@ -150,20 +150,6 @@ def test_card_without_links_is_hidden_and_human_corrections_survive_rediscovery(
     assert rows[shown]["original_title_ru"] == "Новый текст модели"
 
 
-def test_rejected_source_candidate_is_not_revived_by_rediscovery(isolated_db):
-    url = "https://example.com/newsroom"
-    candidate = repository.upsert_source_candidate({"url": url, "status": "new", "discovered_by": "agent"})
-    with repository.get_connection() as conn:
-        conn.execute("UPDATE source_candidates SET status = 'rejected' WHERE id = %s", (candidate,))
-        conn.commit()
-
-    repository.upsert_source_candidate({"url": url, "status": "new", "discovered_by": "agent"})
-
-    with repository.get_connection() as conn:
-        status = conn.execute("SELECT status FROM source_candidates WHERE id = %s", (candidate,)).fetchone()[0]
-    assert status == "rejected"
-
-
 def test_listing_marks_themes_outside_customer_topics(isolated_db):
     repository.upsert_tag({"parent_id": None, "name": THEME, "name_en": "Drilling", "description": "",
                            "keywords_json": ["бурение"], "keywords_en_json": ["drilling"], "sort_order": 1})
@@ -181,7 +167,7 @@ def test_listing_marks_themes_outside_customer_topics(isolated_db):
 
 
 def test_old_verdict_is_replaced_even_after_the_card_was_retitled(isolated_db):
-    # Строка памяти до 28.09: без signal_id, с прежним заголовком — узнаётся по своему отзыву.
+    # Строка памяти до 28.09: без signal_id, с прежним заголовком: узнаётся по своему отзыву.
     user = _user()
     signal = _signal("old", "Explor получила 18 000 узлов Sercel Accel", url="https://example.com/sercel")
     event = repository.record_signal_feedback_event(
@@ -205,8 +191,8 @@ def test_old_verdict_is_replaced_even_after_the_card_was_retitled(isolated_db):
 
 
 def test_digest_example_is_one_per_card_and_anyones_unselect_retracts_it(isolated_db):
-    """Отметка общая (#111): пример «выбран в дайджест» — один на карточку, кто бы ни отметил;
-    снятие любым участником гасит все примеры выбора карточки — и записанный до #111 личный."""
+    """Отметка общая (#111): пример «выбран в дайджест»: один на карточку, кто бы ни отметил;
+    снятие любым участником гасит все примеры выбора карточки: и записанный до #111 личный."""
     first, second = _user(), int(repository.create_user("second@example.test", "long-enough-password", "user")["id"])
     signal = _signal("both", "Роботизированная обсадка", url="https://example.com/casing")
     # Пример до #111: ключ с номером учётки, у каждого свой.
@@ -223,7 +209,7 @@ def test_digest_example_is_one_per_card_and_anyones_unselect_retracts_it(isolate
     signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=second)
     assert _active("signal_verdict", signal) == []
 
-    # Снова «в дайджест» — снова один пример, сколько бы раз ни отмечали.
+    # Снова «в дайджест»: снова один пример, сколько бы раз ни отмечали.
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=first)
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
     assert _active("signal_verdict", signal) == ["strong_signal"]

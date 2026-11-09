@@ -100,13 +100,13 @@ def test_scheduler_batch_calls_only_the_missing_stage(monkeypatch):
 
     assert [c["name"] for c in client.calls] == []  # русский заголовок по правилам: без модели
     item = result["articles"][0]
-    assert set(item) == {"article_id", "errors", "translation"}  # недостающее — только перевод
+    assert set(item) == {"article_id", "errors", "translation"}  # недостающее: только перевод
     assert item["translation"]["title_ru"] == payload["articles"][0]["title"]
 
 
 def test_accepted_article_gets_its_russian_title_edited_by_the_rules(monkeypatch):
     """Решение владельца 03.11: у принятой статьи русский заголовок не по правилам эксперта (#150) правит «Суть и
-    перевод» — тем же шагом, что переводит иноязычный; в итоге модель и токены, ядро учтёт расход."""
+    перевод»: тем же шагом, что переводит иноязычный; в итоге модель и токены, ядро учтёт расход."""
     client = _RecordingClient()
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
     title = "Хуситы ударили по НПЗ в Эр-Рияде — Новости о нефти и газе в России и мире - Нефть и капитал"
@@ -139,7 +139,7 @@ def test_accepted_article_gets_its_russian_title_edited_by_the_rules(monkeypatch
     ],
 )
 def test_scheduler_batch_stage_edges(monkeypatch, extra, fail_on, calls, written):
-    """Граничные случаи цикла стадий пакета планировщика (#53, ревью #79) — страж цикла."""
+    """Граничные случаи цикла стадий пакета планировщика (#53, ревью #79): страж цикла."""
 
     class _Client(_RecordingClient):
         def complete_json(self, instructions, user_input, schema, **kwargs):
@@ -242,47 +242,6 @@ def test_default_scoring_weights_equal_100_in_each_profile():
         assert len({item["name"] for item in criteria}) == len(criteria)
 
 
-def test_incident_without_solution_is_capped_by_code():
-    """#54: признак «инцидент без решения» ограничивает балл кодом, а не просьбой к модели.
-    Правило «инциденты — низко» жило только в промпте, и удар по складу ГСМ получил ровно 60."""
-    criteria = [{"id": 1, "name": "Стратегическая значимость", "weight": 60, "keywords_json": [], "keywords_en_json": []},
-                {"id": 2, "name": "Достоверность и актуальность", "weight": 40, "keywords_json": [], "keywords_en_json": []}]
-    answer = {"incident_without_solution": True, "explanation": "удар по складу ГСМ",
-              "items": [{"criterion_id": 1, "ai_score": 60, "rationale": "."},
-                        {"criterion_id": 2, "ai_score": 85, "rationale": "."}]}
-    article = {"title": "Удар по складу ГСМ", "raw_text": "…"}
-
-    result = pipeline.normalize_score_payload(article, criteria, answer)
-
-    assert result["total_score"] <= pipeline.INCIDENT_CRITERION_CAP  # старый код: 70.0
-    assert result["score_label"] == "Низкая"
-    # Ревью #79: признак и оценка модели до потолка не теряются — по ним находится ложное «да».
-    assert result["incident_without_solution"] is True
-    assert [item["ai_score_raw"] for item in result["items"]] == [60, 85]
-    # Страж: признак false или его нет (воркер NL старой сборки) — потолка нет, 60·0,6 + 85·0,4.
-    for flag in ({"incident_without_solution": False}, {}):
-        plain = {"explanation": answer["explanation"], "items": answer["items"], **flag}
-        unflagged = pipeline.normalize_score_payload(article, criteria, plain)
-        assert unflagged["total_score"] == 70.0
-        assert unflagged["incident_without_solution"] is False
-        assert [item["ai_score_raw"] for item in unflagged["items"]] == [60, 85]
-
-
-def test_incident_flag_without_items_caps_the_keyword_fallback():
-    """E5 (ревью #79): признак без подпунктов — критерий падает на ключевой балл, и потолок
-    ложится на него: 30/30/30, исходные 100 — в ai_score_raw."""
-    criteria = [{"id": 1, "name": "Значимость", "weight": 100,
-                 "keywords_json": ["удар", "гсм", "пожар"], "keywords_en_json": []}]
-    article = {"title": "Удар по складу ГСМ", "raw_text": "После удара начался пожар."}
-
-    result = pipeline.normalize_score_payload(article, criteria, {"incident_without_solution": True, "items": []})
-
-    item = result["items"][0]
-    assert (item["keyword_score"], item["ai_score"], item["final_score"]) == (30, 30, 30)
-    assert item["ai_score_raw"] == 100
-    assert result["incident_without_solution"] is True and result["total_score"] == 30
-
-
 def test_glossary_prompt_selects_relevant_oilfield_terms():
     article = {
         "title": "Electric frac fleet expands hydraulic fracturing operations",
@@ -346,8 +305,8 @@ def test_glossary_enforces_inflected_bad_terms():
 
 def test_glossary_catches_stimulation_and_only_flags_reservoir():
     """«Резервуар» без автозамены (решение владельца 25.09): в русском тексте это почти
-    всегда ёмкость, а замена не держала падеж («с качественным пласт»). Модели — подсказка,
-    аудиту — находка, если в исходнике reservoir и нет ёмкостей."""
+    всегда ёмкость, а замена не держала падеж («с качественным пласт»). Модели: подсказка,
+    аудиту: находка, если в исходнике reservoir и нет ёмкостей."""
 
     class BadTranslatorClient:
         def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
@@ -394,7 +353,7 @@ def test_normalize_scripts_fixes_twins_and_glue_but_keeps_brands():
     }
     for bad, good in fixed.items():
         assert normalize_scripts(bad) == good, bad
-    # Бренды, единицы и настоящий полуперевод не трогаем. «Орinoco»: кириллическая «р» здесь —
+    # Бренды, единицы и настоящий полуперевод не трогаем. «Орinoco»: кириллическая «р» здесь:
     # звук «r», замена по виду дала бы «Opinoco».
     for kept in ("КазМунайГаз", "кВт", "ExxonMobil", "LNG-проект", "CO2", "Türkiye", "Орinoco", "электроэнergyю"):
         assert normalize_scripts(kept) == kept, kept
@@ -402,7 +361,7 @@ def test_normalize_scripts_fixes_twins_and_glue_but_keeps_brands():
 
 
 def test_normalize_scripts_splits_glue_before_fixing_twins():
-    """Ревью 25.09: двойники раньше склейки делали «сExxonMobil» → «cExxonMobil» — стык пропадал,
+    """Ревью 25.09: двойники раньше склейки делали «сExxonMobil» → «cExxonMobil»: стык пропадал,
     а с ним находка аудита и отбор на перегенерацию."""
     for glued, split in {
         "совместно сExxonMobil": "совместно с ExxonMobil",
@@ -416,8 +375,8 @@ def test_normalize_scripts_splits_glue_before_fixing_twins():
 
 
 def test_latin_twins_in_russian_words_are_fixed_by_look():
-    # Латиница в русском слове — буква, взятая по виду: 9 из 12 таких замен на проде дали
-    # известное слово («выводy», «Министp»). Обратно (кириллица в латинском) — только вид+звук.
+    # Латиница в русском слове, буква, взятая по виду: 9 из 12 таких замен на проде дали
+    # известное слово («выводy», «Министp»). Обратно (кириллица в латинском): только вид+звук.
     for bad, good in {"Pоснефть": "Роснефть", "yправление": "управление", "Hовак": "Новак",
                       "выводy": "выводу", "Министp": "Министр", "ПAO": "ПАО", "Cпрос": "Спрос"}.items():
         assert normalize_scripts(bad) == good, bad
@@ -433,7 +392,7 @@ def test_allowed_mixed_script_brands_are_left_alone():
 
 
 def test_single_twin_inside_a_word_is_fixed_not_cut():
-    """Ревью 27.09: склейка раньше двойников резала слово по одиночной чужой букве —
+    """Ревью 27.09: склейка раньше двойников резала слово по одиночной чужой букве:
     «КазMунайГаз» → «Каз МунайГаз», и детектор слово больше не видел."""
     for bad, good in {
         "КазMунайГаз": "КазМунайГаз",
@@ -447,8 +406,8 @@ def test_single_twin_inside_a_word_is_fixed_not_cut():
 
 
 def test_single_latin_letter_word_is_cut_from_a_long_russian_word():
-    """Проверка правок 27.09: одна латинская буква перед русским словом — слово («B2B»,
-    «Plan B»), если справа длинное слово; перед коротким — двойник в единице («MПа»)."""
+    """Проверка правок 27.09: одна латинская буква перед русским словом: слово («B2B»,
+    «Plan B»), если справа длинное слово; перед коротким: двойник в единице («MПа»)."""
     for glued, split in {
         "B2BПлатформа": "B2B Платформа",
         "E&PКомпании": "E&P Компании",
@@ -462,8 +421,8 @@ def test_single_latin_letter_word_is_cut_from_a_long_russian_word():
 
 
 def test_latin_abbreviation_with_russian_ending_is_not_turned_cyrillic():
-    """Ревью 27.09: P, H, B по виду делали из аббревиатуры кириллицу — «BOPы» → «ВОРы».
-    Такое слово остаётся смешанным и уходит на повтор, а не молча портится. Слово капсом —
+    """Ревью 27.09: P, H, B по виду делали из аббревиатуры кириллицу: «BOPы» → «ВОРы».
+    Такое слово остаётся смешанным и уходит на повтор, а не молча портится. Слово капсом:
     двойники, по большинству: «СЕКТOP» не уходит в латиницу, «HOBATЭК» чинится."""
     for kept in ("BOPы", "EPCконтракт", "OPECстраны"):
         assert normalize_scripts(kept) == kept, kept
@@ -476,7 +435,7 @@ def test_latin_abbreviation_with_russian_ending_is_not_turned_cyrillic():
 
 def test_replacements_see_every_article_term_not_only_the_prompt_dozen():
     """Проверка правок 27.09: словарь брал 12 первых терминов статьи (длина подсказки модели),
-    а offshore в нём 16-й — в длинной статье замены «оффшор» не срабатывали."""
+    а offshore в нём 16-й: в длинной статье замены «оффшор» не срабатывали."""
     article = {
         "title": "Offshore program",
         "raw_text": "completion, workover, spudded, ESP, drilling mud, MPD, MWD, LWD, coiled tubing, "
@@ -488,7 +447,7 @@ def test_replacements_see_every_article_term_not_only_the_prompt_dozen():
 
 def test_completion_repair_needs_the_term_and_keeps_adjectives():
     """Ревью 27.09: «скважин[а-я]*» ловил прилагательное, а находка аудита включала замену
-    в любой статье — «завершение скважины» в русской заметке не калька."""
+    в любой статье: «завершение скважины» в русской заметке не калька."""
     completion = {"title": "Well completion", "raw_text": "After well completion the field started."}
     lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
 
@@ -499,8 +458,8 @@ def test_completion_repair_needs_the_term_and_keeps_adjectives():
 
 
 def test_offshore_repairs_only_in_offshore_articles_and_never_for_tax_havens():
-    """Ревью 27.09: замены «оффшор» были общими — «зарегистрирован в оффшоре на Кипре» в
-    статье про СПГ становилось «в шельфе». Существительное многозначно — только аудит."""
+    """Ревью 27.09: замены «оффшор» были общими: «зарегистрирован в оффшоре на Кипре» в
+    статье про СПГ становилось «в шельфе». Существительное многозначно: только аудит."""
     lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
     offshore = {"title": "Offshore drilling", "raw_text": "Offshore drilling expands."}
     tax = "Компания зарегистрирована в оффшоре на Кипре, танкеры принадлежат оффшорным компаниям."
@@ -567,7 +526,7 @@ def test_summary_is_asked_again_when_a_word_mixes_scripts():
     assert response.data["summary"] == "Цены на электроэнергию выросли."
     assert len(client.prompts) == 2
     assert "«электроэнergyю»" in client.prompts[1]
-    # Расход обоих вызовов — в одном итоге, иначе ai_processing_runs недосчитает.
+    # Расход обоих вызовов: в одном итоге, иначе ai_processing_runs недосчитает.
     assert (response.input_tokens, response.output_tokens) == (200, 20)
 
 
@@ -601,11 +560,11 @@ def test_summary_is_not_asked_again_when_clean_or_retry_is_no_better():
 
     clean = Client(["Добыча выросла; вхoдит в топ."])
     assert pipeline.summarize_article({"title": "t", "raw_text": "x"}, clean).data["summary"] == "Добыча выросла; входит в топ."
-    assert clean.calls == 1  # двойник словарь чинит сам — переспрашивать незачем
+    assert clean.calls == 1  # двойник словарь чинит сам: переспрашивать незачем
 
     stubborn = Client(["Пермian растёт.", "Пермian и наshore растут."])
     response = pipeline.summarize_article({"title": "t", "raw_text": "x"}, stubborn)
-    assert response.data["summary"] == "Пермian растёт."  # повтор хуже — берём первый
+    assert response.data["summary"] == "Пермian растёт."  # повтор хуже: берём первый
     assert stubborn.calls == 2
 
 
@@ -665,7 +624,7 @@ def test_glossary_puts_the_russian_term_first(text, preferred):
     "PTT Exploration and Production signed the contract.",
 ])
 def test_ambiguous_abbreviations_do_not_pull_the_new_terms(text):
-    """#150: MOF, ECA и PTT ключами словаря не взяты — это ещё Министерство финансов, зона контроля выбросов и тайская
+    """#150: MOF, ECA и PTT ключами словаря не взяты: это ещё Министерство финансов, зона контроля выбросов и тайская
     PTT. Полное название (metal-organic framework, eddy current array, push-to-talk) в публикации о них и так есть."""
     assert relevant_glossary_terms({"title": "Update", "raw_text": text}) == []
 
@@ -683,7 +642,7 @@ def test_ambiguous_abbreviations_do_not_pull_the_new_terms(text):
     ("The electric submersible pump (ESP) run life doubled.", "Погружной электрический насос дешевле.", "ЭЦН дешевле."),
 ])
 def test_glossary_repairs_plural_word_order_and_leave_lookalikes(source, bad, good):
-    """#150, ревью: множественное число и обратный порядок слов чинятся; «литий свободным» без дефиса — не калька, а
+    """#150, ревью: множественное число и обратный порядок слов чинятся; «литий свободным» без дефиса: не калька, а
     название журнала «Время колтюбинга» не термин."""
     assert enforce_glossary_text(bad, {"title": "Update", "raw_text": source}) == good
 
@@ -712,7 +671,7 @@ def test_glossary_audit_leaves_an_eca_of_another_meaning_alone():
 def test_glossary_repairs_customer_spud_and_granular_remarks():
     """Замечания заказчика 22.09 по карточке радара: «спудрил вертикальную скважину», «granular».
 
-    Радар прогоняет свой текст через enforce_glossary_text этого модуля, наши карточки —
+    Радар прогоняет свой текст через enforce_glossary_text этого модуля, наши карточки:
     тоже; аудит до правки словаря таких мест не видел вовсе (0 из 1000 статей).
     """
     article = {
@@ -739,7 +698,7 @@ def test_glossary_repairs_customer_spud_and_granular_remarks():
 
 
 def test_glossary_repairs_calque_without_english_term_in_context():
-    """Ревью F: у доказательства радара может не быть «spudded» — только обзор Westwood.
+    """Ревью F: у доказательства радара может не быть «spudded»: только обзор Westwood.
 
     Калька из warn_patterns в самом тексте сама включает свой термин, иначе «спудрил»
     пережил бы и словарь радара, и аудит (relevant = []).
@@ -777,7 +736,7 @@ def test_glossary_prompt_tells_model_how_to_render_spud():
 
 
 def test_terminology_warnings_flag_mixed_script_words():
-    """Латиница вперемешку с кириллицей в одном слове — брак без всякого словаря."""
+    """Латиница вперемешку с кириллицей в одном слове: брак без всякого словаря."""
     article = {"title": "Brazil exploration", "raw_text": "The Tupinamba exploration well", "language": "en"}
 
     words = [item["forbidden_ru"] for item in terminology_warnings("бурение по Тупinамba и нефтесервиc", article)]
@@ -836,9 +795,9 @@ def _one_line(text: str) -> str:
 
 
 def test_summary_prompt_follows_the_expert_issue():
-    """#150: суть по образцу итогового выпуска эксперта за октябрь 2026 — событие с главным числом, что оно меняет
+    """#150: суть по образцу итогового выпуска эксперта за октябрь 2026: событие с главным числом, что оно меняет
     для нефтесервиса, стадия и чьи данные, не длиннее 330 знаков. Первый абзац заменён, прежние пункты остались.
-    Правка по проверке на эталоне (владелец 28.10): длина ещё и словами, «что впереди» вместо «чего ещё нет» — модель
+    Правка по проверке на эталоне (владелец 28.10): длина ещё и словами, «что впереди» вместо «чего ещё нет»: модель
     читала его как «чего нет в публикации» и писала «масштаб не указан»."""
     from oiltech_digest.processing.prompts import SUMMARY_INSTRUCTIONS
 
@@ -870,7 +829,7 @@ def test_summary_prompt_follows_the_expert_issue():
 
 
 def test_title_prompt_names_the_event_without_dashes_or_brackets():
-    """#150: заголовок как в выпуске эксперта — кто что сделал, до 90 знаков, без тире, скобок, внутренних номеров и
+    """#150: заголовок как в выпуске эксперта: кто что сделал, до 90 знаков, без тире, скобок, внутренних номеров и
     названия издания. Длина в инструкции одна: прежние «до 200 символов» спорили бы с 90."""
     from oiltech_digest.processing.prompts import TRANSLATE_INSTRUCTIONS
 
@@ -905,7 +864,7 @@ class _StageClient:
 
 
 def test_summary_uses_its_own_model_reasoning_and_budget(monkeypatch):
-    """#150: «Суть и перевод» — на своей модели (владелец 28.10: gpt-6.1-terra, low по проверке на эталоне), а не на
+    """#150: «Суть и перевод»: на своей модели (владелец 28.10: gpt-6.1-terra, low по проверке на эталоне), а не на
     общей OPENAI_MODEL тегов и судьи перепечаток; лимит ответа с запасом под рассуждение. Перенесено из ветки моста с
     gpt-5 (feat/explicit-stage-models) дословно: та же переменная и тот же запас."""
     monkeypatch.setattr(config, "OPENAI_SUMMARY_MODEL", "summary-model")
@@ -944,7 +903,7 @@ def test_minimal_keeps_todays_summary_and_translation_limits(monkeypatch):
 
 
 def test_summary_model_falls_back_to_the_main_model():
-    """Пусто — откат на OPENAI_MODEL / OPENAI_REASONING_EFFORT: без новых строк в .env воркер работает как раньше."""
+    """Пусто, откат на OPENAI_MODEL / OPENAI_REASONING_EFFORT: без новых строк в .env воркер работает как раньше."""
     # Пустые, а не удалённые: config при импорте читает .env, и строка оттуда подменила бы отсутствующую переменную.
     env = {**os.environ, "OPENAI_MODEL": "main-model", "OPENAI_REASONING_EFFORT": "low", "OPENAI_SUMMARY_MODEL": "",
            "OPENAI_SUMMARY_REASONING": ""}
@@ -1038,9 +997,9 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
         ],
     )
 
-    # Плашка «Технология / Бизнес» (23.10) ищет вид элемента в базе — тест без базы отвечает «вид неизвестен».
+    # Плашка «Технология / Бизнес» (23.10) ищет вид элемента в базе: тест без базы отвечает «вид неизвестен».
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda article_ids, signal_ids: ({}, {}))
-    # Поля материала PDF (#161) и имена критериев раздела тоже из базы — без неё полей нет.
+    # Поля материала PDF (#161) и имена критериев раздела тоже из базы: без неё полей нет.
     monkeypatch.setattr(digest.repository, "issue_material_fields", lambda article_ids, signal_ids: ({}, {}))
     # «Главное в выпуске», написанное человеком (#162), тоже из базы.
     monkeypatch.setattr("oiltech_digest.db.issue_edits_store.highlights", lambda month: {})
@@ -1103,7 +1062,7 @@ def test_external_refetch_rejects_substituted_body(monkeypatch):
 
 
 def test_reprint_primary_falls_back_to_longer_copy():
-    """Модель вернула чужой id — берём копию длиннее, а не первую попавшуюся.
+    """Модель вернула чужой id: берём копию длиннее, а не первую попавшуюся.
 
     В случае заказчика от 08.09 копии были 1026, 2327, 2366 и 3181 знак, и
     короткая оказалась обрывком с дефектом склейки заголовка.
@@ -1143,7 +1102,7 @@ def test_reprint_review_dry_run_writes_nothing(monkeypatch):
 
 
 def test_reprint_apply_rejects_foreign_primary_id():
-    """Модель вернула id не из пары — дублем пометили бы не ту статью.
+    """Модель вернула id не из пары: дублем пометили бы не ту статью.
 
     Падаем на длину: короткая копия обычно и есть обрывок (в случае заказчика
     копия на 1026 знаков была склейкой заголовка с лидом).
@@ -1172,7 +1131,7 @@ def test_reprint_candidates_band_is_passed_through(monkeypatch):
     """Полосу задаёт вызывающий, а не запрос.
 
     Замер на живом корпусе 17.09: из 318 пар за 14 дней тривиальных (100%)
-    только 57, а полоса случая заказчика (35–49%) — 132 пары. Пока выборка
+    только 57, а полоса случая заказчика (35-49%): 132 пары. Пока выборка
     резалась по `ORDER BY overlap DESC`, спорные пары до модели не доезжали,
     и судью нечем было проверить на том, ради чего он заведён.
     """
@@ -1196,7 +1155,7 @@ def test_reprint_candidate_order_is_not_by_overlap():
     from oiltech_digest.db import repository
 
     # Комментарии выкидываем: объяснение, ПОЧЕМУ так нельзя, само содержит
-    # запрещённую строку — на этом тест и споткнулся в первой редакции.
+    # запрещённую строку: на этом тест и споткнулся в первой редакции.
     sql = inspect.getsource(repository.reprint_candidates)
     code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
     orders = re.findall(r"ORDER BY .*", code)
@@ -1209,7 +1168,7 @@ def test_reprint_candidate_order_is_not_by_overlap():
 
 
 def test_find_reprints_waits_for_interval_since_last_applied_run(isolated_db, monkeypatch, capsys):
-    """Срок — от прошлого прогона с записью в базе: перезапуск планировщика его не
+    """Срок, от прошлого прогона с записью в базе: перезапуск планировщика его не
     сбивает, а сухой прогон не считается."""
     import argparse
 
@@ -1234,4 +1193,4 @@ def test_find_reprints_waits_for_interval_since_last_applied_run(isolated_db, mo
         conn.execute("UPDATE background_jobs SET created_at = now() - interval '13 hours' WHERE id = %s", (job["id"],))
         conn.commit()
     cli.cmd_find_reprints(args)
-    assert len(looked) == 2  # прошло больше 12 часов — снова ищем
+    assert len(looked) == 2  # прошло больше 12 часов: снова ищем

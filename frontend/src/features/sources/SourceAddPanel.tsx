@@ -10,7 +10,7 @@ type Props = {
   showToast: ToastWriter;
 };
 
-// Добавление — редкое действие администратора, поэтому свёрнуто над таблицей: заказчик
+// Добавление, редкое действие администратора, поэтому свёрнуто над таблицей: заказчик
 // (документ 19.09) просил, чтобы главным на экране был список источников, а не формы.
 export function SourceAddPanel({ onCreateSource, onImportArticle, showToast }: Props) {
   const [newSourceName, setNewSourceName] = useState("");

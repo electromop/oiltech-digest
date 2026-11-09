@@ -1,4 +1,4 @@
-import { monthLabel } from "../articles/feedWindow";
+import { monthLabel } from "../shared/feedWindow";
 import type { DigestExportFormat } from "./digestExport";
 
 export type DigestView = "issue" | "archive";
@@ -12,7 +12,7 @@ type Props = {
 };
 
 // Шапка дайджеста: какой выпуск открыт и сколько в нём материалов. Выбора выпуска здесь нет (решение владельца 24.10):
-// собирается текущий, прошлые — во вкладке «Архив выпусков» и только на просмотр.
+// собирается текущий, прошлые: во вкладке «Архив выпусков» и только на просмотр.
 export function DigestHeader({ activeMonth, issueCount, archive, nextIssue }: Props) {
   return (
     <header className="screenHeader digestHeader">
@@ -36,7 +36,7 @@ export function DigestHeader({ activeMonth, issueCount, archive, nextIssue }: Pr
   );
 }
 
-// Сборка выпуска или архив прошлых выпусков; у архива — сколько в нём выпусков.
+// Сборка выпуска или архив прошлых выпусков; у архива: сколько в нём выпусков.
 export function DigestViewSwitch({ view, archiveCount, onChange }: { view: DigestView; archiveCount: number; onChange: (view: DigestView) => void }) {
   return (
     <div className="viewTabs digestViewSwitch" role="group" aria-label="Раздел дайджеста">
@@ -60,7 +60,7 @@ type ActionProps = {
   onExport: (format: DigestExportFormat) => void;
 };
 
-// Действия с выпуском — две группы: черновик (у прошлого выпуска его нет) и выгрузка. В узкой колонке выгрузка
+// Действия с выпуском, две группы: черновик (у прошлого выпуска его нет) и выгрузка. В узкой колонке выгрузка
 // уходит своей строкой вправо, а не рассыпается по кнопке.
 export function DigestActions({ archive, busy, draftBusy, hasManualChanges, onSave, onReset, onExport }: ActionProps) {
   return (

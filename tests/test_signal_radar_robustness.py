@@ -170,7 +170,7 @@ def test_config_keeps_explicit_zero_and_takes_core_settings_for_missing(monkeypa
 def test_upsert_signal_keeps_interest_when_next_run_has_none(isolated_db):
     base = {"signal_key": "k-interest", "title": "T", "theme": "Бурение", "maturity": "watch", "score": 70}
     signal_id = repository.upsert_signal({**base, "interest_score": 88, "why_interesting": "первое внедрение"})
-    # Карточка без единой ссылки в список не попадает (сигнал 97) — даём ей ссылку.
+    # Карточка без единой ссылки в список не попадает (сигнал 97): даём ей ссылку.
     repository.upsert_signal_evidence(signal_id, {"source_url": "https://example.com/interest", "title": "T"})
     repository.upsert_signal(dict(base))  # тема из одного кандидата ревью пачки не проходит
 
@@ -207,7 +207,7 @@ def test_external_summary_shows_the_search_and_page_counters(monkeypatch):
                                  "dropped": 0, "fulltext": fulltext, "already_collected": 1}
 
 
-# --- 10. Внешняя очередь не исполняется на месте, конвейер — под профилем -------------
+# --- 10. Внешняя очередь не исполняется на месте, конвейер: под профилем -------------
 
 
 def test_enqueue_never_runs_external_queue_inline(monkeypatch, isolated_db):
@@ -249,14 +249,11 @@ def test_bare_compose_up_starts_only_core_services():
 
     unprofiled = {name for name, service in services.items() if not service.get("profiles")}
 
-    # Единый контур (D): стек MVP-1 — приложение `app` и Caddy; конвейер — профилем
-    # `pipeline`, архивный трекер задач — профилем `archive`.
+    # Единый контур (D): стек MVP-1: приложение `app` и Caddy; конвейер профилем `pipeline`.
     assert unprofiled == {"db", "bootstrap", "app", "caddy"}
     for name in ("worker", "playwright-worker", "scheduler"):
         assert services[name]["profiles"] == ["pipeline"]
         assert services[name]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
-    assert services["tasks"]["profiles"] == ["archive"]
-    assert services["tasks"]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
 
 
 def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):
@@ -278,11 +275,11 @@ def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):
     assert run["topics"][0]["candidates"][0]["signal"]["evidence"][0]["source_url"] == "https://example.com/a"
 
 
-# --- Итог воркера — JSON (поймано проверкой 4712 после пересборки NL 21.09) -----------
+# --- Итог воркера: JSON (поймано проверкой 4712 после пересборки NL 21.09) -----------
 
 
 def test_fetched_page_date_travels_as_iso_string(monkeypatch):
-    """Докачка клала published_at объектом datetime — итог воркера не уходил ядру."""
+    """Докачка клала published_at объектом datetime: итог воркера не уходил ядру."""
     from datetime import datetime, timezone
 
     monkeypatch.setattr(
@@ -304,7 +301,7 @@ def test_fetched_page_date_travels_as_iso_string(monkeypatch):
 
 def test_worker_sends_result_with_dates_to_core(monkeypatch):
     """Граница с ядром: любой вид задачи отдаёт дату строкой ISO, а не падает на отправке
-    (18.09 — сбор, 21.09 — радар: один и тот же класс дважды)."""
+    (18.09: сбор, 21.09, радар: один и тот же класс дважды)."""
     import json as jsonlib
     from datetime import datetime, timezone
 

@@ -8,7 +8,7 @@
 владельца 02.11 «решения людей беречь всегда»). Перенос перепроверяет это у каждой статьи в своей транзакции: за время
 с проверки и за время самого переноса человек мог её отметить, а месяц закрыться.
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в otbor_store): изоляция тестов
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в otbor_store): изоляция тестов
 держится на подмене этого атрибута.
 """
 
@@ -36,7 +36,7 @@ CARD_AGAIN = {"stage": "«Карточка»", "text": "Карточка буд�
 
 def human_decided_sql(article: str = "a") -> str:
     """У статьи есть решение человека: отметка, кроме «новой» без комментария; отзыв; блок ОС по статье или её
-    сигналу ленты; старая личная отметка; черновик выпуска. «В дайджест» — отметка, поэтому тоже здесь."""
+    сигналу ленты; старая личная отметка; черновик выпуска. «В дайджест»: отметка, поэтому тоже здесь."""
     return (
         f"(EXISTS (SELECT 1 FROM article_marks hm WHERE hm.article_id = {article}.id"
         "   AND (hm.status <> 'new' OR COALESCE(btrim(hm.analyst_comment), '') <> ''))"
@@ -50,7 +50,7 @@ def human_decided_sql(article: str = "a") -> str:
 
 
 def eligible_article_sql(window: feed_window.FeedWindow) -> str:
-    """Статья, которую проверка берёт, а переключение переносит (над a, s — источник, c — карточка статьи): решена
+    """Статья, которую проверка берёт, а переключение переносит (над a, s, источник, c, карточка статьи): решена
     гейтом и на его пути (новое решает сам «Отбор»), лента её показала бы, если бы гейт её принял (не
     перепечатка, не на удаление, источник не в архиве), месяц открыт, «Отбор» её не решал и решения человека нет."""
     return (
@@ -123,7 +123,7 @@ _UPSERT_SET = """
 def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
           failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
     """Записать итог проверки по статье: решение (values) или сбой. Сбой решения прошлой попытки не снимает (как у
-    сигнала, otbor_store._write_failure): шаги ложатся в ход решения. Перенесённую строку не трогает. False — статьи
+    сигнала, otbor_store._write_failure): шаги ложатся в ход решения. Перенесённую строку не трогает. False: статьи
     нет или строка уже перенесена."""
     decision = (values or {}).get("otbor_decision")
     with connection.get_connection() as conn:
@@ -158,8 +158,8 @@ SEARCH_TRIAL_STAGE = "otbor_search_trial"
 
 def write_signal(signal_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
                  failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
-    """Итог «Отбора» по находке пробного прогона широкого поиска (#138): решение или сбой — в строку находки, по тем же
-    правилам повтора, что у статьи. Только находка пробного прогона (signals.selector): False — не она или её нет."""
+    """Итог «Отбора» по находке пробного прогона широкого поиска (#138): решение или сбой: в строку находки, по тем же
+    правилам повтора, что у статьи. Только находка пробного прогона (signals.selector): False: не она или её нет."""
     with connection.get_connection() as conn:
         if conn.execute("SELECT 1 FROM signals WHERE id = %s AND selector = %s",
                         (int(signal_id), SIGNAL_SELECTOR_TRIAL)).fetchone() is None:
@@ -184,7 +184,7 @@ def write_signal(signal_id: int, *, values: dict[str, Any] | None, disputed: str
 
 
 def signal_rows(signal_ids: list[int]) -> list[dict[str, Any]]:
-    """Строки проверки по находкам пробного прогона (#138) — для его отчёта."""
+    """Строки проверки по находкам пробного прогона (#138): для его отчёта."""
     ids = sorted({int(value) for value in signal_ids})
     if not ids:
         return []
@@ -283,7 +283,7 @@ def transfer(row: dict[str, Any], *, window: feed_window.FeedWindow, log: list[d
     """Перенести решение проверки в сигнал статьи одной транзакцией: статья под замком и по-прежнему подходит
     (eligible_article_sql: решение человека или закрытый месяц могли появиться и во время переноса), решение пишет путь
     самого «Отбора» (otbor_store._write_decision), карточка, сделанная до решения, у принятой снимается (второй вызов
-    не возьмёт её раньше новой: он ждёт карточку), строка проверки отмечена перенесённой. DECIDED; None — статья больше
+    не возьмёт её раньше новой: он ждёт карточку), строка проверки отмечена перенесённой. DECIDED; None: статья больше
     не подходит, строку оставляем."""
     article_id = int(row["article_id"])
     values = row["values_json"]
@@ -305,7 +305,7 @@ def transfer(row: dict[str, Any], *, window: feed_window.FeedWindow, log: list[d
                     (int(row["id"]),))
         conn.commit()
     if written == DECIDED:
-        # Публикация статьи — к её сигналу, у принятой — и суть, тема, балл, когда они есть (как у write_decision).
+        # Публикация статьи: к её сигналу, у принятой: и суть, тема, балл, когда они есть (как у write_decision).
         feed_signals.sync_quietly([article_id])
     return written
 
@@ -340,7 +340,7 @@ def cards_to_redo(*, since: date) -> list[int]:
 
 def average_tokens(stage: str) -> tuple[float, float] | None:
     """Средние токены входа и ответа одной строки расхода стадии за 30 дней на этой базе (для оценки цены
-    переключения по ставкам заданной модели); расхода нет — None."""
+    переключения по ставкам заданной модели); расхода нет: None."""
     with connection.get_connection() as conn:
         row = conn.execute(
             "SELECT avg(input_tokens), avg(output_tokens) FROM ai_processing_runs WHERE stage = %s"

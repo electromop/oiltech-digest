@@ -1,6 +1,6 @@
-"""Второй вызов «Карточки»: баллы (#132, спека #128), шов 1 — статья сбора → «Отбор» → суть → основной вызов →
+"""Второй вызов «Карточки»: баллы (#132, спека #128), шов 1: статья сбора → «Отбор» → суть → основной вызов →
 второй вызов на подставной модели через настоящий клиент воркера NL → ядро → API витрин (tests/card_pipeline_support.py).
-Профиль — по категории; «Свежесть» считает код из даты события в тексте; итог по весам, ступень и «Решение платформы»
+Профиль: по категории; «Свежесть» считает код из даты события в тексте; итог по весам, ступень и «Решение платформы»
 считает код; «не тот блок» перезапускает только второй вызов.
 """
 
@@ -14,10 +14,10 @@ from oiltech_digest.otbor_pack_format import load_rubrics
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.signal_research import UNCONFIRMED_LINK
 from tests.card_pipeline_support import (SCORES_MODEL, ScoresModel, accepted, answer, card_answer, even, fill_cards,
-                                         pipeline, profile_names, run_scores, scores)  # noqa: F401 — фикстура
+                                         pipeline, profile_names, run_scores, scores)  # noqa: F401: фикстура
 from tests.otbor_support import JUSTIFICATION, api_send, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, radar_finding, run_worker, user, worker  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import admin, api_get, radar_finding, run_worker, user, worker  # noqa: F401: фикстуры
 
 CONTRACT = "Контракт Weatherford в Омане"
 CONTRACT_TEXT = "Weatherford получила контракт на бурение 274 скважин в Омане. Контракт подписан 24 сентября 2026 года."
@@ -60,7 +60,7 @@ def test_scores_follow_the_profile_of_the_category_with_only_the_agreed_input(us
 
     calls = {_title(call): call for call in model.calls}
     assert {call["model"] for call in model.calls} == {SCORES_MODEL}
-    # Профиль — по категории: у бизнеса пять критериев бизнеса, у технологии — радара без «Свежести»: её считает код.
+    # Профиль, по категории: у бизнеса пять критериев бизнеса, у технологии, радара без «Свежести»: её считает код.
     assert _criteria(calls[CONTRACT]) == profile_names("business")
     assert _criteria(calls[TWIN]) == [name for name in profile_names("tech_radar") if name != FRESHNESS]
     assert "named_customer" in calls[TWIN]["schema"]["schema"]["properties"]
@@ -83,7 +83,7 @@ def test_scores_follow_the_profile_of_the_category_with_only_the_agreed_input(us
     assert (contract_card["score_profile"], twin["score_profile"]) == ("business", "tech_radar")
     assert list(_items(contract_card)) == profile_names("business")
     assert (float(contract_card["score"]), contract_card["score_band"]) == (70.0, "useful")
-    # «Свежесть» — кодом: событие 10.10, публикация 20.10, 10 дней — 100 − 10 × 20/30.
+    # «Свежесть», кодом: событие 10.10, публикация 20.10, 10 дней: 100 − 10 × 20/30.
     fresh = _items(twin)[FRESHNESS]
     assert fresh["ai_score"] == pytest.approx(93.33, abs=0.01) and fresh["excluded"] is None
     assert float(twin["score"]) == pytest.approx((70 * 90 + 93.33 * 10) / 100, abs=0.01)
@@ -95,7 +95,7 @@ def test_scores_follow_the_profile_of_the_category_with_only_the_agreed_input(us
 
 
 def test_model_gets_the_ruler_of_a_criterion_not_its_screen_description(user, pipeline, monkeypatch):
-    # Описание критерия на экране «Скоринг» — черновик заказчика: у «Достоверности» там «свежесть события», а линейка
+    # Описание критерия на экране «Скоринг», черновик заказчика: у «Достоверности» там «свежесть события», а линейка
     # (утверждённая правка эксперта) возраст оценивать запрещает. Модель получает линейку.
     accepted(monkeypatch, {CONTRACT: answer()}, {CONTRACT: CONTRACT_TEXT})
     fill_cards(monkeypatch, {CONTRACT: card_answer()})
@@ -113,9 +113,9 @@ def test_freshness_is_left_out_without_an_event_date_in_the_text_or_with_a_month
     _tech(monkeypatch, {
         # Даты в тексте нет: дата публикации вместо неё не подставляется.
         "Без даты": card_answer(event_date="", event_date_source="по дате публикации", maturity="пилот/ОПИ"),
-        # Сентябрь к 20.10: от 20 до 49 дней — «сильный» или «полезный», ступень не понять.
+        # Сентябрь к 20.10: от 20 до 49 дней: «сильный» или «полезный», ступень не понять.
         "Сентябрь": card_answer(event_date="2026-09", maturity="пилот/ОПИ"),
-        # Август к 20.10: от 50 до 80 дней — одна ступень, балл по середине периода (65 дней).
+        # Август к 20.10: от 50 до 80 дней: одна ступень, балл по середине периода (65 дней).
         "Август": card_answer(event_date="2026-08", maturity="пилот/ОПИ"),
     })
 
@@ -126,7 +126,7 @@ def test_freshness_is_left_out_without_an_event_date_in_the_text_or_with_a_month
     for title, why in (("Без даты", "нет даты события в тексте"), ("Сентябрь", "разные ступени")):
         fresh = _items(cards[title])[FRESHNESS]
         assert fresh["ai_score"] is None and why in fresh["excluded"], title
-        # Веса остальных пересчитаны: без «Свежести» итог — 70, а не 63.
+        # Веса остальных пересчитаны: без «Свежести» итог: 70, а не 63.
         assert float(cards[title]["score"]) == 70.0, title
     august = _items(cards["Август"])[FRESHNESS]
     assert august["excluded"] is None
@@ -143,9 +143,9 @@ def test_maturity_score_stays_in_the_band_of_the_card_stage(user, pipeline, monk
 
     run_scores(monkeypatch, {
         "Прототип": scores(even("tech_radar", 60, **{MATURITY: 90}), named_customer=True),
-        # Запуск продукта без названного заказчика — 40-64 и при стадии «коммерческое внедрение».
+        # Запуск продукта без названного заказчика: 40-64 и при стадии «коммерческое внедрение».
         "Запуск без заказчика": scores(even("tech_radar", 60, **{MATURITY: 85}), named_customer=False),
-        # Внедрение у названного заказчика — 80 и выше.
+        # Внедрение у названного заказчика: 80 и выше.
         "Внедрение у заказчика": scores(even("tech_radar", 60, **{MATURITY: 70}), named_customer=True),
         "Без стадии": scores(even("tech_radar", 60, **{MATURITY: 30}), named_customer=False),
     })
@@ -228,7 +228,7 @@ def test_bands_come_from_the_setting_and_both_keyword_variants_are_kept(user, pi
 
     card = showcase(user)[CONTRACT]
     totals = card["scores_recipe"]["totals"]
-    # Ключи «Рыночной возможности» все в тексте: с подмешиванием итог выше, чем без него; в score — вариант настройки.
+    # Ключи «Рыночной возможности» все в тексте: с подмешиванием итог выше, чем без него; в score: вариант настройки.
     assert totals["keywords"] > totals["plain"] == 76.0
     assert float(card["score"]) == pytest.approx(totals["keywords"])
     assert card["score_band"] == "strong"  # 76 при границе «сильного» 75
@@ -249,10 +249,10 @@ def test_third_publication_from_dedup_confirms_a_strong_signal(user, contour, pi
                              for title in titles})
     run_scores(monkeypatch, {title: scores(even("tech_radar", 90), named_customer=True) for title in titles})
     card = next(card for card in api_get("/api/signals", user, showcase="technology") if card["score_band"])
-    # Две публикации одного события: сильный — «кандидат».
+    # Две публикации одного события: сильный: «кандидат».
     assert (card["score_band"], card["maturity"]) == ("strong", "shortlist")
 
-    # «Дедуп» следующего прогона добавил третью публикацию — «подтверждено».
+    # «Дедуп» следующего прогона добавил третью публикацию: «подтверждено».
     run_radar(monkeypatch, [event(titles[2], third, company="SLB")], {third: page(titles[2])}, same_event=True)
 
     after = next(one for one in api_get("/api/signals", user, showcase="technology") if one["id"] == card["id"])
@@ -269,7 +269,7 @@ def test_wrong_block_changes_the_category_at_once_and_reruns_only_the_scores(use
 
     api_send("POST", "/api/signals/feedback", user, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
 
-    # Категория — сразу: карточка уже в другой витрине, а баллы до ответа второго вызова «пересчитываются».
+    # Категория, сразу: карточка уже в другой витрине, а баллы до ответа второго вызова «пересчитываются».
     assert CONTRACT not in showcase(user)
     moved = showcase(user, "technology")[CONTRACT]
     assert (moved["signal_category"], moved["card_set_by"]["signal_category"]) == ("technology", "human")
@@ -279,7 +279,7 @@ def test_wrong_block_changes_the_category_at_once_and_reruns_only_the_scores(use
 
     rescored = showcase(user, "technology")[CONTRACT]
     assert (rescored["score_profile"], rescored["scores_stale_since"]) == ("tech_radar", None)
-    # Профиль радара: «Зрелость» в ступени «пилота» (не выше 79), «Свежесть» — 26 дней с 24.09 по 20.10.
+    # Профиль радара: «Зрелость» в ступени «пилота» (не выше 79), «Свежесть»: 26 дней с 24.09 по 20.10.
     fresh = 100 - 26 * 20 / 30
     assert float(rescored["score"]) == pytest.approx((85 * 70 + 79 * 20 + fresh * 10) / 100, abs=0.01)
     assert (rescored["score_band"], rescored["maturity"]) == ("strong", "shortlist")
@@ -294,7 +294,7 @@ def test_wrong_block_before_the_card_changes_the_category_and_the_scores_come_by
 
     api_send("POST", "/api/signals/feedback", user, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
 
-    # Карточки ещё нет: категория всё равно сразу другая, а «пересчитывать» нечего — баллов не было.
+    # Карточки ещё нет: категория всё равно сразу другая, а «пересчитывать» нечего: баллов не было.
     moved = showcase(user, "technology")[CONTRACT]
     assert (moved["signal_category"], moved["scores_stale_since"]) == ("technology", None)
     fill_cards(monkeypatch, {CONTRACT: card_answer(maturity="пилот/ОПИ")})
@@ -315,7 +315,7 @@ def test_scores_model_is_an_explicit_setting_and_its_spend_has_its_own_name(user
 
     report = {row["stage"]: row for row in api_get("/api/reports/ai-cost", admin)}
     assert report["signal_scores"]["runs"] == 1
-    # Своя строка и в расходе по месяцам — не в расходе ленты.
+    # Своя строка и в расходе по месяцам: не в расходе ленты.
     monthly = {row["area"]: row["model"] for row in api_get("/api/stats/monthly", admin, months=1)["ai_cost"]}
     assert monthly["signal_scores"] == f"{SCORES_MODEL}-2026-03-17"
 
@@ -345,7 +345,7 @@ def test_answer_off_the_rules_is_not_written_and_the_batch_goes_on(user, admin, 
         "Дважды": {"scores": [{"criterion": names[0], "score": 70, "why": "x"}] * 2
                    + [{"criterion": name, "score": 70, "why": "x"} for name in names[1:]]},
         "Не число": scores({**even("business", 70), names[0]: "много"}),
-        # Схема просит целое: дробное — не по правилам.
+        # Схема просит целое: дробное: не по правилам.
         "Дробный": scores({**even("business", 70), names[0]: 70.5}),
         "Модель молчит": AIClientError("timeout"),
         "Как надо": scores(even("business", 70)),

@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import config, feed_window, signal_scoring
+from oiltech_digest import brand_fonts, config, feed_window, signal_scoring
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
@@ -46,7 +46,7 @@ def _hero_data_uri() -> str:
 
     Прежний баннер 600×360 нёс в верхней полосе логотип заказчика, его слоган и
     название подразделения. По требованию правообладателя (письмо 11.09.2026)
-    полоса срезана — на ресурсе не должно быть корпоративной символики."""
+    полоса срезана: на ресурсе не должно быть корпоративной символики."""
     data = _asset_bytes(HERO_ASSET)
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
 
@@ -55,7 +55,7 @@ def _branding_store_path() -> Path:
     """Куда ПИШЕМ брендинг.
 
     На сервере это общий том (`DIGEST_BRANDING_PATH`), видимый всем контейнерам:
-    админка пишет, воркеры выгрузки читают то же самое. Без переменной — файл
+    админка пишет, воркеры выгрузки читают то же самое. Без переменной: файл
     в пакете, как при локальной разработке.
     """
     configured = config.DIGEST_BRANDING_PATH
@@ -63,8 +63,8 @@ def _branding_store_path() -> Path:
 
 
 def _branding_read_path() -> Path | None:
-    """Откуда ЧИТАЕМ: сначала общий том, иначе упакованный дефолт (первый запуск —
-    том ещё пуст). None — нет ни того, ни другого, работаем на значениях по умолчанию."""
+    """Откуда ЧИТАЕМ: сначала общий том, иначе упакованный дефолт (первый запуск:
+    том ещё пуст). None: нет ни того, ни другого, работаем на значениях по умолчанию."""
     store = _branding_store_path()
     if store.exists():
         return store
@@ -112,7 +112,7 @@ def _load_digest_branding() -> dict:
             "note": "Информационная рассылка",
             "socials": [],
         },
-        # Обложка PDF в формате эксперта (#161). Значения только на сервере: в репозитории пусто, пустое поле — нет
+        # Обложка PDF в формате эксперта (#161). Значения только на сервере: в репозитории пусто, пустое поле: нет
         # элемента в выпуске. Файлы баннера, логотипа и QR лежат рядом с файлом брендинга, здесь их имена.
         "cover": {
             "banner_file": "",
@@ -126,6 +126,12 @@ def _load_digest_branding() -> dict:
             "qr_file": "",
             "feedback_email": "",
             "platform_note": "",
+        },
+        # Шрифт DOCX: имя шрифта бренда, установленного у читателя. Значения только на сервере, в репозитории пусто:
+        # пустое имя, и Word берёт Arial. Письмо и PDF рисуются шрифтом бренда с сервера (brand_fonts).
+        "fonts": {
+            "office_family": "",
+            "office_condensed_family": "",
         },
         "highlights": {
             "analytics_source_keywords": [
@@ -200,6 +206,7 @@ def _load_digest_branding() -> dict:
         "issue": {**defaults["issue"], **(loaded.get("issue") or {})},
         "footer": {**defaults["footer"], **(loaded.get("footer") or {})},
         "cover": {**defaults["cover"], **(loaded.get("cover") or {})},
+        "fonts": {**defaults["fonts"], **(loaded.get("fonts") or {})},
         "highlights": {**defaults["highlights"], **(loaded.get("highlights") or {})},
     }
 
@@ -211,7 +218,7 @@ def get_digest_branding() -> dict:
 def save_digest_branding(payload: dict) -> dict:
     current = _load_digest_branding()
     payload_footer = payload.get("footer") or {}
-    # ВАЖНО: пустой список — это осознанное «удалить все соцсети», а не «поле не прислали».
+    # ВАЖНО: пустой список это осознанное «удалить все соцсети», а не «поле не прислали».
     # Раньше стояло `payload_socials or current_socials`, и falsy-пустой список проваливался
     # на старое значение: пользователь удалял ссылки, а после пересборки они возвращались.
     # Различаем именно наличие ключа, а не его истинность.
@@ -230,6 +237,7 @@ def save_digest_branding(payload: dict) -> dict:
         },
         # Обложку PDF правят на сервере (файлы рядом с брендингом): экран её не присылает, сохранение её не теряет.
         "cover": current["cover"],
+        "fonts": current["fonts"],
         "highlights": {
             **current["highlights"],
             **(payload.get("highlights") or {}),
@@ -252,8 +260,8 @@ def build_digest_content(
     branding = _load_digest_branding()
     issue_cfg = branding["issue"]
     rows = []
-    # Выпуск один на всех (#111): отметки и черновик месяца общие, кто бы ни собирал выпуск —
-    # экран, выгрузка или команда на сервере. Состав без фильтров — repository.issue_composition.
+    # Выпуск один на всех (#111): отметки и черновик месяца общие, кто бы ни собирал выпуск:
+    # экран, выгрузка или команда на сервере. Состав без фильтров: repository.issue_composition.
     if month:
         saved_digest = repository.get_monthly_digest(month)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
@@ -261,12 +269,12 @@ def build_digest_content(
             # Черновик задаёт порядок, но в выпуск идёт только то, что человек держит «в
             # дайджест» сейчас: снятая после сохранения статья уходит и из выгрузки. И только
             # статьи месяца выпуска: черновик до 29.09 («Все месяцы») хранит и чужие (ревью #84).
-            # Лимит — после отбора: чужая статья не занимает место своей.
+            # Лимит, после отбора: чужая статья не занимает место своей.
             rows = repository.digest_items_by_article_ids(saved_ids, month=month)[:limit]
             # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
-            # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
+            # Сигналы радара, выбранные в дайджест, добавляются заново: иначе после
             # «Сохранить черновик» они из выпуска пропадали. Если все статьи черновика с тех
-            # пор скрыты, остаётся прежний откат к текущей подборке (ниже) — она сигналы включает.
+            # пор скрыты, остаётся прежний откат к текущей подборке (ниже): она сигналы включает.
             if rows:
                 rows = [
                     *rows,
@@ -288,7 +296,7 @@ def build_digest_content(
             search=search,
             top_tag=top_tag,
         )
-        # Сигналы радара в черновике не хранятся и с черновиком идут после его статей. Без черновика — так же
+        # Сигналы радара в черновике не хранятся и с черновиком идут после его статей. Без черновика: так же
         # (решение владельца 24.10: один список на экране в порядке PDF): статьи по баллу, за ними сигналы по баллу.
         rows = [
             *(row for row in rows if row.get("item_type") != "signal"),
@@ -296,7 +304,7 @@ def build_digest_content(
         ]
     news = []
     # Позиции выпуска для PDF в формате эксперта (#161): тот же состав, что у письма, но суть целиком, а поля материала
-    # (раздел, рубрика, подпись, критерии, связь) с его сигнала — digest_materials.
+    # (раздел, рубрика, подпись, критерии, связь) с его сигнала: digest_materials.
     positions = []
     for row in rows:
         # Рубрика письма и DOCX, заглушка картинки и сводные цифры идут по теме публикации
@@ -306,17 +314,17 @@ def build_digest_content(
         if row.get("parent_tag_name"):
             tag = f"{row['parent_tag_name']} / {tag}"
         # День в карточке. У карточки радара его считает сборщик (published_on: поступление на
-        # радар — по Москве), у статьи — день даты публикации, как раньше.
+        # радар: по Москве), у статьи: день даты публикации, как раньше.
         published_on = row.get("published_on") or (row["published_at"].date() if row.get("published_at") else None)
         published = published_on.isoformat() if published_on else None
         glossary_context = _digest_glossary_context(row, tag)
-        # Эмодзи — после глоссария и до вёрстки: из этой одной структуры `news`
+        # Эмодзи, после глоссария и до вёрстки: из этой одной структуры `news`
         # растут все три формата (HTML, DOCX, PDF), поэтому шов здесь единственный.
         # Заголовок берётся ОРИГИНАЛЬНЫЙ (не title_ru), а телеграм-заголовок лепится
-        # из первого предложения поста — без чистки «🔥» уезжает прямо в выпуск.
+        # из первого предложения поста: без чистки «🔥» уезжает прямо в выпуск.
         title = strip_emoji(enforce_glossary_text(row.get("title") or "", glossary_context))
         summary = strip_emoji(enforce_glossary_text(row.get("summary") or "", glossary_context))
-        # Сигнал радара — не статья: его номер из таблицы signals. Раньше он уезжал в
+        # Сигнал радара, не статья: его номер из таблицы signals. Раньше он уезжал в
         # article_id, и сохранение черновика падало на внешнем ключе или цепляло чужую статью.
         item_type = row.get("item_type") or "article"
         # Общее у позиции письма и PDF: кто она, заголовок, ссылка, балл. Балл статьи берётся у её публикации (балл
@@ -349,7 +357,7 @@ def build_digest_content(
             {
                 **position,
                 "summary": _digest_summary_text(summary, title),
-                # Своя картинка — та, что платформа уже знает (у статьи ленты); годна ли она, видно при печати.
+                # Своя картинка: та, что платформа уже знает (у статьи ленты); годна ли она, видно при печати.
                 "image_url": "" if _is_unusable_digest_image_url(row.get("image_url")) else row["image_url"],
                 "root_tag": row.get("parent_tag_name") or row.get("tag_name"),
             }
@@ -401,7 +409,7 @@ def build_digest_content(
 
 # Плашка «Технология / Бизнес» у элемента выпуска (решение владельца 23.10): на экране сборки и в самом выпуске.
 ITEM_KIND_LABELS = {"technology": "Технология", "business": "Бизнес"}
-# Цвета плашки в выпуске — из палитры выпуска (синий заголовков, оранжевый «Читать далее»); текст к фону 8,1:1 и 6,7:1.
+# Цвета плашки в выпуске, из палитры выпуска (синий заголовков, оранжевый «Читать далее»); текст к фону 8,1:1 и 6,7:1.
 _KIND_BADGE_COLORS = {"technology": ("#003da6", "#e6eefa"), "business": ("#9a2e00", "#fdeee7")}
 
 
@@ -446,7 +454,7 @@ def _render_footer_contact(footer: dict) -> str:
 
     Раньше адрес и текст подставлялись в шаблон напрямую, и пустой контакт давал
     висящую ссылку `mailto:` и осиротевший разделитель. После снятия корпоративного
-    адреса (требование правообладателя, 11.09.2026) пустой контакт — штатный случай,
+    адреса (требование правообладателя, 11.09.2026) пустой контакт: штатный случай,
     поэтому блок рендерится по частям."""
     contact_text = (footer.get("contact_text") or "").strip()
     contact_email = (footer.get("contact_email") or "").strip()
@@ -467,6 +475,23 @@ def _render_footer_contact(footer: dict) -> str:
     return "<br>".join(lines)
 
 
+# Имя шрифта из брендинга идёт в атрибут style письма: только буквы, цифры, пробел, точка, дефис и подчёркивание.
+_FONT_NAME = re.compile(r"^[\w .-]{1,60}$")
+
+
+def font_stack(branding: dict, *, condensed: bool = False, sep: str = ",") -> str:
+    """Семейства шрифта письма: шрифт бренда (встроенный @font-face из файлов на сервере), затем шрифт бренда,
+    установленный у читателя (блок fonts брендинга: почтовые клиенты вырезают @font-face), затем Arial."""
+    fonts = (branding or {}).get("fonts") or {}
+    names = [brand_fonts.CONDENSED, brand_fonts.SANS] if condensed else [brand_fonts.SANS]
+    office = [fonts.get("office_condensed_family"), fonts.get("office_family")] if condensed else [fonts.get("office_family")]
+    for name in office:
+        name = str(name or "").strip()
+        if name and _FONT_NAME.match(name) and name not in names:
+            names.append(name)
+    return sep.join([f"'{name}'" for name in names] + ["Arial", "Helvetica", "sans-serif"])
+
+
 def render_digest_email(content: dict) -> str:
     """Письмо выпуска из issue/hero/news/footer: тот же HTML для экрана и выгрузки HTML (DOCX собирается из тех же
     news). PDF в формате эксперта собирается отдельно (digest_pdf, #161)."""
@@ -478,23 +503,27 @@ def render_digest_email(content: dict) -> str:
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
-        # Шрифт выпуска, как у PDF; почтовые клиенты его вырезают, остаётся Arial.
+        # Шрифт бренда, как у PDF; почтовые клиенты его вырезают, остаётся установленный у читателя или Arial.
         "font_face_style": digest_pdf.font_faces(),
+        "font_stack": font_stack(branding),
+        "font_stack_condensed": font_stack(branding, condensed=True),
+        "font_stack_condensed_spaced": font_stack(branding, condensed=True, sep=", "),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
         "highlights_section": "",
         "news_sections": news_sections,
-        # Hero — утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
+        # Hero: утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
         "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
         "hero_alt": _html(HERO_ALT),
         "footer_contact_block": _render_footer_contact(content.get("footer", {})),
-        "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or []),
+        "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or [],
+                                                      font_stack(branding)),
     }
     return template.format(**values)
 
 
-# The export is the exact same branded document as the email — one source of truth.
+# The export is the exact same branded document as the email: one source of truth.
 def render_digest_export_html(content: dict) -> str:
     return render_digest_email(content)
 
@@ -526,9 +555,9 @@ def _digest_summary_text(summary: str, title: str) -> str:
 
 
 def _compact_digest_summary(summary: str, title: str, max_chars: int = 250) -> str:
-    """Суть для карточки выпуска: целыми предложениями, сколько входит в площадь карточки — около трёх строк
+    """Суть для карточки выпуска: целыми предложениями, сколько входит в площадь карточки: около трёх строк
     колонки 600 px (решение владельца 23.10: текст ровно вмещается в отведённое место, без обрыва фразы).
-    Первое предложение длиннее места — обрезка по слову с многоточием."""
+    Первое предложение длиннее места: обрезка по слову с многоточием."""
     if not (summary or "").strip():
         return ""
     text = _digest_summary_text(summary, title)
@@ -648,7 +677,7 @@ def _render_highlights_section(issue: dict, highlights: list[dict]) -> str:
               <table class="highlights-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #d9e3f3;border-radius:8px;background:#f7faff;">
                 <tr>
                   <td style="padding:18px 18px 16px 18px;">
-                    <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{_html(title)}</div>
+                    <div style="font-family:'Brand Sans Condensed','Brand Sans',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{_html(title)}</div>
                     {highlights_html}
                   </td>
                 </tr>
@@ -679,7 +708,7 @@ def _render_news_sections(news_items: list[dict], issue: dict) -> str:
 
 def _render_news_item(item: dict, issue: dict | None = None) -> str:
     """Карточка новости (формат референса коллеги): фото + заголовок сверху,
-    ниже — краткое описание и строка «Читать далее | теги». Карточка не должна
+    ниже: краткое описание и строка «Читать далее | теги». Карточка не должна
     разрываться между страницами (CSS .news-card { break-inside: avoid })."""
     issue = issue or {}
     image_url = item.get("image_url") or ""
@@ -749,7 +778,7 @@ def _render_news_meta(item: dict) -> str:
     return f'<div class="news-card-meta">{_html(" · ".join(parts))}</div>'
 
 
-def _render_footer_socials(socials: list[dict]) -> str:
+def _render_footer_socials(socials: list[dict], fonts: str = "'Brand Sans',Arial,Helvetica,sans-serif") -> str:
     if not socials:
         return ""
     cells = []
@@ -760,7 +789,7 @@ def _render_footer_socials(socials: list[dict]) -> str:
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
             'text-align:center;line-height:36px;display:inline-block;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
-            "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;"
+            f"font-weight:bold;font-size:13px;font-family:{fonts};"
             f'" title="{_html(item.get("label"))}">{icon}</div>'
             "</td>"
         )
@@ -821,10 +850,10 @@ def _footer_social_icon_svg(item: dict) -> str:
 
 
 # Палитра заглушек. РАНЬШЕ подбор шёл по словарю с ключами вида "технологии"/"рынок",
-# но реальные названия тегов нормализуются в "роботизацияиавтономныесистемы" и т.п. —
+# но реальные названия тегов нормализуются в "роботизацияиавтономныесистемы" и т.п.:
 # совпадений не было НИ ОДНОГО, поэтому каждая заглушка получала цвет по умолчанию, и
 # выпуск выглядел как несколько одинаковых тёмно-синих плиток (жалоба заказчика 03.08).
-# Теперь цвет берётся детерминированно по хэшу рубрики: разные рубрики — разные плитки,
+# Теперь цвет берётся детерминированно по хэшу рубрики: разные рубрики: разные плитки,
 # одна и та же рубрика всегда одинаковая, а набор пар остаётся согласованным с брендом.
 _PLACEHOLDER_PALETTE: tuple[tuple[str, str], ...] = (
     ("#00317F", "#0B6FD0"),   # корпоративный синий
@@ -851,7 +880,7 @@ def _news_placeholder_data_uri(category: object) -> str:
     key = re.sub(r"[^a-zа-я0-9]+", "", top.lower(), flags=re.IGNORECASE)
     start, end = _placeholder_palette_for(key)
     lines = _placeholder_badge_lines(top)
-    # Подпись прижата к низу под затемняющей подложкой — приём из редакционной вёрстки:
+    # Подпись прижата к низу под затемняющей подложкой, приём из редакционной вёрстки:
     # плитка читается как оформленная обложка рубрики, а не как пустой прямоугольник.
     base_y = 76 if len(lines) == 1 else 66
     label = "".join(
@@ -872,7 +901,7 @@ def _news_placeholder_data_uri(category: object) -> str:
         "</defs>"
         "<g clip-path='url(#c)'>"
         "<rect width='130' height='86' fill='url(#g)'/>"
-        # Концентрические дуги в правом верхнем углу — ненавязчивый фирменный мотив,
+        # Концентрические дуги в правом верхнем углу: ненавязчивый фирменный мотив,
         # чтобы плитка не читалась как «картинка не загрузилась».
         "<g fill='none' stroke='#ffffff' stroke-opacity='0.16' stroke-width='1.4'>"
         "<circle cx='112' cy='16' r='34'/><circle cx='112' cy='16' r='23'/>"
@@ -888,7 +917,7 @@ def _news_placeholder_data_uri(category: object) -> str:
 def _placeholder_badge_lines(label: str, *, max_chars: int = 17, max_lines: int = 2) -> list[str]:
     """Короткая читаемая подпись рубрики: целые слова, максимум две строки.
 
-    Односимвольные обрывки отбрасываются — на длинных тегах вида
+    Односимвольные обрывки отбрасываются: на длинных тегах вида
     «Рынок, экономика, бизнес-модели, контракты и M&A» прежняя версия выдавала
     строку «КОНТРАКТЫ M A», которая не значит ничего.
     """
@@ -910,7 +939,7 @@ def _placeholder_badge_lines(label: str, *, max_chars: int = 17, max_lines: int 
     if current and len(lines) < max_lines:
         lines.append(current)
     lines = lines[:max_lines] or ["НОВОСТИ"]
-    # Если рубрика не поместилась целиком — показываем это многоточием, а не обрывом.
+    # Если рубрика не поместилась целиком: показываем это многоточием, а не обрывом.
     consumed = sum(len(line.split()) for line in lines)
     if consumed < len(words):
         lines[-1] = lines[-1] + "…"
@@ -1014,7 +1043,7 @@ def save_digest_draft(
 
 def render_digest_pdf(content: dict) -> bytes:
     """PDF выпуска в формате эксперта (#161) через headless Chromium: обложка и листы карточек (digest_pdf). Файлы
-    брендинга (баннер, логотип, QR) — в каталоге брендинга на сервере."""
+    брендинга (баннер, логотип, QR): в каталоге брендинга на сервере."""
     return digest_pdf.render(content, files_dir=_branding_store_path().parent)
 
 
@@ -1032,8 +1061,8 @@ _PREVIEW_PDF_WAIT_SECONDS = 60
 def render_digest_preview_pdf(content: dict, *, fresh: bool = False) -> bytes:
     """PDF предпросмотра: тот же render_digest_pdf, но по одной сборке за раз и с памятью на последние выпуски.
 
-    Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
-    ключ и новая сборка; тот же выпуск — готовые байты без Chromium. Картинок карточек и файлов брендинга в ключе нет:
+    Ключ, содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр: другой
+    ключ и новая сборка; тот же выпуск: готовые байты без Chromium. Картинок карточек и файлов брендинга в ключе нет:
     картинки Chromium грузит при сборке, сайт, который не ответил, потом оживает, а файл баннера, логотипа или QR на
     сервере могут заменить под тем же именем. Поэтому «Обновить PDF» (`fresh`) собирает заново мимо памяти, и новый файл
     заменяет прежний (LOW-2 ревью PR #155): предпросмотр снова совпадает с выгрузкой."""
@@ -1074,8 +1103,8 @@ def _fetch_docx_image(url: str | None, timeout: float = 8) -> bytes | None:
 
 
 #: Сколько DOCX тратит на картинки статей в сумме. Их тянет сам сервер, по одной, с таймаутом
-#: 8 с на запрос: молчащий хост стоил 8 с на картинку (замер 29.09: две из сорока — 16,2 с),
-#: а экран ждёт документ не дольше 160 с. Бюджет вышел — остальные карточки без картинки.
+#: 8 с на запрос: молчащий хост стоил 8 с на картинку (замер 29.09: две из сорока: 16,2 с),
+#: а экран ждёт документ не дольше 160 с. Бюджет вышел: остальные карточки без картинки.
 _DOCX_IMAGES_BUDGET_SECONDS = 30.0
 
 
@@ -1119,9 +1148,9 @@ def _add_docx_hyperlink(paragraph, url: str, text: str, color_hex: str | None = 
 
 
 def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
-    """Разбить новости на «страницы» по size карточек — для постраничного DOCX
+    """Разбить новости на «страницы» по size карточек: для постраничного DOCX
     (render_digest_docx делит новости по 3 с разрывом страницы между чанками).
-    HTML-путь больше не использует этот хелпер, но DOCX-путь зависит от него —
+    HTML-путь больше не использует этот хелпер, но DOCX-путь зависит от него:
     не удалять без правки render_digest_docx."""
     if size <= 0:
         size = 3
@@ -1145,6 +1174,9 @@ def render_digest_docx(content: dict) -> bytes:
     news_items = content.get("news") or content.get("items") or []
     footer = content.get("footer") or {}
     header = (content.get("branding") or {}).get("header") or {}
+    fonts = (content.get("branding") or {}).get("fonts") or {}
+    office_family = fonts.get("office_family") or "Arial"
+    office_condensed = fonts.get("office_condensed_family") or office_family
 
     BRAND_HEX = "003DA6"
     ACCENT_HEX = "E83D08"
@@ -1153,17 +1185,17 @@ def render_digest_docx(content: dict) -> bytes:
     GREY = RGBColor(0x66, 0x66, 0x66)
 
     doc = Document()
-    # Корпоративный шрифт во всём документе (рендерится у получателей с установленным
-    # GPN Din; иначе Word подставит замену). Базовый стиль Normal наследуют все абзацы.
-    doc.styles["Normal"].font.name = "GPN Din"
+    # Шрифт бренда во всём документе (рендерится у получателей, у которых он установлен; иначе Word подставит
+    # замену). Имя из брендинга на сервере. Базовый стиль Normal наследуют все абзацы.
+    doc.styles["Normal"].font.name = office_family
     if "Title" in doc.styles:
-        doc.styles["Title"].font.name = "GPN Din Condensed"
+        doc.styles["Title"].font.name = office_condensed
         doc.styles["Title"].font.bold = True
     if "Heading 1" in doc.styles:
-        doc.styles["Heading 1"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 1"].font.name = office_condensed
         doc.styles["Heading 1"].font.bold = True
     if "Heading 2" in doc.styles:
-        doc.styles["Heading 2"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 2"].font.name = office_condensed
         doc.styles["Heading 2"].font.bold = True
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.6)

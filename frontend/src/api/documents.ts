@@ -9,7 +9,7 @@ export function getDocument(documentId: number) {
   return apiFetch<DocumentDetails>(`/api/documents/${documentId}`);
 }
 
-// Тело — FormData, и заголовок Content-Type здесь НЕ ставится специально: boundary
+// Тело, FormData, и заголовок Content-Type здесь НЕ ставится специально: boundary
 // многочастного тела проставляет браузер. Исключение для FormData живёт в apiFetch,
 // поэтому загрузка идёт через общий клиент, а не в обход него.
 export function uploadDocument(file: File, attested: boolean) {

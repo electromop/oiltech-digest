@@ -1,6 +1,6 @@
-"""Экзамен агента «Отбор» (#133, спека #128), шов 2 — команда: сухой прогон и отказы до оплаты, контроль с ядра
+"""Экзамен агента «Отбор» (#133, спека #128), шов 2, команда: сухой прогон и отказы до оплаты, контроль с ядра
 (размеры страт и категория судьи), оценка на весь поток ленты и цена, полная таблица и устаревшие модели, пересчёт без
-вызовов модели, читаемый отчёт и вход агента такой же, как у ядра. Пакет и разметка — otbor_exam_support."""
+вызовов модели, читаемый отчёт и вход агента такой же, как у ядра. Пакет и разметка: otbor_exam_support."""
 
 import json
 import re
@@ -11,9 +11,9 @@ from oiltech_digest import cli, config, otbor, otbor_exam
 from oiltech_digest.otbor_pack_format import MANIFEST_NAME, load_dictionaries
 from tests.otbor_exam_support import (FULL, LUNA, MINI, NANO, ROWS_NAME, ExamModel, always_take, oracle, part,
                                       run_exam, write_rows)
-from tests.otbor_exam_support import exam_pack  # noqa: F401 — фикстура
+from tests.otbor_exam_support import exam_pack  # noqa: F401: фикстура
 from tests.otbor_pack_support import fill
-from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
+from tests.otbor_pack_support import pack  # noqa: F401: фикстура
 
 DASHES = re.compile("[–—]")
 
@@ -23,7 +23,7 @@ def test_dry_run_prints_the_split_calls_and_price_and_writes_nothing(exam_pack, 
     before = sorted(path.name for path in out.iterdir())
     model = ExamModel({})
     monkeypatch.setattr(otbor, "make_client", lambda: model)
-    # Цена входа — ноль, выхода — круглая и в прежнем порядке: в цене остаётся только оценка ответа (600 токенов
+    # Цена входа, ноль, выхода, круглая и в прежнем порядке: в цене остаётся только оценка ответа (600 токенов
     # на вызов).
     prices = {"gpt-6-luna": 0.5, "gpt-5.6-luna": 0.8, NANO: 1.0, MINI: 4.0, FULL: 10.0}
     for name, price in prices.items():
@@ -38,7 +38,7 @@ def test_dry_run_prints_the_split_calls_and_price_and_writes_nothing(exam_pack, 
     assert "настройка 32:" in printed and "экзамен 84:" in printed and "страницы-списки 1" in printed
     assert "Утверждено: утверждено владельцем" in printed
     assert "публикаций 84, прогонов на публикацию 3" in printed
-    # Лестница по умолчанию — кандидаты спеки и самые дешёвые из новых, по цене.
+    # Лестница по умолчанию: кандидаты спеки и самые дешёвые из новых, по цене.
     ladder = [line.split(":")[0].strip() for line in printed.splitlines() if ": вызовов 252" in line]
     assert ladder == list(prices)
     assert "gpt-6-luna: вызовов 252" in printed and "≈ $0.076" in printed  # 252 × 600 токенов × $0,5 за 1 млн
@@ -57,7 +57,7 @@ def test_the_exam_refuses_before_any_paid_call(exam_pack, monkeypatch):
         with pytest.raises(SystemExit, match=match):
             cli.main(["otbor-exam", "--markup", str(markup), *args])
 
-    # Экзамен — три прогона на строку (спека); меньше — только на настройке.
+    # Экзамен: три прогона на строку (спека); меньше: только на настройке.
     for runs in ("0", "1"):
         refused("--runs", "--runs", runs)
     # Модель без своей строки в таблице цен: лестница по цене и расход в отчёте солгали бы.
@@ -67,12 +67,12 @@ def test_the_exam_refuses_before_any_paid_call(exam_pack, monkeypatch):
     write_rows(out, lists, approved=None)
     refused("approved", "--part", "tuning", "--runs", "1", "--models", NANO)
     assert not (out / "otbor_exam_split.json").exists()
-    # Экзамен — только на утверждённых правилах: отметка о прежних инструкции и справочниках его не пускает.
+    # Экзамен, только на утверждённых правилах: отметка о прежних инструкции и справочниках его не пускает.
     write_rows(out, lists, approved="утверждено владельцем: инструкция 2026-10-01.1, справочники 2026-10-01.1")
     refused("не называет текущие правила", "--models", NANO)
     assert not (out / "otbor_exam_split.json").exists()
     write_rows(out, lists)
-    # Строки экзамена — решение владельца: без файла, с битым файлом и с чужими строками экзамен не идёт.
+    # Строки экзамена, решение владельца: без файла, с битым файлом и с чужими строками экзамен не идёт.
     rows = json.loads((out / ROWS_NAME).read_text(encoding="utf-8"))
     (out / ROWS_NAME).unlink()
     refused(ROWS_NAME)
@@ -81,11 +81,11 @@ def test_the_exam_refuses_before_any_paid_call(exam_pack, monkeypatch):
     write_rows(out, {**rows, "list_pages": ["signal:999999"]})
     refused("signal:999999")
     write_rows(out, rows)
-    # Битая выгрузка с ядра — до вызовов модели.
+    # Битая выгрузка с ядра: до вызовов модели.
     (out / "otbor_exam_control.json").write_text('{"strata": {"feed_rejected": "много"}}', encoding="utf-8")
     refused("otbor_exam_control.json")
     (out / "otbor_exam_control.json").unlink()
-    # Разметка с нарушениями — сначала otbor-markup-check.
+    # Разметка с нарушениями: сначала otbor-markup-check.
     number = next(item["id"] for item in exam_pack["items"] if item["group"] == "feed_accepted")
     broken = fill(out, {number: {"Брать или нет": None}}, name="otbor_markup_broken.xlsx")
     with pytest.raises(SystemExit, match="нарушениями"):
@@ -107,8 +107,8 @@ def test_core_control_counts_the_feed_strata_of_the_pack_window_and_judged_categ
     cli.main(["otbor-exam-control", "--manifest", str(pack["out"] / MANIFEST_NAME)])
 
     data = json.loads(capsys.readouterr().out)
-    # Кандидаты выборки в окне пакета: в синтетике их ровно по квоте — 50 отклонённых и 30 принятых гейтом (статьи до
-    # окна, без решения гейта, с архивного источника, страницы блокировки, перепечатки и прежние строки — не в счёт).
+    # Кандидаты выборки в окне пакета: в синтетике их ровно по квоте: 50 отклонённых и 30 принятых гейтом (статьи до
+    # окна, без решения гейта, с архивного источника, страницы блокировки, перепечатки и прежние строки: не в счёт).
     assert data["strata"] == {"feed_rejected": 50, "feed_accepted": 30}
     radar = {item["id"]: item for item in pack["items"] if item["origin"] == "radar"}
     assert set(data["rows"]) == set(radar)
@@ -128,7 +128,7 @@ def test_stream_estimate_category_control_and_monthly_price_come_from_the_core_c
     rows = {number: {"signal_category": "business" if number == wrong else "technology"} for number in radar}
     (out / "otbor_exam_control.json").write_text(json.dumps({"strata": {"feed_rejected": 2000, "feed_accepted": 3000},
                                                              "rows": rows}), encoding="utf-8")
-    monkeypatch.setitem(config.OPENAI_MODEL_PRICES, LUNA, (1.0, 0.0))  # 2000 токенов входа на вызов — $0.002
+    monkeypatch.setitem(config.OPENAI_MODEL_PRICES, LUNA, (1.0, 0.0))  # 2000 токенов входа на вызов: $0.002
 
     _, report = run_exam(monkeypatch, exam_pack["markup"], {LUNA: oracle(exam_pack)})
 
@@ -148,7 +148,7 @@ def test_stream_estimate_category_control_and_monthly_price_come_from_the_core_c
     assert stream["expert_accept"] == pytest.approx(sum(weight[one["group"]] for one in taken) / 5000)
     assert stream["agent_accept"] == pytest.approx(stream["expert_accept"])
     assert stream["gate_accept"] == pytest.approx(0.6)
-    # Контроль категории: статьи сбора — «бизнес», находки — судья (одна ошибка у взятых обоими).
+    # Контроль категории: статьи сбора: «бизнес», находки: судья (одна ошибка у взятых обоими).
     control_rows = [one for one in exam if one["codes"]["decision"] == "accept"
                     and one["group"] in ("feed_accepted", "card_markup", "radar_links")]
     control = agent["scores"]["labels"]["category"]["control"]
@@ -180,7 +180,7 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(exam_pack, monkey
         (one["model"], one["cost_usd"], one["calls"]) for one in first["models"]]
     assert second["models"][1]["scores"]["list_pages"]["rows"] == first["models"][1]["scores"]["list_pages"]["rows"] + 1
     assert second["decision"]["model"] == MINI
-    # Строки экзамена сменились после того, как ответы увидели: решение по ним — не то, что утверждали.
+    # Строки экзамена сменились после того, как ответы увидели: решение по ним: не то, что утверждали.
     assert second["rules_changed"] == ["rows"]
     readable = sorted(markup.parent.glob("otbor_exam_report_*.md"))[-1]
     assert "Правила изменились после исходного прогона" in readable.read_text(encoding="utf-8")
@@ -210,7 +210,7 @@ def test_readable_report_lies_next_to_the_manifest_with_the_quality_and_price_ta
 
 
 def test_the_exam_gives_the_agent_the_input_the_core_would(pack):
-    # Мерится тот вход, что модель получит на ядре: статья ленты и находка со ссылками — из базы через ядро и из
+    # Мерится тот вход, что модель получит на ядре: статья ленты и находка со ссылками: из базы через ядро и из
     # манифеста через экзамен.
     article = next(item for item in pack["items"] if item["group"] == "feed_rejected")
     finding = next(item for item in pack["items"] if item["group"] == "radar_links" and len(item["links"]) > 2)
@@ -230,7 +230,7 @@ def test_all_models_give_the_full_table_and_a_deprecated_model_is_measured_but_n
     model, report = run_exam(monkeypatch, markup, every, "--all")
     assert [one["model"] for one in report["models"]] == [NANO, MINI, FULL]
     assert all(one["passed"] for one in report["models"])
-    # gpt-5.4-nano прошла, но поставщик пометил её устаревшей: решение — следующая по цене.
+    # gpt-5.4-nano прошла, но поставщик пометил её устаревшей: решение: следующая по цене.
     assert report["decision"]["model"] == MINI
     assert report["deprecated"] == {NANO: otbor_exam.DEPRECATED[NANO]}
 
@@ -239,7 +239,7 @@ def test_all_models_give_the_full_table_and_a_deprecated_model_is_measured_but_n
     assert [one["model"] for one in report["models"]] == [NANO, MINI]
     assert {call["model"] for call in model.calls} == {NANO, MINI}
 
-    # Прошла только устаревшая — решения нет, причина в отчёте.
+    # Прошла только устаревшая: решения нет, причина в отчёте.
     _, report = run_exam(monkeypatch, markup, {NANO: oracle(exam_pack), MINI: always_take})
     assert report["decision"]["model"] is None
     assert "устаревшие" in report["decision"]["reason"]

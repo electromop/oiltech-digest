@@ -1,7 +1,7 @@
 """Качество источников и дефицит тем считаются по общей отметке (#111).
 
-19–20.10 на проде: оба запроса остались обычными строками, а не f-строками, и обрывок
-`{marks.article_marked_sql(...)}` уходил в базу буквально — агент источников падал с
+19-20.10 на проде: оба запроса остались обычными строками, а не f-строками, и обрывок
+`{marks.article_marked_sql(...)}` уходил в базу буквально: агент источников падал с
 синтаксической ошибкой на каждом прогоне. Тесты планировщика подменяют обе функции
 заглушками, поэтому здесь они идут на настоящей базе.
 """
@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from oiltech_digest.db import connection, marks, repository
 
 
-def test_source_quality_and_topic_gaps_count_shared_marks(isolated_db):
+def test_source_quality_counts_shared_marks(isolated_db):
     now = datetime.now(timezone.utc)
     user_id = int(repository.create_user("analyst@example.test", "long-enough-password")["id"])
     with connection.get_connection() as conn:
@@ -50,8 +50,6 @@ def test_source_quality_and_topic_gaps_count_shared_marks(isolated_db):
     quality = {row["source_id"]: row for row in repository.compute_source_quality_rows(period_from, period_to)}
     assert (quality[source_id]["digest_count"], quality[source_id]["noise_count"],
             quality[source_id]["duplicate_count"]) == (1, 1, 1)
-    gaps = {row["topic"]: row for row in repository.compute_topic_gap_rows(period_from, period_to)}
-    assert gaps["Технологии"]["digest_count"] == 1
     assert repository.snapshot_source_quality(period_from, period_to) >= 1
 
 

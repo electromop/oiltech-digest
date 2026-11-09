@@ -28,7 +28,7 @@ from oiltech_digest.ingestion.listing_cards import (
     spaced_text as _spaced_text,
 )
 from oiltech_digest.ingestion.listing_cards import link_key as _link_key
-# Разбор страницы статьи живёт в article_page; здесь — реэкспорт для прежних вызовов
+# Разбор страницы статьи живёт в article_page; здесь: реэкспорт для прежних вызовов
 # (playwright_parser, manual_import, source_diagnostics берут его из request_parser).
 from oiltech_digest.ingestion.article_page import first_non_empty as _first_non_empty
 from oiltech_digest.ingestion.article_page import parse_article_page
@@ -67,7 +67,7 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
 
 
 def listing_candidates(source: dict, article_limit: int = REQUEST_ARTICLE_LIMIT) -> list[CandidateLink] | None:
-    """Кандидаты ленты источника — так, как их берёт сбор. None — ленты нет: адрес не
+    """Кандидаты ленты источника: так, как их берёт сбор. None, ленты нет: адрес не
     задан или страница не скачалась. Зовут сбор и проба источника."""
     listing_url = source.get("listing_url") or source.get("url")
     if not listing_url:
@@ -87,7 +87,7 @@ def candidate_steps(
     """Рубежи сбора по каждому кандидату, в порядке сбора. Одна реализация на двоих:
     insert_candidates вставляет READY, проба источника спрашивает рубежи вставки. Ленивый:
     сбор вставляет кандидата прежде, чем смотрит следующего. `article_fetcher` отдаёт
-    ArticleFetch или, как fetch_article_candidate, запись/None (тогда отказ — fetch_failed)."""
+    ArticleFetch или, как fetch_article_candidate, запись/None (тогда отказ: fetch_failed)."""
     if article_fetcher is None:
         article_fetcher = fetch_article
 
@@ -96,11 +96,11 @@ def candidate_steps(
     # источники со структурно стабильным листингом (корпоративные newsroom без
     # даты в URL → published_at=None → сортировка по score вырождается в алфавит,
     # топ-N и его hash неизменны) навсегда застывали на первом улове:
-    #   1) short-circuit по last_listing_hash — пропускал ВЕСЬ источник;
-    #   2) break по last_seen_article_url — обрывал на первом же знакомом URL;
-    #   3) break по known_streak>=3 — обрывал, пряча новые статьи в хвосте списка.
+    #   1) short-circuit по last_listing_hash: пропускал ВЕСЬ источник;
+    #   2) break по last_seen_article_url: обрывал на первом же знакомом URL;
+    #   3) break по known_streak>=3: обрывал, пряча новые статьи в хвосте списка.
     # Теперь проходим всех кандидатов: знакомые (уже в БД) пропускаем без фетча,
-    # новые — добавляем. listing_hash по-прежнему пишем — для диагностики.
+    # новые: добавляем. listing_hash по-прежнему пишем: для диагностики.
     cutoff = verdicts.old_cutoff(source, max_age_days)
 
     for candidate in candidates:
@@ -148,7 +148,7 @@ def insert_candidates(
 
     Extracted from parse_source so alternative fetch backends (e.g. Playwright)
     can reuse the same insertion logic after obtaining their own candidate list.
-    Рубежи до вставки — candidate_steps, сама вставка — insert_article.
+    Рубежи до вставки: candidate_steps, сама вставка: insert_article.
     """
     listing_hash = _listing_hash(candidates)
     added = attempted = skipped_old = skipped_irrelevant = skipped_known = 0
@@ -199,7 +199,7 @@ def extract_candidate_links(source: dict | str, listing_url: str | bytes, conten
     except (ValueError, TypeError):
         return []
 
-    # <base href> — адрес, от которого страница велит разрешать относительные ссылки.
+    # <base href>: адрес, от которого страница велит разрешать относительные ссылки.
     # Его же браузер парсера вписывает после переадресации (with_base_href).
     base_href = doc.xpath("string(//base/@href)").strip()
     if base_href:
@@ -229,7 +229,7 @@ def fetch_article(candidate: CandidateLink, source: dict) -> ArticleFetch:
         return ArticleFetch(None, verdicts.FETCH_FAILED)
     final_url = final_url_of(candidate.url)
     if _moved_to_home_page(candidate.url, final_url):
-        # Сайт увёл со статьи на главную (переехал, статья снята) — это не статья.
+        # Сайт увёл со статьи на главную (переехал, статья снята) это не статья.
         return ArticleFetch(None, verdicts.REDIRECTED_HOME, detail=f"→ {final_url}")
     title, published_at, raw_text = parse_article_page(content, candidate.title, url=candidate.url,
                                                        fallback_date=candidate.published_at)
@@ -248,7 +248,7 @@ def fetch_article(candidate: CandidateLink, source: dict) -> ArticleFetch:
 
 
 def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | None:
-    """Запись статьи или None — для кода, которому причина не нужна (зарубежный воркер)."""
+    """Запись статьи или None: для кода, которому причина не нужна (зарубежный воркер)."""
     return fetch_article(candidate, source).article
 
 
@@ -256,7 +256,7 @@ def _moved_to_home_page(url: str, final_url: str | None) -> bool:
     """Переадресация со статьи на главную сайта (путь «/» без query).
 
     Сколково Energy (25.09): energy.skolkovo.ru отдаёт 301 на www.skolkovo.ru/ для ЛЮБОГО
-    адреса, и каждая «статья» была главной школы — общий заголовок сайта, описание кампуса.
+    адреса, и каждая «статья» была главной школы: общий заголовок сайта, описание кампуса.
     От вставки спасал только предфильтр (слово «ресторан» в описании), то есть случайность.
     Обычные переадресации статьи (слэш, https, www, красивый адрес вместо `?p=`) ведут не на
     главную; ссылка, которая сама указывает на главную с query (`/?p=678`), не судится.
@@ -278,7 +278,7 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
     nodes = _nodes_by_selector(doc, listing_selector) if listing_selector else []
     if not nodes:
         if listing_selector:
-            # Фоллбэк на весь документ — самый коварный исход: источник с настроенным
+            # Фоллбэк на весь документ, самый коварный исход: источник с настроенным
             # селектором собирает ссылки отовсюду (у СМИ это сквозной сайдбар общей ленты),
             # и выглядит это как рабочая настройка. Пусть будет видно в логе.
             logger.warning("listing_selector %r не нашёл узлов — беру всю страницу",
@@ -301,8 +301,8 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
                                 or published_at)
             seen.add(item.url)
             candidates.append((len(candidates), CandidateLink(item.url, item.title, item.score + 2, published_at)))
-    # Селектор задан человеком под эту ленту — её порядок и есть порядок свежести. С
-    # `listing_strategy='page_order'` — целиком, вместе с карточками без даты. Только
+    # Селектор задан человеком под эту ленту: её порядок и есть порядок свежести. С
+    # `listing_strategy='page_order'`: целиком, вместе с карточками без даты. Только
     # здесь, а не в общем разборе: без селектора первыми на странице идут шапка и меню.
     keep_page_order = (source.get("listing_strategy") or "").strip().lower() == PAGE_ORDER
     return _ordered(candidates, trust_page_order=True, keep_page_order=keep_page_order)
@@ -328,7 +328,7 @@ def _clean_query(query: str) -> str:
 
 def _build_candidate_from_anchor(home_url: str, base_host: str, node,
                                  trusted: bool = False) -> CandidateLink | None:
-    """`trusted` — ссылку выбрал селектор, заданный человеком под эту ленту. Тогда
+    """`trusted`: ссылку выбрал селектор, заданный человеком под эту ленту. Тогда
     общие эвристики «мусорности» её не отбрасывают: у Белоруснефти новости лежат по
     адресам `/detail-pages/event/…`, и фильтр против календарей мероприятий
     (слово `event`) резал всю ленту даже при правильном селекторе."""
@@ -351,29 +351,29 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node,
     # конкретную новость (бэклог заказчика #3). Трекинговые параметры отсекаем.
     query = _clean_query(parts.query)
     # Финальный слэш СОХРАНЯЕМ: на многих корпоративных РФ-сайтах (Bitrix) адрес без него
-    # отдаёт 404 — листинг читается, кандидаты извлекаются, а статей добавляется 0, и
+    # отдаёт 404: листинг читается, кандидаты извлекаются, а статей добавляется 0, и
     # источник выглядит «замолчавшим» (поймано на проде у Сургутнефтегаза 20.07).
     # rstrip нужен был только чтобы отсеять главную («/» → пусто), поэтому он остаётся
     # в ПРОВЕРКЕ ниже, но не в самом URL, по которому мы идём за статьёй.
     path = parts.path
     if path == "/":
-        # Корень схлопываем в пустой путь — как было раньше. Иначе query-only ссылки
+        # Корень схлопываем в пустой путь: как было раньше. Иначе query-only ссылки
         # (https://site?p=678) сменили бы форму на https://site/?p=678, а articles.url
         # уникален → уже сохранённые статьи вставились бы заново как дубликаты.
         path = ""
     clean_url = f"{parts.scheme}://{parts.netloc}{path}"
     if query:
         clean_url += f"?{query}"
-    # Главная/раздел без статейного таргета (нет ни пути, ни query) — не статья.
+    # Главная/раздел без статейного таргета (нет ни пути, ни query): не статья.
     if not path.rstrip("/") and not query:
         return None
-    # Ссылка на саму ленту («Новости» в меню, «перейти к содержимому») — не статья.
+    # Ссылка на саму ленту («Новости» в меню, «перейти к содержимому»): не статья.
     if not query and _link_key(clean_url) == _link_key(home_url):
         return None
     title = normalize.clean_html(_safe_text_content(node))
     card = None
     if len(title) < 18 or _GENERIC_LINK_TEXT_RE.match(title):
-        # Ссылка-картинка или «Подробнее»: заголовок — рядом, в карточке. Раньше такие
+        # Ссылка-картинка или «Подробнее»: заголовок: рядом, в карточке. Раньше такие
         # ссылки отбрасывались (текст < 18), и у Белоруснефти, Б1, «Яков и Партнёры»
         # лента не давала ни одного кандидата; а «View Press Release» (ровно 18 знаков)
         # у Weatherford прошёл бы заголовком статьи.
@@ -391,7 +391,7 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node,
         )
     )
     if published_at is None:
-        # Дата из текста карточки — только из карточки ЭТОЙ статьи, а не из общего
+        # Дата из текста карточки: только из карточки ЭТОЙ статьи, а не из общего
         # списка: иначе ссылка получит дату соседа.
         if card is None:
             card = _card_of(node, home_url, clean_url)
@@ -438,7 +438,7 @@ def _nodes_by_selector(node, selector: str | None) -> list:
     except Exception as exc:  # noqa: BLE001 - кривой селектор не должен валить парс источника
         # Молчать здесь нельзя: вызывающий код при пустом результате берёт ВСЮ страницу,
         # то есть отказ селектора выглядит как успешная фильтрация. Так пропал целый
-        # ImportError — cssselect не был в requirements, и любой CSS-селектор был no-op.
+        # ImportError: cssselect не был в requirements, и любой CSS-селектор был no-op.
         logger.warning("селектор %r не отработал (%s: %s)", selector, type(exc).__name__, exc)
         return []
 

@@ -29,7 +29,7 @@ def route_ai_processing() -> ExecutionDecision:
 
 
 def route_ai_bulk() -> ExecutionDecision:
-    """Пересчёт корпуса — своя полоса, если она включена; иначе как поток дня."""
+    """Пересчёт корпуса: своя полоса, если она включена; иначе как поток дня."""
     decision = route_ai_processing()
     if decision.queue_name == "external-ai" and config.AI_BULK_LANE_ENABLED:
         return ExecutionDecision("external-ai-bulk", "external", "openai", "ai_external_bulk")
@@ -46,7 +46,7 @@ def route_source_task(source: dict[str, Any], *, task_kind: str) -> ExecutionDec
     can_use_external = config.EXTERNAL_WORKERS_ENABLED and config.FETCH_EXTERNAL_ENABLED
     # Диагностику внешний воркер не исполняет (lanes.py): с 17.09 (гео-маршрут включён)
     # кнопка для западного источника ставила задачу, которая падала на NL с
-    # «Unsupported external job kind». Пока — взгляд с РФ-ядра, как до 17.09.
+    # «Unsupported external job kind». Пока: взгляд с РФ-ядра, как до 17.09.
     if task_kind == "diagnose":
         wants_external = False
     if wants_external and can_use_external:

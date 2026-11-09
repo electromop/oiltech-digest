@@ -27,7 +27,7 @@ def test_own_body_is_left_alone_without_downloading():
 
 
 def test_own_body_without_header_is_not_reprocessed():
-    # Своё тело, но без шапки (лид первым): по началу похоже на чужое — сверяем по тексту.
+    # Своё тело, но без шапки (лид первым): по началу похоже на чужое: сверяем по тексту.
     decision, _ = body_repair.plan_repair(_article(OWN_BODY), FEED_HTML)
 
     assert (decision.action, decision.reason) == ("skip", "same article as stored")

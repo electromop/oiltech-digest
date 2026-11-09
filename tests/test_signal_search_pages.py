@@ -1,7 +1,7 @@
 """Добор страниц находок радара (поручение владельца 04.11): при «Отборе» находка без текста издателя теряется, поэтому
-после запроса с NL идут PDF, сбор на РФ (страницу качает ядро по просьбе воркера) и браузер NL — до дедупа прогона и
-«Отбора» (порядок цикла Михаила 04.11). Шов 1 — контур целиком (tests/otbor_radar_support.py, докачка настоящая, сеть
-подменена): задача радара → воркер NL → адрес ядра /api/external-worker/jobs/{id}/page в аренде задачи → ядро. Шов 2 —
+после запроса с NL идут PDF, сбор на РФ (страницу качает ядро по просьбе воркера) и браузер NL: до дедупа прогона и
+«Отбора» (порядок цикла владельца продукта, 04.11). Шов 1: контур целиком (tests/otbor_radar_support.py, докачка настоящая, сеть
+подменена): задача радара → воркер NL → адрес ядра /api/external-worker/jobs/{id}/page в аренде задачи → ядро. Шов 2:
 запрос ядра (core_page.download): только публичные адреса, переадресации проверяются, размер ограничен; порядок шагов
 добора (publisher_page.read).
 """
@@ -20,8 +20,8 @@ from oiltech_digest.ingestion.source_diagnostics import ProbeResult
 from oiltech_digest.signal_research import PAGE_NOT_FETCHED
 from tests.otbor_radar_support import PAGE_TEXT, event, run_radar
 from tests.otbor_support import answer, decide
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import DRILLING, admin, api_get, tag, user, worker  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import DRILLING, admin, api_get, tag, user, worker  # noqa: F401: фикстуры
 from tests.test_document_parsing import make_pdf
 
 PUBLIC_IP = "93.184.216.34"
@@ -56,7 +56,7 @@ BOT_CHECK = ("<html><head><title>Проверяем браузер</title></head
 
 
 class _CoreResponse:
-    """Ответ сети ядра — как urllib3 без дочитывания (core_page._get): тело приходит сжатым gzip, разжатое — только
+    """Ответ сети ядра: как urllib3 без дочитывания (core_page._get): тело приходит сжатым gzip, разжатое: только
     по decode_content=True."""
 
     def __init__(self, status, body=b"", headers=None):
@@ -75,9 +75,9 @@ class _CoreResponse:
 
 
 class Net:
-    """Сеть теста: что отвечают запрос с NL, сеть ядра РФ и браузер NL по адресу; обращения — в calls. Ответ: байты —
-    страница; число — статус отказа; None — сайт молчит; у ядра ("redirect", адрес) — переадресация; у браузера
-    список — ответы попыток по очереди."""
+    """Сеть теста: что отвечают запрос с NL, сеть ядра РФ и браузер NL по адресу; обращения: в calls. Ответ: байты:
+    страница; число: статус отказа; None: сайт молчит; у ядра ("redirect", адрес): переадресация; у браузера
+    список: ответы попыток по очереди."""
 
     def __init__(self, monkeypatch, *, nl=None, core=None, browser=None, resolve=None):
         self.nl, self.core, self.browser = nl or {}, core or {}, browser or {}
@@ -179,7 +179,7 @@ def test_pdf_the_old_fetch_skipped_reaches_otbor_as_the_text_of_its_first_pages(
 
 def test_page_the_worker_could_not_open_is_fetched_by_the_core_and_passes_the_run_dedup(user, contour, monkeypatch):
     """Сбор на РФ (iadevon.ru 04.11: с NL молчит, с ядра РФ открылась): страницу качает ядро, и она проходит дедуп
-    прогона вместе с другой ссылкой того же события — «Отбор» решает одну находку с двумя ссылками."""
+    прогона вместе с другой ссылкой того же события: «Отбор» решает одну находку с двумя ссылками."""
     ru_text = PAGE_TEXT.replace("ADNOC Drilling", "ЛУКОЙЛ-Пермь")
     net = Net(monkeypatch, nl={OTHER_URL: html(OTHER_TITLE)}, core={RU_URL: html(RU_TITLE, ru_text)})
 
@@ -197,8 +197,8 @@ def test_page_the_worker_could_not_open_is_fetched_by_the_core_and_passes_the_ru
 
 
 def test_page_drawn_by_script_opens_in_the_browser_on_the_second_wait(user, contour, monkeypatch):
-    """wam.ae 04.11: запросу 20 знаков, ядру — молчание, браузер к готовности разметки отдал оболочку «WAM», к полной
-    загрузке — новость. Находка уходит в «Отбор» с текстом второй попытки."""
+    """wam.ae 04.11: запросу 20 знаков, ядру: молчание, браузер к готовности разметки отдал оболочку «WAM», к полной
+    загрузке: новость. Находка уходит в «Отбор» с текстом второй попытки."""
     net = Net(monkeypatch, nl={JS_URL: b"<html><head><title>WAM</title></head><body>WAM</body></html>"},
               browser={JS_URL: [SHELL, html(JS_TITLE)]})
 
@@ -214,7 +214,7 @@ def test_page_drawn_by_script_opens_in_the_browser_on_the_second_wait(user, cont
 
 def test_bot_check_page_is_not_the_publisher_text_and_the_core_brings_the_page(user, contour, monkeypatch):
     """scientica.ru 04.11 отдала NL «Проверяем браузер», и находка ушла в «Отклонённые» как страница-список. Проверка
-    браузера — не текст издателя: страницу приносит следующий шаг."""
+    браузера, не текст издателя: страницу приносит следующий шаг."""
     net = Net(monkeypatch, nl={RU_URL: BOT_CHECK}, core={RU_URL: html(RU_TITLE)})
 
     run_radar(monkeypatch, [event(RU_TITLE, RU_URL)], None)
@@ -277,7 +277,7 @@ def test_core_stops_reading_a_page_over_the_size_limit(monkeypatch):
 
 
 def test_core_page_address_answers_only_a_running_radar_job(user, contour, monkeypatch):
-    """Адрес ядра — в аренде задачи, как остальные адреса задачи воркера, и только для прогона радара: токен воркера
+    """Адрес ядра, в аренде задачи, как остальные адреса задачи воркера, и только для прогона радара: токен воркера
     сам по себе прокси на любой сайт не даёт."""
     Net(monkeypatch, core={RU_URL: html(RU_TITLE)})
     tag(DRILLING)
@@ -309,7 +309,7 @@ def test_worker_on_a_core_without_the_page_address_goes_on_without_it():
 
 
 def test_page_with_a_list_title_is_the_step_result_and_the_list_rule_decides_as_before(monkeypatch):
-    """aer.ca 04.11: «Bulletin 2026-45» — настоящая страница с коротким заголовком. Короткий заголовок дальше не ведёт:
+    """aer.ca 04.11: «Bulletin 2026-45»: настоящая страница с коротким заголовком. Короткий заголовок дальше не ведёт:
     правило страницы-списка решают отдельно (разбор 28), и её, как раньше, отсеет поиск."""
     url, title = "https://www.aer.example/bulletins/bulletin-2026-45", "Bulletin 2026-45"
     net = Net(monkeypatch, nl={url: html(title)}, browser={url: [html(title), html(title)]})
@@ -324,7 +324,7 @@ def test_page_with_a_list_title_is_the_step_result_and_the_list_rule_decides_as_
 @pytest.mark.parametrize("browser_enabled", [True, False])
 def test_shell_without_a_publication_is_not_the_publisher_text_and_the_browser_can_be_switched_off(
         monkeypatch, browser_enabled):
-    """Оболочка короче 500 знаков и после второй попытки браузера — баннер cookie, а не публикация: во вход «Отбора» её
+    """Оболочка короче 500 знаков и после второй попытки браузера, баннер cookie, а не публикация: во вход «Отбора» её
     текст не идёт. Браузер на NL выключается настройкой (память NL)."""
     monkeypatch.setattr(publisher_page.config, "SIGNAL_PAGE_BROWSER_ENABLED", browser_enabled)
     net = Net(monkeypatch, browser={JS_URL: [SHELL, SHELL]})

@@ -10,9 +10,9 @@ type Props = {
   showToast: ToastWriter;
 };
 
-// Два набора критериев (сессия G, ADR 0002) — вкладками, чтобы не засорять экран
+// Два набора критериев (сессия G, ADR 0002): вкладками, чтобы не засорять экран
 // (документ заказчика 19.09). У каждой вкладки свой список, своя сумма весов и своё «Сохранить».
-// Те же имена — в подписи балла на карточке сигнала (SignalRadarPage).
+// Те же имена: в подписи балла на карточке сигнала (SignalRadarPage).
 export const PROFILES: ReadonlyArray<{ id: ScoringProfile; label: string }> = [
   { id: "business", label: "Бизнес-сигналы" },
   { id: "tech_radar", label: "Технологический радар" },
@@ -21,7 +21,7 @@ export const PROFILES: ReadonlyArray<{ id: ScoringProfile; label: string }> = [
 export function ScoringPage({ onUnauthorized, showToast }: Props) {
   const [profile, setProfile] = useState<ScoringProfile>("business");
   const [criteria, setCriteria] = useState<ScoringCriterion[]>([]);
-  // Как в базе — по нему видно несохранённые правки вкладки.
+  // Как в базе: по нему видно несохранённые правки вкладки.
   const [stored, setStored] = useState<ScoringCriterion[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -123,7 +123,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
       } finally {
         setBusy(false);
       }
-      // Удаление уже в базе — это не несохранённая правка.
+      // Удаление уже в базе: это не несохранённая правка.
       setStored((prev) => prev.filter((row) => row.id !== item.id));
     }
     setCriteria((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
@@ -190,13 +190,13 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
           </div>
 
           {profile === "tech_radar" ? (
-            // Вариант Б3 ADR 0002 (подключён): судья радара ставит оценку по каждому критерию набора,
-            // итог считается по весам — как у статей. Набор едет в задачу при её постановке.
+            // Баллы ставит второй вызов «Карточки» по профилю категории сигнала (#132): модель оценивает каждый
+            // критерий набора, итог считается по весам. Набор едет в задачу при её постановке.
             <div className="archiveNotice scoringProfileNotice" role="status">
               <span>
-                Этим набором оцениваются карточки технологического радара: судья ставит балл по каждому
-                критерию, итог считается по весам. Изменения действуют со следующего прогона радара; уже
-                найденные карточки не пересчитываются. Статьи ленты оцениваются набором «Бизнес-сигналы».
+                Этим набором «Карточка» оценивает технологические сигналы ленты и радара: модель ставит балл по
+                каждому критерию, итог считается по весам. Изменения действуют на следующие оценки. Бизнес-сигналы
+                оцениваются набором «Бизнес-сигналы».
               </span>
             </div>
           ) : null}
@@ -229,7 +229,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                         onChange={(event) => updateCriterion(index, "description", event.target.value)}
                       />
                     </label>
-                    {/* RU и EN — друг под другом во всю ширину (документ заказчика 19.09):
+                    {/* RU и EN: друг под другом во всю ширину (документ заказчика 19.09):
                         рядом по 240 px длинный список ключей читался только прокруткой. */}
                     <KeywordsField
                       label="Ключевые слова RU / любые"
@@ -262,10 +262,10 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
   );
 }
 
-// Ключи — столбиком или через запятую, как на экране «Теги» (mergeKeywords): пустые куски
+// Ключи, столбиком или через запятую, как на экране «Теги» (mergeKeywords): пустые куски
 // отбрасываются, повтор без учёта регистра не добавляется. Пока поле в фокусе, в нём набранный
 // текст как есть: разбор на каждом нажатии съедал запятую и перевод строки в конце, и новое
-// слово было не начать. Список при этом обновляется сразу — «Сохранить» видит его без ухода из поля.
+// слово было не начать. Список при этом обновляется сразу: «Сохранить» видит его без ухода из поля.
 function KeywordsField(props: { label: string; values: string[] | null; onChange: (values: string[]) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (

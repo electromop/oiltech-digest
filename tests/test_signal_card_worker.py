@@ -1,4 +1,4 @@
-"""Агент «Карточка сигнала» (#96, спека #93), шов 2 — воркер карточки на подставной модели и
+"""Агент «Карточка сигнала» (#96, спека #93), шов 2: воркер карточки на подставной модели и
 контракт ядра с воркером: справочники в каждом вызове, брак ответа не роняет пачку, старая сборка
 отказывает явно, полосы дня и пересчётов, остановка воркера (tests/signal_card_support.py).
 """
@@ -10,7 +10,7 @@ from oiltech_digest.db import repository
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.signal_card_support import MODEL, FakeModel, answer, api_get, business, feed_signal, run_worker, worker
-from tests.signal_card_support import admin, contour, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import admin, contour, user  # noqa: F401: фикстуры
 
 
 def test_old_worker_build_does_not_get_the_new_card_job_and_check_lanes_shows_the_mismatch(user, admin, contour,
@@ -86,7 +86,7 @@ def test_no_model_no_fallback_to_the_feed_model(user, contour, monkeypatch, caps
     with pytest.raises(SystemExit, match="SIGNAL_CARD_MODEL"):
         cli.main(["enqueue-signal-cards"])
 
-    # Задача без модели (поставлена в обход шага) — явная ошибка воркера, а не модель ленты.
+    # Задача без модели (поставлена в обход шага): явная ошибка воркера, а не модель ленты.
     repository.create_background_job("signal_card", {"signal_ids": [1]}, queue_name="external-ai",
                                      execution_region="external", capability="openai")
     model = FakeModel({"Контракт SLB": answer()})
@@ -128,7 +128,7 @@ def test_named_signals_are_recalculated_in_the_bulk_lane(user, admin, contour, m
     model = FakeModel({"Контракт SLB": answer(), "Пилот робота": answer(event_type="пилот")})
     monkeypatch.setattr(signal_card, "make_client", lambda: model)
 
-    # До экзамена (флаг выключен) агент на проде не работает — и пересчёт названных тоже.
+    # До экзамена (флаг выключен) агент на проде не работает: и пересчёт названных тоже.
     monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", False)
     with pytest.raises(SystemExit, match="SIGNAL_CARD_ENABLED"):
         cli.main(["enqueue-signal-cards", "--ids", ",".join(map(str, ids))])
@@ -196,7 +196,7 @@ def test_core_writes_cards_only_for_the_signals_of_the_job(user, admin, contour,
     client = worker("external-ai")
     job = client.claim()
 
-    # Итог воркера — недоверенный ввод: в нём карточка сигнала, которого в задаче не было.
+    # Итог воркера, недоверенный ввод: в нём карточка сигнала, которого в задаче не было.
     result = signal_card.process_payload(job["payload"])
     result["cards"].append({"signal_id": ids["Чужой сигнал"], "publication": f"article:{foreign_article}",
                             "answer": answer(), "model": MODEL, "input_tokens": 1, "output_tokens": 1})
@@ -220,10 +220,10 @@ def test_scheduler_step_retries_a_failed_card_once(user, admin, contour, monkeyp
 
     jobs = api_get("/api/jobs", admin, kind="signal_card")
     silent = business(user)["Модель молчит"]["id"]
-    # Вторая попытка — на случай сбоя модели; дальше сигнал добирает прогон по истории, а не каждый цикл.
+    # Вторая попытка: на случай сбоя модели; дальше сигнал добирает прогон по истории, а не каждый цикл.
     assert sorted(job["payload"]["signal_ids"] for job in jobs) == sorted(
         [[business(user)["Контракт SLB"]["id"], silent], [silent]])
 
-    answers["Модель молчит"] = answer(event_type="пилот")  # модель ожила — но попытки шага исчерпаны
+    answers["Модель молчит"] = answer(event_type="пилот")  # модель ожила: но попытки шага исчерпаны
     cli.main(["enqueue-signal-cards"])
     assert len(api_get("/api/jobs", admin, kind="signal_card")) == 2

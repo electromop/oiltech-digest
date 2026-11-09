@@ -165,7 +165,7 @@ def test_two_people_in_group_do_not_mix(env):
 
     say(bot, 1, "Заголовок Ивана про сделку", reply_to=first_prompt)
     say(bot, 2, "https://example.com/news?id=1.", reply_to=second_prompt)
-    say(bot, 2, "чужой ответ на вопрос Ивана", reply_to=first_prompt)  # не его вопрос — молчим
+    say(bot, 2, "чужой ответ на вопрос Ивана", reply_to=first_prompt)  # не его вопрос: молчим
 
     assert bot.dialogs[(GROUP, 1)].data["title"] == "Заголовок Ивана про сделку"
     assert bot.dialogs[(GROUP, 1)].step == "description"
@@ -231,7 +231,7 @@ def test_file_with_caption_takes_title_and_is_uploaded(env):
     assert file == ("Обзор рынка ГРП.pdf", b"%PDF")
     assert material["title"] == "Обзор рынка ГРП за 9 месяцев" and material["companies"] == []
     assert material["verdict_comment"] == "Пригодится для дайджеста"
-    # Сообщение с файлом остаётся в группе: коллеги открывают файл там, итоговая карточка — ответ на него.
+    # Сообщение с файлом остаётся в группе: коллеги открывают файл там, итоговая карточка: ответ на него.
     assert file_message["message_id"] not in deleted(tg)
     final = next(params for method, params in tg.calls if method == "sendMessage" and "Проверьте карточку" in params["text"])
     assert final["reply_parameters"]["message_id"] == file_message["message_id"]
@@ -278,7 +278,7 @@ def test_unexpected_error_does_not_stop_the_bot_and_tells_the_author(env):
     и бот уйдёт в петлю перезапусков."""
     bot, tg, core, _ = env
     walk_event(bot, tg)
-    core.error = KeyError("material")  # ответ ядра не той формы — не CoreError
+    core.error = KeyError("material")  # ответ ядра не той формы: не CoreError
 
     press(bot, tg, 1, "m:1:send:", message_id=tg.next_id)
 
@@ -447,7 +447,7 @@ def test_card_is_html_escaped():
 
 
 def test_long_card_fits_telegram_message_limit():
-    """Сообщение Telegram — до 4096 знаков после разбора HTML, в единицах UTF-16. Карточка с полями по
+    """Сообщение Telegram: до 4096 знаков после разбора HTML, в единицах UTF-16. Карточка с полями по
     максимуму туда не влезала: Telegram её не принимал, и ввод висел без объяснения."""
     data = {"kind": "link", "title": "з" * cm.TITLE_MAX, "description": "о" * cm.DESCRIPTION_MAX,
             "url": "https://example.com/" + "a" * (cm.URL_MAX - 20),

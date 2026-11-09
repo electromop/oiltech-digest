@@ -1,16 +1,16 @@
 import { Fragment } from "react";
 import type { Signal } from "../../api/types";
 
-// Атрибуты карточки сигнала (#97, спека #93) на обоих экранах: бизнес-ленте и радаре. С пересмотра 23.10 — строкой
+// Атрибуты карточки сигнала (#97, спека #93) на обоих экранах: бизнес-ленте и радаре. С пересмотра 23.10: строкой
 // под заголовком (тема, компании, регион, дата события) и таблицей в раскрытой карточке, а не рядом чипов.
-// Значения ставит агент «Карточка сигнала» (#96) из справочников; «не определено» — его ответ «по тексту
+// Значения ставит агент «Карточка сигнала» (#96) из справочников; «не определено»: его ответ «по тексту
 // понять нельзя». Это пробел карточки, и его видно, а не прячется.
 
 export const UNDEFINED = "не определено";
 const GAP_HINT = "Не определено: по тексту публикации значение понять нельзя";
 const NOT_FILLED = "Карточка ещё не заполнена";
 
-// Справочные поля карточки: колонка сигнала, параметр фильтра экрана и подписи — одни для чипов и
+// Справочные поля карточки: колонка сигнала, параметр фильтра экрана и подписи: одни для чипов и
 // фильтров (SignalCardFilters), чтобы подпись поля на экране была одна.
 export const CHOICE_FIELDS = [
   { field: "event_type", filter: "eventType", label: "Тип события", any: "Любой тип" },
@@ -32,8 +32,8 @@ const DATE_SET_BY_LABELS: Record<string, string> = { radar_judge: "по оцен
 
 type Chip = { key: string; label: string; value: string; gap: boolean };
 
-// Пробел карточки — поле заполняли (агент или человек: card_set_by), а значения нет. Поле, которое ещё
-// никто не заполнял, — не пробел: «не определено» сказало бы, что агент не смог, а он не начинал.
+// Пробел карточки, поле заполняли (агент или человек: card_set_by), а значения нет. Поле, которое ещё
+// никто не заполнял, не пробел: «не определено» сказало бы, что агент не смог, а он не начинал.
 function isGap(signal: Signal, key: string, value: unknown): boolean {
   if (value === UNDEFINED) return true;
   const empty = value == null || value === "" || (Array.isArray(value) && value.length === 0);
@@ -41,14 +41,14 @@ function isGap(signal: Signal, key: string, value: unknown): boolean {
 }
 
 function cardChips(signal: Signal): Chip[] {
-  // Категория — признак сигнала, она есть всегда; без неё — находка радара до 29.09, радар считает её технологией.
+  // Категория: признак сигнала, она есть всегда; без неё: находка радара до 29.09, радар считает её технологией.
   const category = signal.signal_category || "technology";
   const chips: Chip[] = [{ key: "category", label: "Категория", value: CATEGORY_LABELS[category] || category, gap: false }];
   for (const { field, label } of CHOICE_FIELDS) {
     const value = signal[field];
     if (isGap(signal, field, value)) chips.push({ key: field, label, value: UNDEFINED, gap: true });
     else if (value) chips.push({ key: field, label, value, gap: false });
-    // Страны события (#137) — после региона: где событие произошло. Страна участника — у его имени (Компании).
+    // Страны события (#137), после региона: где событие произошло. Страна участника: у его имени (Компании).
     if (field === "region") {
       const countries = signal.event_countries;
       const key = "event_countries";
@@ -57,7 +57,7 @@ function cardChips(signal: Signal): Chip[] {
       else if (countries?.length) chips.push({ key, label, value: countries.join(", "), gap: false });
     }
   }
-  // «Не определено» у связи с нефтесервисом — пусто при пометке агента (код радара: direct / transferable / none).
+  // «Не определено» у связи с нефтесервисом, пусто при пометке агента (код радара: direct / transferable / none).
   const relevance = signal.oilfield_relevance;
   const label = "Связь с нефтесервисом";
   if (isGap(signal, "oilfield_relevance", relevance)) chips.push({ key: "relevance", label, value: UNDEFINED, gap: true });
@@ -66,7 +66,7 @@ function cardChips(signal: Signal): Chip[] {
 }
 
 function formatEventDate(value: string | null | undefined, precision?: string | null): string {
-  // Дата без часового пояса (ГГГГ-ММ-ДД): строкой, без Date — в Date она сдвинулась бы на сутки. У месяца и года
+  // Дата без часового пояса (ГГГГ-ММ-ДД): строкой, без Date: в Date она сдвинулась бы на сутки. У месяца и года
   // (#132) первый день периода не показывается: «09.2026», «2026».
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
   if (!match) return "";
@@ -75,8 +75,8 @@ function formatEventDate(value: string | null | undefined, precision?: string | 
   return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
-// Дата события и откуда она взята: у агента (#96) — «из текста» или «по дате публикации», у судьи радара
-// и человека — кто её поставил. Дата без пометки — карточка до #96 («нашёл очень старый сигнал», 29.09).
+// Дата события и откуда она взята: у агента (#96): «из текста» или «по дате публикации», у судьи радара
+// и человека: кто её поставил. Дата без пометки: карточка до #96 («нашёл очень старый сигнал», 29.09).
 export function eventDateLabel(signal: Signal): { text: string; gap: boolean } | null {
   const day = formatEventDate(signal.event_date, signal.event_date_precision);
   const setBy = signal.card_set_by?.event_date ?? "";
@@ -88,9 +88,9 @@ export function eventDateLabel(signal: Signal): { text: string; gap: boolean } |
   return isGap(signal, "event_date", source === UNDEFINED ? UNDEFINED : null) ? { text: `Событие: ${UNDEFINED}`, gap: true } : null;
 }
 
-// «Почему важно нефтесервису» агент пишет в прежнее поле судьи «почему интересно» (#96): подпись — по тому,
-// кто текст написал. Агент или человек — «почему важно»; ревью пачки радара — «почему интересно» с его
-// баллом. Пустое поле лента показывает пробелом (строка карточки), радар — не показывает, как раньше.
+// «Почему важно нефтесервису» агент пишет в прежнее поле судьи «почему интересно» (#96): подпись: по тому,
+// кто текст написал. Агент или человек: «почему важно»; ревью пачки радара: «почему интересно» с его
+// баллом. Пустое поле лента показывает пробелом (строка карточки), радар: не показывает, как раньше.
 export function whyBlock(signal: Signal, business: boolean): { label: string; text: string } | null {
   const setBy = signal.card_set_by?.why_interesting;
   const byCard = setBy === "agent" || setBy === "human";
@@ -107,7 +107,7 @@ type CompanyEntry = { name: string; country?: string | null };
 
 type Props = {
   signal: Signal;
-  // Клик по компании — «всё про компанию»: фильтр по ней в этой витрине.
+  // Клик по компании, «всё про компанию»: фильтр по ней в этой витрине.
   onCompany: (name: string) => void;
 };
 
@@ -132,9 +132,9 @@ function CompanyButtons({ companies, onCompany }: { companies: CompanyEntry[]; o
   );
 }
 
-// Под заголовком свёрнутой карточки (пересмотр 23-25.10: «много флагов и плашек — непонятно, о чём речь»): тема
-// строкой, ниже — кто, где и когда с подписями и без точек-разделителей: «SLB  Регион: …  Дата события: …».
-// Пробелы и служебное — в раскрытой карточке. Подпись «Регион», как у поля карточки (решение владельца 25.10): страны
+// Под заголовком свёрнутой карточки (пересмотр 23-25.10: «много флагов и плашек, непонятно, о чём речь»): тема
+// строкой, ниже, кто, где и когда с подписями и без точек-разделителей: «SLB  Регион: …  Дата события: …».
+// Пробелы и служебное: в раскрытой карточке. Подпись «Регион», как у поля карточки (решение владельца 25.10): страны
 // у карточки пока нет (#128).
 export function SignalCardLine({ signal, onCompany }: Props) {
   const companies = companiesOf(signal);
@@ -167,10 +167,10 @@ export function SignalCardLine({ signal, onCompany }: Props) {
   );
 }
 
-// wide — значение во всю строку таблицы (длинная причина отклонения).
+// wide: значение во всю строку таблицы (длинная причина отклонения).
 type Extra = { key: string; label: string; value: string; wide?: boolean };
 
-// Атрибуты раскрытой карточки — таблица «подпись: значение» вместо ряда чипов. «Не определено» — видимый
+// Атрибуты раскрытой карточки, таблица «подпись: значение» вместо ряда чипов. «Не определено»: видимый
 // пробел карточки (пунктир), а не пропуск.
 export function SignalAttributes({ signal, onCompany, extra = [] }: Props & { extra?: Extra[] }) {
   const companies = companiesOf(signal);

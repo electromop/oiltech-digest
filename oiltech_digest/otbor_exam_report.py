@@ -17,7 +17,7 @@ from oiltech_digest.otbor_exam_score import BALANCED_MIN, SLICES, THRESHOLDS
 REPORT_PREFIX = "otbor_exam_report_"
 PART_RU = {"exam": "экзамен", "tuning": "настройка"}
 _CLASS_RU = {"accept": "«брать»", "reject": "«не брать»"}
-# Проваленная проверка — коротко, для таблицы и строки решения; в JSON остаются коды.
+# Проваленная проверка: коротко, для таблицы и строки решения; в JSON остаются коды.
 _FAILED_RU = {"feed_random": "лента", "radar": "радар", "chain": "цепочка", "balanced": "сбалансированная",
               "industry": "отрасль", "oilfield_relevance": "связь", "reject_reason": "причина", "category": "категория"}
 _RULES_RU = {"thresholds": "пороги меток", "balanced_min": "граница сбалансированной доли",
@@ -62,7 +62,7 @@ def write(folder: Path, report: dict[str, Any]) -> tuple[Path, Path]:
 
 def read(path: Path) -> dict[str, Any]:
     """Сохранённый отчёт для пересчёта без вызовов модели. Файл лежит на диске и его правят руками: устройство
-    проверяется до счёта, битый отчёт — ValueError с именем файла, а не трасса посреди пересчёта."""
+    проверяется до счёта, битый отчёт: ValueError с именем файла, а не трасса посреди пересчёта."""
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:

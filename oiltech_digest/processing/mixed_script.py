@@ -1,9 +1,9 @@
 """Слова из двух алфавитов в сохранённых карточках: починка без ИИ и перегенерация.
 
 Двойники и склейку (normalize_scripts) можно чинить по всему корпусу: меняется только
-алфавит буквы и пробел на стыке. Остальные правила словаря так не гоняются — они
+алфавит буквы и пробел на стыке. Остальные правила словаря так не гоняются: они
 заменяют слова и в старых карточках без ревью ломали бы падеж (ревью 25.09). Полуперевод
-(«управляego», «наshore») лечит только новый ответ модели — отсюда выборка на
+(«управляego», «наshore») лечит только новый ответ модели: отсюда выборка на
 перегенерацию сути.
 """
 
@@ -34,7 +34,7 @@ def _cards(conn, article_ids: list[int] | None) -> list[tuple[int, str | None, s
 
 
 def repair_cards(*, apply: bool = False, article_ids: list[int] | None = None) -> dict[str, Any]:
-    """normalize_scripts по title_ru и summary. Запись — только если поле не менялось с чтения."""
+    """normalize_scripts по title_ru и summary. Запись: только если поле не менялось с чтения."""
     changes = []
     with connection.get_connection() as conn:
         for article_id, title_ru, summary, _title in _cards(conn, article_ids):
@@ -59,15 +59,15 @@ def repair_cards(*, apply: bool = False, article_ids: list[int] | None = None) -
 def resummarize_selection(article_ids: list[int] | None = None) -> dict[str, list[int]]:
     """Статьи, где слово из двух алфавитов останется и после normalize_scripts (или явный список).
 
-    Брак в сути — перегенерация сути (и перевода заголовка вместе с ней); только в
-    переведённом заголовке — перевод заголовка. Русский заголовок — копия исходника
+    Брак в сути: перегенерация сути (и перевода заголовка вместе с ней); только в
+    переведённом заголовке: перевод заголовка. Русский заголовок: копия исходника
     (перевод не нужен), брак в нём самом переводом не лечится: `source_title`, в задачи
     не идёт.
     """
     selection: dict[str, list[int]] = {"summary": [], "title": [], "source_title": []}
     with connection.get_connection() as conn:
         for article_id, title_ru, summary, title in _cards(conn, article_ids):
-            # Явный список — «перегенерировать эти»: суть — без проверки алфавита (так же
+            # Явный список, «перегенерировать эти»: суть: без проверки алфавита (так же
             # чинятся, например, 3 карточки со следом старой замены «в шельфовый», 25.09).
             if summary and (article_ids or mixed_script_words(normalize_scripts(summary))):
                 selection["summary"].append(int(article_id))
@@ -78,11 +78,11 @@ def resummarize_selection(article_ids: list[int] | None = None) -> dict[str, lis
 
 
 def enqueue_resummarize(summary_ids: list[int], title_ids: list[int], *, batch_size: int = 20) -> list[int]:
-    """Задачи внешнего контура: суть — process_articles с пометкой only, заголовок — translate_titles."""
+    """Задачи внешнего контура: суть: process_articles с пометкой only, заголовок: translate_titles."""
     decision = network_policy.route_ai_bulk()
     if decision.execution_region != "external":
         # Локальный конвейер пометки only не знает, а готовые стадии пропускает: у статьи
-        # с сутью он ничего не перегенерирует — задача прошла бы молча впустую.
+        # с сутью он ничего не перегенерирует: задача прошла бы молча впустую.
         raise RuntimeError("перегенерация сути идёт только через внешний контур ИИ")
     batch = max(1, batch_size)
     jobs = []

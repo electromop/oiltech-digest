@@ -1,7 +1,6 @@
-"""Обработка статей ленты: суть и перевод заголовка; общий с баллами сигнала счёт балла по критериям.
+"""Обработка статей ленты: суть и перевод заголовка; ключевые слова и ступень балла критерия, общие с баллами сигнала.
 
-С 08.11 ленту решает только «Отбор» (#130), тему и баллы ставит «Карточка» (#132): гейт ленты, тег и балл статьи сняты.
-Их стадии нужны только выключенному агенту источников и лежат у него (source_discovery/legacy_stages.py)."""
+Ленту решает «Отбор» (#130), тему и баллы ставит «Карточка» (#132): гейт ленты, тег и балл статьи сняты 08.11."""
 
 from __future__ import annotations
 
@@ -12,7 +11,7 @@ from typing import Any
 
 import logging
 
-from oiltech_digest import config, scoring_profiles
+from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
@@ -67,9 +66,9 @@ def process_translations(limit: int = 20, offline: bool = False) -> dict:
 def process_translation_articles(articles: list[dict], client) -> dict:
     """Отдельная стадия перевода заголовков: проставляет title_ru статьям без него.
 
-    Русские заголовки переводить не нужно — берём их как есть (без AI-вызова). AI
+    Русские заголовки переводить не нужно: берём их как есть (без AI-вызова). AI
     дёргается ТОЛЬКО для иностранных заголовков. Так бэкфилл по всей базе дешёвый:
-    платим лишь за реальный перевод. `ai` в статистике — сколько раз ходили в модель."""
+    платим лишь за реальный перевод. `ai` в статистике: сколько раз ходили в модель."""
     stats = {"processed": 0, "ai": 0, "errors": 0}
     for article in articles:
         try:
@@ -161,12 +160,12 @@ def summarize_article(article: dict, client) -> AIResponse:
 
 
 def _complete_one_script(call, field: str, article: dict) -> AIResponse:
-    """Вызов модели и словарь; слово из двух алфавитов — одна повторная попытка.
+    """Вызов модели и словарь; слово из двух алфавитов: одна повторная попытка.
 
     Двойники и склейку словарь чинит сам (normalize_scripts), а полуперевод
-    («управляego», «наshore», «электроэнergyю» — 56 статей на 25.09) — нет: такой
+    («управляego», «наshore», «электроэнergyю»: 56 статей на 25.09), нет: такой
     ответ переспрашиваем, назвав слова. Берём вариант, где смешанных слов меньше;
-    токены обоих вызовов — в один итог, чтобы расход в ai_processing_runs сошёлся.
+    токены обоих вызовов: в один итог, чтобы расход в ai_processing_runs сошёлся.
     """
     response = call("")
     text = enforce_glossary_text(str(response.data.get(field) or ""), article)
@@ -202,12 +201,12 @@ def _mixed_script_note(words: list[str]) -> str:
 
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
-    Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
+    Модель/effort, собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
     return _title_call(article, client, TRANSLATE_INSTRUCTIONS, TRANSLATE_SCHEMA)
 
 
 def edit_title_article(article: dict, client) -> AIResponse:
-    """Правка русского заголовка по правилам эксперта (#150, решение владельца 03.11): вход и модель — перевода."""
+    """Правка русского заголовка по правилам эксперта (#150, решение владельца 03.11): вход и модель: перевода."""
     return _title_call(article, client, EDIT_TITLE_INSTRUCTIONS, EDIT_TITLE_SCHEMA)
 
 
@@ -230,7 +229,7 @@ def _title_call(article: dict, client, instructions: str, schema: dict) -> AIRes
 
 def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -> tuple[str | None, AIResponse | None]:
     """Вернуть (title_ru, ai_response). Иностранный заголовок переводим через AI. Русский не переводим
-    (ai_response=None); с edit_russian — у принятой публикации — правим по правилам эксперта, если он
+    (ai_response=None); с edit_russian, у принятой публикации, правим по правилам эксперта, если он
     им не отвечает (title_follows_rules). Правка не берётся, остаётся заголовок издателя, если в ней число, которого
     нет в заголовке и тексте публикации, или имя, которого нет во входе модели (_title_prompt: заголовок, источник,
     начало текста, термины словаря). Пустой заголовок → (None, None)."""
@@ -254,10 +253,10 @@ def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -
     return (translated or title)[:200], response
 
 
-# Правила заголовка эксперта (#150), которые видно кодом; предел длины — prompts.TITLE_MAX_CHARS, тот же, что в
+# Правила заголовка эксперта (#150), которые видно кодом; предел длины: prompts.TITLE_MAX_CHARS, тот же, что в
 # инструкциях. Русский заголовок, который им отвечает, модель не правит (решение владельца 03.11): называет ли он
 # событие, а не публикацию, код не видит.
-# Тире между частями (кроме тире диапазона между числами: «2027–2029»), дефис с пробелами, черта, скобки.
+# Тире между частями (кроме тире диапазона между числами: «2027-2029»), дефис с пробелами, черта, скобки.
 _TITLE_PARTS = re.compile(r"(?<!\d)[–—]|[–—](?!\d)|\s-\s|[|()\[\]]")
 # Издание доменом: «Вести.ru», «Нефтегаз.РУ».
 _TITLE_DOMAIN = re.compile(r"\w\.(?:ru|рф|ру|su|com|net|org|info|io|media|tv|kz|by|uz)\b", re.IGNORECASE)
@@ -302,7 +301,7 @@ def _new_names(edited: str, seen: str) -> list[str]:
 
 def title_follows_rules(title: str, source_name: str | None = None) -> bool:
     """Отвечает ли заголовок правилам эксперта, которые видно кодом: не длиннее TITLE_MAX_CHARS знаков, без тире,
-    черты и скобок, без издания (доменом или именем источника в конце: издатель — автор события, его имя в начале
+    черты и скобок, без издания (доменом или именем источника в конце: издатель: автор события, его имя в начале
     и в середине не помеха), без обрыва, эмодзи и хэштегов."""
     text = " ".join(title.split())
     source = " ".join(re.sub(r"\([^)]*\)", " ", source_name or "").split()).casefold()
@@ -325,75 +324,17 @@ def _needs_translation(title: str) -> bool:
     return cyrillic / len(letters) < 0.5
 
 
-# Блендинг балла критерия. Оценка модели (ai_score) — ОСНОВНОЙ сигнал и НИЖНЯЯ граница:
+# Блендинг балла критерия. Оценка модели (ai_score), ОСНОВНОЙ сигнал и НИЖНЯЯ граница:
 # модель читает суть статьи. Ключевые слова (keyword_score) могут только ПОДНЯТЬ балл, но
-# никогда не топят — узкие списки ключей (нужно 3+ точных совпадения из ~10 на критерий)
+# никогда не топят: узкие списки ключей (нужно 3+ точных совпадения из ~10 на критерий)
 # почти всегда дают низкий keyword_score, и в прежней схеме (0.35·kw + 0.65·ai) он тянул
-# итог вниз: статья с ai=80 давала total ~57 (< порога 65), а 70+ требовал ai≈100 — поэтому
+# итог вниз: статья с ai=80 давала total ~57 (< порога 65), а 70+ требовал ai≈100: поэтому
 # до 65+ дотягивали единицы (инцидент 2026-06). Теперь:
 #   blended = SCORE_KEYWORD_WEIGHT·kw + SCORE_AI_WEIGHT·ai
 #   final   = max(ai, blended)   ← keyword добавляет вес только когда совпадений много (kw>ai)
-# Веса вынесены в константы — подстраивай после пилота на проде.
+# Веса вынесены в константы: подстраивай после пилота на проде.
 SCORE_KEYWORD_WEIGHT = 0.2
 SCORE_AI_WEIGHT = 0.8
-
-# #54: потолок подпункта статьи-инцидента без решения. Правило «инциденты — низко» жило только
-# в промпте, без числа, рядом с якорем «40-64: косвенно» — и удар по складу ГСМ взял ровно 60.
-# Модель теперь только классифицирует (incident_without_solution в ответе), а
-# потолок ставит код; число в промпте балла (у агента источников: legacy_stages.SCORING_INSTRUCTIONS) то же.
-INCIDENT_CRITERION_CAP = 30
-
-
-def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[str, Any]) -> dict:
-    by_id = {int(c["id"]): c for c in criteria}
-    ai_items = {int(item["criterion_id"]): item for item in payload.get("items", []) if item.get("criterion_id") in by_id}
-    items = []
-    weighted_total = 0.0
-    for criterion in criteria:
-        criterion_id = int(criterion["id"])
-        weight = float(criterion["weight"])
-        keyword_score = keyword_score_for_criterion(article, criterion)
-        ai_item = ai_items.get(criterion_id)
-        # Явная проверка наличия: легитимный ai_score=0 — это оценка, а не «нет ответа».
-        # Только если модель вообще не вернула критерий — падаем на детерминистский keyword.
-        if ai_item is not None and ai_item.get("ai_score") is not None:
-            ai_score = _clamp(float(ai_item["ai_score"]), 0, 100)
-        else:
-            ai_score = keyword_score
-        ai_score_raw = ai_score
-        if payload.get("incident_without_solution") is True:
-            # Потолок на оба слагаемых, а не на итог: признака инцидента среди сохранённых подпунктов нет,
-            # и final, пересчитанный из ai_score и keyword_score, иначе потерял бы потолок.
-            keyword_score = min(keyword_score, INCIDENT_CRITERION_CAP)
-            ai_score = min(ai_score, INCIDENT_CRITERION_CAP)
-        blended = (keyword_score * SCORE_KEYWORD_WEIGHT) + (ai_score * SCORE_AI_WEIGHT)
-        final_score = round(max(ai_score, blended), 2)
-        weighted_total += final_score * weight / 100
-        items.append(
-            {
-                "criterion_id": criterion_id,
-                "keyword_score": keyword_score,
-                "ai_score": ai_score,
-                # Оценка до потолка инцидента (#54). В базу не пишется (схема прежняя), а в итоге
-                # задачи остаётся (background_jobs.result_json): по ней видно, что срезал потолок.
-                "ai_score_raw": ai_score_raw,
-                "final_score": final_score,
-                "rationale": (ai_items.get(criterion_id) or {}).get("rationale") or "Keyword/AI blended score",
-            }
-        )
-    total_score = round(_clamp(weighted_total, 0, 100), 2)
-    return {
-        # Признак модели (#54) — тоже только в итоге задачи: ложное «да» уводит статью из ленты.
-        "incident_without_solution": payload.get("incident_without_solution") is True,
-        "total_score": total_score,
-        "score_label": score_label(total_score),
-        "explanation": payload.get("explanation") or "",
-        "items": items,
-        # Происхождение (сессия G): каким профилем и каким набором критериев посчитан балл —
-        # веса снимка те же, что дали итог выше. На NL — из критериев пакета.
-        "profile": scoring_profiles.profile_of(criteria),
-        "criteria_snapshot": scoring_profiles.criteria_snapshot(criteria),
-    }
 
 
 def keyword_score_for_criterion(article: dict, criterion: dict) -> float:
@@ -415,13 +356,13 @@ def score_label(score: float) -> str:
     return "Низкая"
 
 
-# Сколько знаков текста статьи видит модель сути (и стадии агента источников). По нему же fulltext_recompute решает,
+# Сколько знаков текста статьи видит модель сути. По нему же fulltext_recompute решает,
 # стоит ли пересчитывать суть после замены обрывка полным текстом.
 ARTICLE_PROMPT_TEXT_CHARS = 6000
 
 
 # Поля «Отбора» во входе «Суть и перевод» (#131, спека #128: передача между агентами): категория, связь с
-# нефтесервисом и применение — справочные значения, решения и обоснования «Отбора» нет. Ключ строки во входе — поле
+# нефтесервисом и применение: справочные значения, решения и обоснования «Отбора» нет. Ключ строки во входе: поле
 # публикации. У статьи, которую решил гейт, полей нет, и вход прежний.
 OTBOR_FIELDS = {"category": "signal_category", "oilfield_relevance": "oilfield_relevance",
                 "oilfield_application": "oilfield_application"}
@@ -432,8 +373,7 @@ def _otbor_lines(article: dict) -> list[str]:
 
 
 def _article_prompt(article: dict, *, otbor: bool = False) -> str:
-    """Вход сути по публикации (и тега и балла агента источников); otbor: с полями «Отбора» (только «Суть и перевод»,
-    #131)."""
+    """Вход сути по публикации; otbor: с полями «Отбора» (только «Суть и перевод», #131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
@@ -451,8 +391,8 @@ def _article_prompt(article: dict, *, otbor: bool = False) -> str:
 
 
 def _title_prompt(article: dict) -> str:
-    """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста); поля «Отбора», если
-    они есть, — как у сути (#131)."""
+    """Вход переводчика: только заголовок и контекст источника (дёшево, без полного текста); поля «Отбора», если
+    они есть, как у сути (#131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",

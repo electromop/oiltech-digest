@@ -1,8 +1,8 @@
 /* Дизайн-система OilTech Digest v2: токены.
-   Основа — IBM Carbon (плотность productive, прямоугольные формы), шрифт — корпоративный GPN Din, цвета — палитра
+   Основа: IBM Carbon (плотность productive, прямоугольные формы), шрифт: шрифт бренда с сервера, цвета: палитра
    «Как в выпуске» (выбор владельца 01.11): синий и оранжевый месячного выпуска, тёмно-синий шапки, холодные нейтральные.
    Два слоя: примитивы называют значение (--slate-80) и в компонентах не используются;
-   семантические токены называют роль (--ot-text-secondary) — только их берут компоненты.
+   семантические токены называют роль (--ot-text-secondary): только их берут компоненты.
    Старые имена (--brand, --line, --sem-*) оставлены алиасами ролей: 565 мест в CSS берут
    новый вид без правки, а новые правила пишутся сразу на --ot-*. */
 
@@ -107,7 +107,7 @@
   --ot-focus: var(--blue-70);
   --ot-focus-inset: var(--white);
   --ot-interactive: var(--blue-70);
-  /* Оранжевый выпуска — только метка «где я сейчас»: текущий раздел меню и нажатая плитка. */
+  /* Оранжевый выпуска, только метка «где я сейчас»: текущий раздел меню и нажатая плитка. */
   --ot-marker-current: var(--orange-60);
 
   /* --- Кнопки --- */
@@ -142,9 +142,9 @@
   --ot-toast-stripe: var(--blue-40);
   --ot-toast-stripe-error: var(--red-50);
 
-  /* --- Статусы: бледные заливки, тёмный текст (проходят 4.5:1), сплошные — для меток --- */
+  /* --- Статусы: бледные заливки, тёмный текст (проходят 4.5:1), сплошные: для меток --- */
   --ot-support-success: var(--green-50);
-  /* Жёлтая метка (полоса, точка) — тон 50: 3:1 к белому; тон 30 — только заливкой под тёмным текстом. */
+  /* Жёлтая метка (полоса, точка), тон 50: 3:1 к белому; тон 30: только заливкой под тёмным текстом. */
   --ot-support-warning: var(--amber-50);
   --ot-support-warning-fill: var(--amber-30);
   --ot-support-error: var(--red-70);
@@ -178,7 +178,7 @@
   --ot-origin-upload: var(--purple-50);
   --ot-origin-upload-bg: var(--purple-10);
   --ot-origin-upload-fg: var(--purple-80);
-  /* Плашка «Технология / Бизнес» — те же значения, что в самом выпуске (`_KIND_BADGE_COLORS`). */
+  /* Плашка «Технология / Бизнес»: те же значения, что в самом выпуске (`_KIND_BADGE_COLORS`). */
   --ot-kind-technology-bg: var(--blue-10);
   --ot-kind-technology-fg: var(--blue-70);
   --ot-kind-business-bg: var(--orange-10);
@@ -201,20 +201,20 @@
   --viz-good: var(--green-60);
   --viz-bad: var(--red-70);
 
-  /* --- Шрифт: GPN Din (400 и 700 — других начертаний у семейства нет) --- */
-  --ot-font-sans: "GPN Din", "Helvetica Neue", Arial, sans-serif;
-  --ot-font-display: "GPN Din Condensed", "GPN Din", "Arial Narrow", Arial, sans-serif;
+  /* --- Шрифт бренда с сервера (400 и 700, base.css); без файла следующий в списке --- */
+  --ot-font-sans: "Brand Sans", "Helvetica Neue", Arial, sans-serif;
+  --ot-font-display: "Brand Sans Condensed", "Brand Sans", "Arial Narrow", Arial, sans-serif;
   --ot-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ot-weight-regular: 400;
   --ot-weight-bold: 700;
 
   /* Шкала Carbon productive: роль = размер + интерлиньяж + трекинг. */
-  --ot-size-caption: 0.75rem;     /* 12px — подписи, метки полей, метаданные */
-  --ot-size-body: 0.875rem;       /* 14px — текст интерфейса */
-  --ot-size-body-lg: 1rem;        /* 16px — чтение: суть, цитаты */
-  --ot-size-heading-03: 1.25rem;  /* 20px — заголовок панели */
-  --ot-size-heading-04: 1.75rem;  /* 28px — крупные числа */
-  --ot-size-heading-05: 2rem;     /* 32px — заголовок экрана */
+  --ot-size-caption: 0.75rem;     /* 12px: подписи, метки полей, метаданные */
+  --ot-size-body: 0.875rem;       /* 14px: текст интерфейса */
+  --ot-size-body-lg: 1rem;        /* 16px, чтение: суть, цитаты */
+  --ot-size-heading-03: 1.25rem;  /* 20px: заголовок панели */
+  --ot-size-heading-04: 1.75rem;  /* 28px: крупные числа */
+  --ot-size-heading-05: 2rem;     /* 32px: заголовок экрана */
   --ot-leading-caption: 1.3333;
   --ot-leading-compact: 1.2857;
   --ot-leading-body: 1.4286;
@@ -235,12 +235,12 @@
   --ot-space-09: 3rem;
 
   /* --- Размеры контролов --- */
-  --ot-control-xs: 1.5rem;   /* 24px — метка */
-  --ot-control-sm: 2rem;     /* 32px — плотные строки, кнопки в карточках */
-  --ot-control-md: 2.5rem;   /* 40px — поля и кнопки по умолчанию */
-  --ot-control-lg: 3rem;     /* 48px — шапка, вход */
+  --ot-control-xs: 1.5rem;   /* 24px: метка */
+  --ot-control-sm: 2rem;     /* 32px: плотные строки, кнопки в карточках */
+  --ot-control-md: 2.5rem;   /* 40px: поля и кнопки по умолчанию */
+  --ot-control-lg: 3rem;     /* 48px: шапка, вход */
 
-  /* --- Форма и глубина: прямоугольник Carbon, глубина — слоями фона, тень только у плавающего --- */
+  /* --- Форма и глубина: прямоугольник Carbon, глубина: слоями фона, тень только у плавающего --- */
   --ot-radius: 0;
   --ot-radius-pill: 999px;
   --ot-shadow-raised: 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -268,16 +268,9 @@
   --shadow-sm: none;
   --text-soft: var(--ot-text-secondary);
   /* --text-muted лежит и на hover, и на шапках таблиц: там подсказочный тон даёт меньше 4.5:1,
-     поэтому приглушённый текст — вторичный. */
+     поэтому приглушённый текст: вторичный. */
   --text-muted: var(--ot-text-secondary);
   --brand: var(--ot-interactive);
   --brand-soft: var(--ot-selected-subtle);
   --radius: var(--ot-radius);
-  /* Имена, которые CSS использовал, но нигде не объявлял: номер кандидата источника рисовался
-     белым по прозрачному фону (var(--primary) пуст) и был не виден. */
-  --text: var(--ot-text-primary);
-  --primary: var(--ot-interactive);
-  --muted: var(--ot-text-secondary);
-  --blue: var(--ot-link);
-  --border: var(--ot-border-subtle);
 }

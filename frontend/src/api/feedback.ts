@@ -1,7 +1,7 @@
 import { apiFetch } from "./client";
 import type { FeedbackEntry, FeedbackReason, FeedbackSourceSummary } from "./types";
 
-// target=source — причины для ОС по источнику: сервер убирает те, что про сам сигнал.
+// target=source, причины для ОС по источнику: сервер убирает те, что про сам сигнал.
 export function listFeedbackReasons(target: "article" | "source") {
   return apiFetch<FeedbackReason[]>(`/api/feedback/reasons?target=${target}`);
 }

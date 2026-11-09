@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion import telegram_titles
 
-# Частоты «в скольких статьях встречается слово»: склеенное слово — только в своей статье.
+# Частоты «в скольких статьях встречается слово»: склеенное слово: только в своей статье.
 FREQUENCY = {
     "директоров": 40, "президент": 300, "иллинойсе": 3, "exxonmobil": 50, "exxon": 4, "mobil": 4,
     "казмунайгаз": 120, "каз": 1, "мунай": 1, "газ": 900, "квт": 60, "к": 5000,
@@ -46,7 +46,7 @@ def test_rare_left_word_is_cut_when_the_next_line_starts_with_a_common_word():
 def test_short_heading_is_joined_with_the_next_line_by_a_space():
     title = "#ФотоДняОткуда на Урале старинный замок из красного кирпича?"
 
-    # Хэштег рубрики («#ФотоДня») слитный с заглавными — режем только последний стык.
+    # Хэштег рубрики («#ФотоДня») слитный с заглавными: режем только последний стык.
     assert telegram_titles.split_glued_lines(title, FREQUENCY) == ["#ФотоДня", "Откуда на Урале старинный замок из красного кирпича?"]
     assert telegram_titles.repaired_title(title, FREQUENCY) == "#ФотоДня Откуда на Урале старинный замок из красного кирпича?"
 
@@ -60,7 +60,7 @@ def test_link_glued_to_a_word_ends_the_title():
 
 
 def test_brand_before_the_line_break_is_kept_whole():
-    """Ревью 25.09: брался первый стык — «КазМунайГазПрезидент» резался после «КазМунай»."""
+    """Ревью 25.09: брался первый стык: «КазМунайГазПрезидент» резался после «КазМунай»."""
     title = "Добыча на месторождениях выросла, сообщил КазМунайГазПрезидент компании"
 
     assert telegram_titles.repaired_title(title, FREQUENCY) == "Добыча на месторождениях выросла, сообщил КазМунайГаз"
@@ -75,7 +75,7 @@ def test_longest_known_brand_before_the_line_break_is_kept():
 
 
 def test_missing_space_after_a_short_word_is_not_a_line_break():
-    """Ревью 27.09: «добычу вЯНАО» резалось после «в» — строка не кончается предлогом."""
+    """Ревью 27.09: «добычу вЯНАО» резалось после «в»: строка не кончается предлогом."""
     frequency = {**FREQUENCY, "в": 9000, "на": 9000, "для": 3000, "e": 50, "янао": 200, "ямале": 100}
     for title in (
         "Компания нарастила добычу вЯНАО на 12% за первое полугодие",
@@ -101,7 +101,7 @@ def test_missing_space_after_a_short_word_is_not_a_line_break():
 
 
 def test_short_capitalized_prefix_is_a_brand_not_a_line_end():
-    # «Мега» известна корпусу, но «Мега|Фон» — бренд, а не конец строки.
+    # «Мега» известна корпусу, но «Мега|Фон»: бренд, а не конец строки.
     title = "Оператор МегаФон запустил связь на нефтяном месторождении"
 
     assert telegram_titles.repaired_title(title, FREQUENCY) == title
@@ -158,7 +158,7 @@ def test_repair_updates_title_and_copied_title_ru_only(isolated_db):
     with connection.get_connection() as conn:
         assert conn.execute("SELECT title FROM articles WHERE id = %s", (ids[0],)).fetchone()[0] == glued
         # title_ru отличается от заголовка только двойником (так бывает между заголовком и
-        # карточкой после repair-terminology --scripts-only) — это всё ещё копия заголовка.
+        # карточкой после repair-terminology --scripts-only): это всё ещё копия заголовка.
         conn.execute("UPDATE article_cards SET title_ru = %s WHERE article_id = %s", (glued.replace("о", "o", 1), ids[0]))
         conn.commit()
 
@@ -173,6 +173,6 @@ def test_repair_updates_title_and_copied_title_ru_only(isolated_db):
         titles = dict(conn.execute("SELECT id, title FROM articles").fetchall())
         cards = dict(conn.execute("SELECT article_id, title_ru FROM article_cards").fetchall())
     assert titles[ids[0]] == fixed and titles[ids[1]] == fixed
-    assert titles[ids[2]] == glued  # не Telegram — не наша починка
-    assert cards[ids[0]] == fixed  # копия заголовка — вместе с ним
+    assert titles[ids[2]] == glued  # не Telegram: не наша починка
+    assert cards[ids[0]] == fixed  # копия заголовка: вместе с ним
     assert cards[ids[1]] == "Свой перевод"  # свой перевод не трогаем

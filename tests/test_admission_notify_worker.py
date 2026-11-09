@@ -98,7 +98,7 @@ def test_worker_reports_telegram_failure_as_retryable(telegram):
 
 
 def test_contract_since_three_and_notify_lane():
-    # 3 — admission_notify (#113); номер растёт с каждым новым видом задачи (4 — «Отбор», #130).
+    # 3: admission_notify (#113); номер растёт с каждым новым видом задачи (4: «Отбор», #130).
     assert contract.CONTRACT >= 3
     assert lanes.serves("external-notify", "admission_notify")
     assert not lanes.serves("external-fetch", "admission_notify")

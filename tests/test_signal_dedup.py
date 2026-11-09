@@ -1,7 +1,7 @@
-"""Дедуп радара: одно событие — одна карточка (перенос механизма перепечаток MVP-1).
+"""Дедуп радара: одно событие: одна карточка (перенос механизма перепечаток MVP-1).
 
-Данные — с прода 18.09: четыре карточки про покупку Velocity Geomatics компанией
-ZenaTech, две — про завод сорбентов «Татнефти», пять обзоров лития из пластовых вод."""
+Данные: с прода 18.09: четыре карточки про покупку Velocity Geomatics компанией
+ZenaTech, две: про завод сорбентов «Татнефти», пять обзоров лития из пластовых вод."""
 
 import json
 
@@ -61,14 +61,14 @@ def test_pairs_found_by_title_or_company_but_never_between_two_reviewed_cards():
         # Старые неразобранные между собой не сверяются: иначе пара оплачивалась бы каждый день.
         _existing(7, "Литий из пластовых вод: перспективы", [], fresh=False),
         _existing(8, "Перспективы лития из пластовых вод", [], fresh=False),
-        # Издатель вместо компании — не общий участник.
+        # Издатель вместо компании: не общий участник.
         _existing(50, "Беспилотники над трубопроводом", ["bigchallenges.ru (источник)"]),
         _new("Дроны на буровой площадке", ["bigchallenges.ru (источник)"], key="drone"),
     ]
     pairs = {(nodes[i]["id"] if "id" in nodes[i] else "new", nodes[j].get("id", "new")) for i, j, _ in signal_dedup.find_pairs(nodes)}
 
     assert (18, 40) in pairs and (19, 40) in pairs
-    assert (18, 19) not in pairs  # оба разобраны Виктором
+    assert (18, 19) not in pairs  # оба разобраны экспертом
     assert (7, 8) not in pairs  # оба старые и неразобранные
     assert (50, "new") not in pairs  # общий только издатель
 
@@ -85,10 +85,10 @@ def test_star_not_chain_and_reviewed_card_is_never_hidden():
 
     assigned = signal_dedup.assign_duplicates(nodes, edges)
 
-    # Одобренная — главная, даже с меньшим баллом; 41 связана с ней только через 40 — не склеена.
+    # Одобренная: главная, даже с меньшим баллом; 41 связана с ней только через 40: не склеена.
     assert assigned[1] == (0, "та же сделка")
     assert 2 not in assigned
-    # Отклонённая Виктором остаётся на месте, свежий повтор уходит в неё.
+    # Отклонённая экспертом остаётся на месте, свежий повтор уходит в неё.
     assert 3 not in assigned
     assert assigned[4] == (3, "тот же завод")
 
@@ -174,7 +174,7 @@ def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(isolat
     old = _candidate("ZenaTech покупает Velocity", ["ZenaTech"], key="z1", url="https://a.example/1")
     run = {
         "topics": [
-            # Дубль стоит РАНЬШЕ своей главной карточки — порядок записи не должен это ломать.
+            # Дубль стоит РАНЬШЕ своей главной карточки: порядок записи не должен это ломать.
             {"topic": MARKET, "candidates": [
                 {"signal": repeat, "duplicate_of": {"signal_key": "t1"}, "duplicate_reason": "тот же завод"},
                 {"signal": old, "duplicate_of": {"signal_id": zena}, "duplicate_reason": "та же сделка"},
@@ -218,7 +218,7 @@ def test_merge_hides_repeat_counts_it_and_spares_reviewed(isolated_db):
     reviewed = repository.upsert_signal(_signal_row("reviewed", "ZenaTech и Velocity"))
     later = repository.upsert_signal(_signal_row("later", "Сделка ZenaTech"))
     repository.upsert_signal_evidence(repeat, {"source_url": "https://a.example/1", "title": "t"})
-    # Карточка без единой ссылки в список не попадает (сигнал 97) — у разобранной ссылка есть.
+    # Карточка без единой ссылки в список не попадает (сигнал 97): у разобранной ссылка есть.
     repository.upsert_signal_evidence(reviewed, {"source_url": "https://a.example/reviewed", "title": "t"})
     with repository.get_connection() as conn:
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, 'verdict', 'approved')",
@@ -227,9 +227,9 @@ def test_merge_hides_repeat_counts_it_and_spares_reviewed(isolated_db):
 
     assert repository.mark_signal_merged(repeat, main, "та же сделка") is True
     assert repository.mark_signal_merged(repeat, main) is False  # уже скрыта
-    assert repository.mark_signal_merged(reviewed, main) is False  # вердикт Виктора — не прячем
+    assert repository.mark_signal_merged(reviewed, main) is False  # вердикт эксперта: не прячем
     assert repository.mark_signal_merged(main, repeat) is False  # в свою же группу не уходит
-    # Главная, указанная через скрытую карточку, — корень группы.
+    # Главная, указанная через скрытую карточку, корень группы.
     assert repository.mark_signal_merged(later, repeat) is True
     assert repository.resolve_signal_merge_root(later) == main
 
@@ -269,7 +269,7 @@ def test_refound_link_of_hidden_card_goes_to_main_card_not_into_hidden_row(isola
     assert repository.mark_signal_merged(hidden, main, "та же сделка")
     again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="hidden", url="https://a.example/9")
 
-    # Результат без дедупа (старая сборка воркера, офлайн, судья ошибся) — ключ скрытой карточки.
+    # Результат без дедупа (старая сборка воркера, офлайн, судья ошибся): ключ скрытой карточки.
     result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again}]}]})
 
     assert {row["id"] for row in repository.list_signals(limit=10)} == {main}
@@ -317,7 +317,7 @@ def test_duplicate_carrying_key_of_reviewed_card_updates_that_card(isolated_db):
     result = _apply({"topics": [{"topic": GEO, "candidates": [
         {"signal": again, "duplicate_of": {"signal_id": target}}]}], "dedup": {"pairs": 1}})
 
-    # Разобранная остаётся собой и при ссылке — судья не переспорит разбор.
+    # Разобранная остаётся собой и при ссылке: судья не переспорит разбор.
     assert {row["id"] for row in repository.list_signals(limit=10)} == {target, owner}
     assert _urls(owner) == {"https://a.example/u"} and "https://a.example/u" not in _urls(target)
     assert result["all_signals"] == 1
@@ -371,8 +371,8 @@ def test_core_sets_dedup_cap_for_worker(monkeypatch):
 
 
 def test_earlier_unreviewed_card_stays_main_even_with_fewer_links():
-    """19.09: вчерашняя №55 FleetRabbit ушла в сегодняшнюю №99 — у той было на одну
-    ссылку больше, и номер карточки, на который ссылается Виктор, сменился."""
+    """19.09: вчерашняя №55 FleetRabbit ушла в сегодняшнюю №99: у той было на одну
+    ссылку больше, и номер карточки, на который ссылается эксперт, сменился."""
     older = _existing(55, "FleetRabbit: диспетчеризация", ["FleetRabbit"], score=55, urls=["u1"])
     newer = _existing(99, "FleetRabbit: оптимизация диспетчеризации", ["FleetRabbit"], score=55, urls=["u2", "u3"])
     older["signal"]["first_seen_day"] = "2026-09-18"
@@ -384,7 +384,7 @@ def test_earlier_unreviewed_card_stays_main_even_with_fewer_links():
 
 
 def test_company_written_as_list_pairs_with_single_company():
-    """№107 «EDF / MethaneSAT» и №3 «MethaneSAT» — одно событие, но пара не находилась:
+    """№107 «EDF / MethaneSAT» и №3 «MethaneSAT», одно событие, но пара не находилась:
     строка «edf / methanesat» не равна «methanesat» (20.09)."""
     nodes = [
         _existing(3, "Спутник MethaneSAT потерян на орбите", ["MethaneSAT"]),
@@ -415,11 +415,11 @@ def test_hidden_card_does_not_absorb_a_fresh_finding_unless_it_was_rejected():
 
     assigned = signal_dedup.assign_duplicates(nodes, edges)
 
-    # Скрытая без отказа — не главная: свежая находка останется своей карточкой на экране. Сама
+    # Скрытая без отказа, не главная: свежая находка останется своей карточкой на экране. Сама
     # скрытая числится дублем новой, но склейку «сохранённая → новая» ядро не пишет (_dedupe_run).
     assert 1 not in assigned
     assert assigned[0] == (1, "та же сделка")
-    # Отклонённая Виктором — главная, хоть и скрыта: её повтор не возвращается.
+    # Отклонённая экспертом, главная, хоть и скрыта: её повтор не возвращается.
     assert assigned[3] == (2, "тот же завод")
     # Одобренная, но убранная в архив, свежую не поглощает и сама дублем не становится.
     assert 4 not in assigned and 5 not in assigned
@@ -427,7 +427,7 @@ def test_hidden_card_does_not_absorb_a_fresh_finding_unless_it_was_rejected():
 
 def test_hidden_unreviewed_card_does_not_stay_main_over_a_visible_one():
     nodes = [
-        _hidden(_existing(3, "A", ["ZenaTech"], fresh=False)),  # раньше по дате — была бы главной
+        _hidden(_existing(3, "A", ["ZenaTech"], fresh=False)),  # раньше по дате: была бы главной
         _existing(9, "A2", ["ZenaTech"]),
     ]
     nodes[0]["signal"]["first_seen_day"] = "2026-09-13"
@@ -438,7 +438,7 @@ def test_hidden_unreviewed_card_does_not_stay_main_over_a_visible_one():
 
 def test_dedup_snapshot_marks_cards_hidden_by_quality_or_archive(isolated_db):
     visible = repository.upsert_signal(_signal_row("visible", "Покупка Velocity Geomatics"))
-    # Бизнес-находка видна в витрине «бизнес» (#95) — не скрытая; «другое» не видно нигде.
+    # Бизнес-находка видна в витрине «бизнес» (#95): не скрытая; «другое» не видно нигде.
     business = repository.upsert_signal({**_signal_row("business", "Сделка ZenaTech"), "signal_category": "business"})
     other = repository.upsert_signal({**_signal_row("other", "Отчёт ZenaTech"), "signal_category": "other"})
     archived = repository.upsert_signal(_signal_row("archived", "ZenaTech и Velocity"))
@@ -467,7 +467,7 @@ def test_worker_takes_hidden_flag_from_the_core_snapshot(monkeypatch):
     assert [node["hidden"] for node in seen["nodes"]] == [True, False]
 
 
-# Бизнес-карточку видно в витрине «бизнес» (#95): найденная снова её ссылка — её повтор
+# Бизнес-карточку видно в витрине «бизнес» (#95): найденная снова её ссылка: её повтор
 # (test_signal_unified_store), а не новая карточка. «Другое» не видно нигде.
 @pytest.mark.parametrize("hide", ["archive", "other"])
 def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_finding_for_otbor(isolated_db, hide):
@@ -488,14 +488,14 @@ def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_finding_for_otbor(
     assert repository.list_signals(limit=10) == []
     assert _urls(fresh) == {"https://a.example/1"} and _urls(hidden) == set()
     assert result["all_signals"] == 1
-    # Счётчик отдавшей ссылку пересчитан — в «Скрытых» не висит прежнее число.
+    # Счётчик отдавшей ссылку пересчитан: в «Скрытых» не висит прежнее число.
     with repository.get_connection() as conn:
         assert conn.execute("SELECT evidence_count FROM signals WHERE id = %s", (hidden,)).fetchone()[0] == 0
 
 
 def test_refound_archived_card_with_its_own_key_stays_archived(isolated_db):
-    # Тот же ключ (у одной ссылки ключ — от адреса) — это она же: архив — решение человека о
-    # карточке, повторная находка его не отменяет. Другой ключ — новая карточка (тест выше).
+    # Тот же ключ (у одной ссылки ключ, от адреса): это она же: архив: решение человека о
+    # карточке, повторная находка его не отменяет. Другой ключ: новая карточка (тест выше).
     archived = repository.upsert_signal(_signal_row("same", "Velocity Geomatics: первые данные"))
     repository.upsert_signal_evidence(archived, {"source_url": "https://a.example/1", "title": "t"})
     repository.archive_signals([archived], reason="test")
@@ -520,11 +520,11 @@ def test_hidden_reviewed_card_keeps_its_links(isolated_db):
     assert repository.visible_evidence_owners(["https://a.example/1"])["https://a.example/1"]["id"] == rejected
 
 
-# --- Блок А5 схемы агентов (04.11): одно событие из ленты и поиска — одна карточка; черновые данные находки -----
+# --- Блок А5 схемы агентов (04.11): одно событие из ленты и поиска: одна карточка; черновые данные находки -----
 
 HALLIBURTON_PAGE = "Halliburton acquires Keystone AS to strengthen digital well construction capabilities"
 HALLIBURTON_PAGE_2 = "Halliburton Buys Keystone AS for AI Software in Norway 2026"
-# Русские заголовки модели поиска — как у этих находок после «Сути и перевода» (прогон 51351, 04.11).
+# Русские заголовки модели поиска: как у этих находок после «Сути и перевода» (прогон 51351, 04.11).
 HALLIBURTON_RU = "Halliburton приобрела Keystone AS для развития цифрового строительства скважин"
 HALLIBURTON_RU_2 = "Halliburton купила норвежскую Keystone AS для развития ПО с ИИ"
 
@@ -539,7 +539,7 @@ def _feed(signal_id, title, title_ru=None, companies=(), *, fresh=True, urls=())
 
 
 def _finding_evidence(url, page_title, research_title, company, summary="Суть модели поиска"):
-    """Ссылка находки после докачки страницы: в title заголовок страницы, черновые данные поиска — в raw_payload."""
+    """Ссылка находки после докачки страницы: в title заголовок страницы, черновые данные поиска: в raw_payload."""
     return {"source_url": url, "title": page_title, "title_ru": page_title, "strength": 0.9,
             "raw_payload": {"evidence_source": "openai_web_search", "research_title": research_title,
                             "company": company, "research_summary": summary, "full_text_fetched": True}}
@@ -553,8 +553,8 @@ def _otbor_finding(key, url, page_title, research_title, company):
 
 
 def test_company_written_with_comma_or_legal_form_is_the_same_company():
-    # Черновая компания поиска (прогон 51351): «Halliburton; Keystone AS» и «Halliburton, Keystone AS» — одни
-    # участники; «Inc.» после запятой — не компания, иначе общим участником стали бы все «Inc.».
+    # Черновая компания поиска (прогон 51351): «Halliburton; Keystone AS» и «Halliburton, Keystone AS»: одни
+    # участники; «Inc.» после запятой: не компания, иначе общим участником стали бы все «Inc.».
     assert signal_dedup.company_keys({"companies": ["Halliburton; Keystone AS"]}) == \
         signal_dedup.company_keys({"companies": ["Halliburton, Keystone AS"]}) == {"halliburton", "keystone"}
     assert signal_dedup.company_keys({"companies": ["Select Water Solutions, Inc."]}) == {"select water solutions"}
@@ -562,7 +562,7 @@ def test_company_written_with_comma_or_legal_form_is_the_same_company():
 
 
 def test_drafts_of_the_search_catch_the_pair_its_page_titles_miss():
-    # Пара прогона 51351: заголовки страниц сходятся на 0,18 при пороге 0,25, компаний у находки нет — пара не
+    # Пара прогона 51351: заголовки страниц сходятся на 0,18 при пороге 0,25, компаний у находки нет: пара не
     # дошла до судьи, и событие стало двумя принятыми карточками (30812 и 30836).
     stored = _otbor_finding("a", "https://halliburton.example/keystone", HALLIBURTON_PAGE, HALLIBURTON_RU,
                             "Halliburton; Keystone AS")["signal"]
@@ -577,7 +577,7 @@ def test_drafts_of_the_search_catch_the_pair_its_page_titles_miss():
     nodes = [{"kind": "new", "reviewed": False, "fresh": True, "urls": [], "signal": view} for view in (first, second)]
     [(i, j, overlap)] = signal_dedup.find_pairs(nodes)
     assert (i, j) == (0, 1) and round(overlap, 2) == 0.33  # русские заголовки поиска
-    # Черновые данные — только у «Дедупа»: в сигнал (и во вход «Отбора») они не идут.
+    # Черновые данные, только у «Дедупа»: в сигнал (и во вход «Отбора») они не идут.
     assert first["title_ru"] == HALLIBURTON_RU and first["companies"] == ["Halliburton; Keystone AS"]
     assert first["summary"] == "Суть модели поиска"
     assert (stored["companies"], stored["summary"], "title_ru" in stored, "research_titles" in stored) == (
@@ -600,14 +600,14 @@ def test_feed_signal_is_paired_with_findings_and_fresh_radar_cards_but_not_with_
 
     pairs = {(i, j) for i, j, _ in signal_dedup.find_pairs(nodes)}
 
-    # Лента с лентой — перепечатки; со старой или разобранной карточкой радара лента не сверяется: дублем в такой
-    # паре стала бы лента, а её прогон не прячет; со скрытой — склейка экран не изменит.
+    # Лента с лентой, перепечатки; со старой или разобранной карточкой радара лента не сверяется: дублем в такой
+    # паре стала бы лента, а её прогон не прячет; со скрытой: склейка экран не изменит.
     assert {pair for pair in pairs if 5 not in pair and pair[0] < 2} == {(0, 2), (1, 2)}
     assert {(0, 5), (1, 5), (2, 5)} <= pairs
 
 
 def test_feed_signal_is_the_main_card_and_never_a_duplicate():
-    # Статья ленты пришла после находки прошлого прогона: главная — всё равно сигнал ленты, иначе (раньше — главная)
+    # Статья ленты пришла после находки прошлого прогона: главная: всё равно сигнал ленты, иначе (раньше: главная)
     # событие осталось бы двумя карточками: ленту прогон не прячет.
     feed = _feed(1, "Halliburton buys Keystone", "Halliburton купила Keystone", ["Halliburton"])
     feed["signal"]["first_seen_day"] = "2026-11-05"
@@ -616,7 +616,7 @@ def test_feed_signal_is_the_main_card_and_never_a_duplicate():
     approved = _existing(32, "Halliburton купила Keystone", ["Halliburton"], verdict="approved", fresh=False)
 
     assert signal_dedup.assign_duplicates([feed, radar], [(0, 1, "та же сделка")]) == {1: (0, "та же сделка")}
-    # Разобранная человеком карточка радара — главная для находки, но сигнал ленты её дублем не становится.
+    # Разобранная человеком карточка радара: главная для находки, но сигнал ленты её дублем не становится.
     found = _new("Halliburton приобрела Keystone", ["Halliburton"], key="new")
     assigned = signal_dedup.assign_duplicates([feed, approved, found], [(0, 1, "та же"), (1, 2, "та же")])
     assert assigned == {2: (1, "та же")}
@@ -630,7 +630,7 @@ def test_judge_sees_both_titles_of_a_card():
 
     card_a, card_b = prompt.split("Карточка B")
     assert "заголовок: Консорциум вложит" in card_a and "исходный заголовок: Consortium to invest" in card_a
-    assert "исходный заголовок" not in card_b  # у карточки один заголовок — одна строка
+    assert "исходный заголовок" not in card_b  # у карточки один заголовок: одна строка
 
 
 def test_worker_sends_a_finding_of_an_event_already_in_the_feed_into_the_feed_signal(monkeypatch):

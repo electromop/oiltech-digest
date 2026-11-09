@@ -23,11 +23,11 @@ def test_apply_overrides_changes_only_config_and_resets_dedup_state(isolated_db,
 
     Реестр применяется на КАЖДОМ деплое (bootstrap → apply-source-overrides), поэтому три
     свойства критичны:
-    1) статьи не затрагиваются — механизм не может потерять корпус;
-    2) при смене listing_url/стратегии сбрасываются last_listing_hash и last_seen_* — иначе
+    1) статьи не затрагиваются: механизм не может потерять корпус;
+    2) при смене listing_url/стратегии сбрасываются last_listing_hash и last_seen_*: иначе
        первый парс по новому URL закоротит на старом хэше от прежней попытки и добавит 0
        (ровно эти «замораживатели» уже ломали сбор, см. историю анти-заморозки);
-    3) идемпотентность — повторный прогон ничего не трогает (иначе каждый деплой сбрасывал бы
+    3) идемпотентность: повторный прогон ничего не трогает (иначе каждый деплой сбрасывал бы
        дедуп-состояние всем источникам и провоцировал перезагрузку старых статей).
     """
     now = datetime.now(timezone.utc)
@@ -38,7 +38,7 @@ def test_apply_overrides_changes_only_config_and_resets_dedup_state(isolated_db,
             "Тестовый источник",
             url="https://example.com",
             parse_strategy="request",
-            listing_url="https://example.com",          # старый (неверный) листинг — главная
+            listing_url="https://example.com",          # старый (неверный) листинг: главная
             last_listing_hash="старый-хэш",
             last_seen_article_url="https://example.com/old",
             last_seen_published_at=now - timedelta(days=5),
@@ -81,11 +81,11 @@ def test_apply_overrides_changes_only_config_and_resets_dedup_state(isolated_db,
     listing_url, strategy, listing_hash, seen_url, seen_at = row
     assert listing_url == "https://example.com/press-center"   # конфиг применён
     assert strategy == "request"
-    # Дедуп-состояние сброшено — иначе новый листинг не дал бы ни одной статьи.
+    # Дедуп-состояние сброшено: иначе новый листинг не дал бы ни одной статьи.
     assert listing_hash is None
     assert seen_url is None
     assert seen_at is None
-    # Статьи не тронуты — механизм не может потерять корпус.
+    # Статьи не тронуты: механизм не может потерять корпус.
     assert articles_left == 1
     assert article_still_there == 1
 
@@ -96,11 +96,11 @@ def test_apply_overrides_changes_only_config_and_resets_dedup_state(isolated_db,
 
 
 def test_apply_overrides_reports_unknown_source_name(isolated_db, monkeypatch):
-    """Неизвестное имя не роняет применение, но и НЕ применяется молча — считается в not_found.
+    """Неизвестное имя не роняет применение, но и НЕ применяется молча: считается в not_found.
 
     Реестр ключуется точным sources.name: опечатка в имени = оверрайд просто не сработает.
     На проде это выглядит как «починил, а источник всё так же молчит», поэтому счётчик
-    not_found — единственный сигнал. В bootstrap-логе деплоя он должен быть 0.
+    not_found: единственный сигнал. В bootstrap-логе деплоя он должен быть 0.
     """
     monkeypatch.setattr(
         source_overrides,
@@ -115,7 +115,7 @@ def test_apply_overrides_reports_unknown_source_name(isolated_db, monkeypatch):
 
 
 def test_source_overrides_registry_is_well_formed():
-    """Гигиена самого реестра — ловит опечатки до деплоя.
+    """Гигиена самого реестра: ловит опечатки до деплоя.
 
     Реестр правится руками и применяется на проде без ревью данных, поэтому проверяем:
     у каждой записи есть parse_strategy из известного набора, URL-поля выглядят как URL,
@@ -143,13 +143,13 @@ def test_source_overrides_registry_is_well_formed():
 
 
 def test_source_overrides_agree_with_the_seed_sheet():
-    """Реестр сверяется с ЕДИНСТВЕННЫМ источником правды об источниках — Excel-сидером.
+    """Реестр сверяется с ЕДИНСТВЕННЫМ источником правды об источниках: Excel-сидером.
 
     Две проверки, обе против одного и того же дефекта: оверрайд, который молча не применится.
     1) Имя, у которого в сидере ДВЕ строки (издание живёт сайтом и telegram-каналом под общим
-       именем), обязано нести `source_type` — иначе apply_overrides отбросит его как
+       именем), обязано нести `source_type`: иначе apply_overrides отбросит его как
        неоднозначный. Список таких имён НЕ захардкожен, а вычисляется из книги: появится
-       третий двойник — тест потребует source_type и для него.
+       третий двойник: тест потребует source_type и для него.
     2) Пара (name, source_type) обязана существовать в книге. Опечатка в типе («media»,
        «News» вместо «Media») даёт not_found, то есть тихий no-op на проде.
 
@@ -178,7 +178,7 @@ def test_source_overrides_agree_with_the_seed_sheet():
     for name, fields in registry.items():
         variants = seeded_types.get(name)
         if not variants:
-            continue  # источник заведён не через сидер — сверять не с чем
+            continue  # источник заведён не через сидер: сверять не с чем
         if len(variants) > 1:
             assert "source_type" in fields, (
                 f"{name!r}: в сидере {len(variants)} строки ({', '.join(sorted(variants))}) — "
@@ -191,7 +191,7 @@ def test_source_overrides_agree_with_the_seed_sheet():
                 f"(есть: {', '.join(sorted(variants))}) — оверрайд не найдёт строку"
             )
 
-    # Дубль ключа в dict-литерале молча теряется — ловим по исходнику.
+    # Дубль ключа в dict-литерале молча теряется: ловим по исходнику.
     source = Path(source_overrides.__file__).read_text(encoding="utf-8")
     body = source[source.index("SOURCE_OVERRIDES"):]
     keys = re.findall(r'^\s{4}"([^"]+)":\s*\{', body, re.M)
@@ -202,15 +202,15 @@ def test_source_overrides_agree_with_the_seed_sheet():
 def test_apply_overrides_picks_row_by_source_type_when_name_is_not_unique(isolated_db, monkeypatch):
     """При неуникальном `name` оверрайд обязан лечь на строку, выбранную по `source_type`.
 
-    Естественный ключ таблицы — пара `(name, source_type)`: одно издание живёт двумя
-    строками (сайт + telegram-канал) под ОДНИМ именем — «РБК Энергетика», «Интерфакс ТЭК»,
+    Естественный ключ таблицы, пара `(name, source_type)`: одно издание живёт двумя
+    строками (сайт + telegram-канал) под ОДНИМ именем: «РБК Энергетика», «Интерфакс ТЭК»,
     «Neftegaz.ru». Пока в реестре не было ни одного такого имени, дефект был латентным:
-    поиск шёл `WHERE name = %s` c `.fetchone()` — без `ORDER BY` и без `source_type`, то есть
+    поиск шёл `WHERE name = %s` c `.fetchone()`: без `ORDER BY` и без `source_type`, то есть
     какая строка вернётся, решал план запроса. Прогон на временной БД с seq scan клал
     оверрайд на ВЫКЛЮЧЕННУЮ telegram-строку: `changed=1`, а починен не тот источник.
 
     Здесь проверяется обе половины: нужная строка изменена И телеграм-двойник не тронут
-    (его `url`, `parse_strategy` и `enabled` — это отдельный рабочий источник, порча
+    (его `url`, `parse_strategy` и `enabled`: это отдельный рабочий источник, порча
     которого выглядела бы как «оверрайд применился успешно»).
     """
     with connection.get_connection() as conn:
@@ -246,17 +246,17 @@ def test_apply_overrides_picks_row_by_source_type_when_name_is_not_unique(isolat
             (telegram_id,),
         ).fetchone()
 
-    # Строка сайта — починена.
+    # Строка сайта: починена.
     assert site == ("https://www.rbc.ru/tags/?tag=нефть+и+газ", "request", "https://www.rbc.ru", True)
-    # Телеграм-двойник — нетронут целиком.
+    # Телеграм-двойник: нетронут целиком.
     assert telegram == (None, "telegram", "https://t.me/rbc_energy", False)
 
 
 def test_apply_overrides_refuses_ambiguous_name_instead_of_guessing(isolated_db, monkeypatch):
     """Имя без `source_type`, совпавшее с НЕСКОЛЬКИМИ строками, не применяется вслепую.
 
-    Молчаливый выбор «какой-нибудь» строки — худший исход: счётчик покажет `changed=1`,
-    а починен будет не тот источник (и заодно испорчен второй). Поэтому неоднозначность —
+    Молчаливый выбор «какой-нибудь» строки, худший исход: счётчик покажет `changed=1`,
+    а починен будет не тот источник (и заодно испорчен второй). Поэтому неоднозначность:
     это отказ с именем в отчёте, а не монетка.
     """
     with connection.get_connection() as conn:
@@ -290,7 +290,7 @@ def test_apply_overrides_refuses_ambiguous_name_instead_of_guessing(isolated_db,
 def test_apply_overrides_reports_missing_names_not_just_a_counter(isolated_db, monkeypatch):
     """Не найденное имя возвращается СПИСКОМ, а не только числом.
 
-    Вызов в bootstrap обёрнут в `|| true`, а CLI печатал лишь счётчик — промах по имени
+    Вызов в bootstrap обёрнут в `|| true`, а CLI печатал лишь счётчик: промах по имени
     выглядел как успешный деплой. Чтобы промах было видно, нужно само имя.
     """
     monkeypatch.setattr(
@@ -306,7 +306,7 @@ def test_apply_overrides_reports_missing_names_not_just_a_counter(isolated_db, m
 
 
 def test_apply_overrides_source_type_mismatch_is_reported_as_missing(isolated_db, monkeypatch):
-    """Запись с `source_type`, которого нет у источника, — промах, а не тихое применение.
+    """Запись с `source_type`, которого нет у источника, промах, а не тихое применение.
 
     Опечатка в `source_type` («Мedia», «news») не должна деградировать до поиска по одному
     имени: иначе сужение ключа, добавленное ради безопасности, само стало бы источником
@@ -336,16 +336,16 @@ def test_apply_overrides_source_type_mismatch_is_reported_as_missing(isolated_db
 
 
 def test_apply_overrides_sets_listing_selector(isolated_db, monkeypatch):
-    """Реестр умеет задавать `listing_selector` — без него JS-листинг чинится наполовину.
+    """Реестр умеет задавать `listing_selector`: без него JS-листинг чинится наполовину.
 
     Случай РБК (#61): выдача тега рисуется на JS, поэтому нужен playwright. Но на
-    отрендеренной странице ДВА блока ссылок — сама выдача тега (`div.search-item__wrap`,
+    отрендеренной странице ДВА блока ссылок: сама выдача тега (`div.search-item__wrap`,
     нефтегазовые заголовки) и сквозной сайдбар общей ленты (`div.js-news-feed-list`,
-    Марадона и теннисист). Кандидаты собираются из обоих, и по очкам сайдбар выигрывает —
+    Марадона и теннисист). Кандидаты собираются из обоих, и по очкам сайдбар выигрывает:
     замер на проде 24.08 дал 8 кандидатов из сайдбара и ноль из выдачи тега.
 
     `extract_candidate_links` при заданном селекторе возвращает ТОЛЬКО узлы из него
-    (`explicit[:limit]`), то есть селектор — единственный способ отсечь сайдбар. Раз чинить
+    (`explicit[:limit]`), то есть селектор: единственный способ отсечь сайдбар. Раз чинить
     источник положено через реестр, реестр обязан уметь и это поле.
     """
     with connection.get_connection() as conn:
@@ -378,13 +378,13 @@ def test_apply_overrides_sets_listing_selector(isolated_db, monkeypatch):
 
 
 def test_apply_overrides_sets_listing_strategy(isolated_db, monkeypatch):
-    """Реестр умеет задавать `listing_strategy` — иначе порядок ленты Petronas не починить.
+    """Реестр умеет задавать `listing_strategy`: иначе порядок ленты Petronas не починить.
 
     Свежайший релиз Petronas стоит первым в ленте, но без даты, и общее правило порядка
     (датированные вперёд) уводило его за лимит 12. Лечится признаком источника «порядок
-    страницы и есть свежесть» — `listing_strategy='page_order'`. Колонка в `sources` есть
+    страницы и есть свежесть»: `listing_strategy='page_order'`. Колонка в `sources` есть
     давно (правится и в админке), но реестр её не знал: прописанная, она молча не доехала
-    бы до базы — так уже было с селекторами JPT.
+    бы до базы: так уже было с селекторами JPT.
     """
     with connection.get_connection() as conn:
         source_id = _add_source(
@@ -419,7 +419,7 @@ def test_apply_overrides_sets_listing_strategy(isolated_db, monkeypatch):
 
 def test_page_order_in_registry_always_comes_with_a_selector():
     """`page_order` без селектора ничего не делает: без него первыми на странице идут
-    шапка и меню, и разбор его намеренно не слушает. Запись без селектора — ошибка реестра."""
+    шапка и меню, и разбор его намеренно не слушает. Запись без селектора: ошибка реестра."""
     for name, fields in source_overrides.SOURCE_OVERRIDES.items():
         strategy = fields.get("listing_strategy")
         if strategy is None:

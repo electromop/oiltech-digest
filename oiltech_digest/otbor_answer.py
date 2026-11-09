@@ -1,8 +1,8 @@
 """Ответ агента «Отбор» (#130, #131, спека #128): схема ответа, проверка кодом и итог строки воркера.
 
-Общий для воркера (повтор при конфликте шагов), ядра (запись решения: ответ воркера — недоверенный ввод, ядро
+Общий для воркера (повтор при конфликте шагов), ядра (запись решения: ответ воркера: недоверенный ввод, ядро
 проверяет его само) и экзамена (#133: мерится то, что дойдёт до сигнала). Ответ не по схеме или со значением не из
-справочника — сбой без повтора; шаги не сошлись по таблице конфликтов — один повтор, затем пометка «спорное».
+справочника: сбой без повтора; шаги не сошлись по таблице конфликтов: один повтор, затем пометка «спорное».
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ from oiltech_digest.db import otbor_store
 
 # Шаг «Отбора» в «Ходе решения» сигнала.
 STAGE = "«Отбор»"
-# Код «причины нет» у решения «брать»: в справочнике причин его нет, в схеме ответа — есть.
+# Код «причины нет» у решения «брать»: в справочнике причин его нет, в схеме ответа: есть.
 NO_REASON = "none"
 ACCEPT, REJECT = feed_window.OTBOR_ACCEPT, feed_window.OTBOR_REJECT
 DIRECT, TRANSFERABLE, NO_LINK = "direct", "transferable", "none"
 OILFIELD_SERVICES, OIL_GAS, OTHER_INDUSTRY = "oilfield_services", "oil_gas", "other_industry"
-# Потолки длины ответа воркера (недоверенный ввод): обоснование — до 200 знаков (спека), применение — как фраза
+# Потолки длины ответа воркера (недоверенный ввод): обоснование: до 200 знаков (спека), применение: как фраза
 # судьи радара.
 _JUSTIFICATION_CHARS, _APPLICATION_CHARS = 200, 400
 
@@ -32,9 +32,9 @@ _JUSTIFICATION_CHARS, _APPLICATION_CHARS = 200, 400
 _NO_PAIRS = {(OILFIELD_SERVICES, TRANSFERABLE): "переносимая связь у нефтесервиса: его связь прямая",
              (OTHER_INDUSTRY, DIRECT): "прямая связь у другой отрасли"}
 LINKED = frozenset({DIRECT, TRANSFERABLE})
-# При каких отрасли и связи допустимы «брать» и каждая причина отказа; None — при любой из допустимых пар. Причина
-# справочника без строки таблицы — конфликт шагов: таблицу правят в том же изменении, что и коды справочника (#133).
-# Тексты причин — в справочнике, здесь только коды.
+# При каких отрасли и связи допустимы «брать» и каждая причина отказа; None: при любой из допустимых пар. Причина
+# справочника без строки таблицы, конфликт шагов: таблицу правят в том же изменении, что и коды справочника (#133).
+# Тексты причин: в справочнике, здесь только коды.
 DECISION_STEPS = {
     ACCEPT: (None, LINKED),
     "oil_gas_no_link": ({OIL_GAS}, {NO_LINK}),
@@ -44,8 +44,8 @@ DECISION_STEPS = {
     "old_event": (None, LINKED),
     "mixed_events": (None, LINKED),
 }
-# «Разные события в одной находке» — только у находки с двумя и более ссылками (#131): у статьи ленты, материала и
-# находки с одной ссылкой публикация одна, и эта причина у них — конфликт шагов.
+# «Разные события в одной находке», только у находки с двумя и более ссылками (#131): у статьи ленты, материала и
+# находки с одной ссылкой публикация одна, и эта причина у них: конфликт шагов.
 MIXED_EVENTS = "mixed_events"
 
 
@@ -54,7 +54,7 @@ def codes(dictionaries: dict[str, Any], name: str) -> list[str]:
 
 
 def answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
-    """Схема ответа модели (строгий JSON): порядок полей — порядок рассуждения «Отбора». По ней же ядро проверяет
+    """Схема ответа модели (строгий JSON): порядок полей: порядок рассуждения «Отбора». По ней же ядро проверяет
     ответ (answer_problem)."""
     def enum(name: str, *extra: str) -> dict[str, Any]:
         return {"type": "string", "enum": [*codes(dictionaries, name), *extra]}
@@ -75,7 +75,7 @@ def answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
 
 
 def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
-    """Чем ответ не по правилам: не по схеме или значение не из справочника; None — по правилам."""
+    """Чем ответ не по правилам: не по схеме или значение не из справочника; None: по правилам."""
     if not isinstance(answer, dict):
         return "не объект"
     for name, spec in answer_schema(dictionaries)["schema"]["properties"].items():
@@ -91,7 +91,7 @@ def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
 
 
 def code_label(dictionaries: dict[str, Any], name: str, code: str | None) -> str:
-    """Подпись кода по справочнику; кода в справочнике нет — сам код, нет и кода — пусто."""
+    """Подпись кода по справочнику; кода в справочнике нет: сам код, нет и кода: пусто."""
     values = (dictionaries.get(name) or {}).get("values") or []
     return next((value["label"] for value in values if value["code"] == code), code or "")
 
@@ -103,15 +103,15 @@ def occasion_relevances(dictionaries: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: int = 0) -> list[str]:
-    """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS). links — сколько ссылок у
-    находки во входе (0 — публикация одна)."""
+    """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS). links: сколько ссылок у
+    находки во входе (0: публикация одна)."""
     label = partial(code_label, dictionaries)
     industry, relevance = answer["industry"], answer["oilfield_relevance"]
     decision, reason = answer["decision"], answer["reject_reason"]
     found = []
     if (industry, relevance) in _NO_PAIRS:
         found.append(_NO_PAIRS[(industry, relevance)])
-    # Повод публикации задаёт допустимую связь (справочник, решение владельца 26.10): связь не из связей повода —
+    # Повод публикации задаёт допустимую связь (справочник, решение владельца 26.10): связь не из связей повода:
     # конфликт шагов. Без повода (возврат человеком, return_problems) сверки нет.
     allowed = occasion_relevances(dictionaries).get(answer.get("occasion")) or []
     if allowed and relevance not in allowed:
@@ -141,7 +141,7 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
 
 
 def return_choices(dictionaries: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
-    """Что человек может вписать, возвращая отклонённое (#132): коды и подписи справочника «Отбора» — отрасль, связь
+    """Что человек может вписать, возвращая отклонённое (#132): коды и подписи справочника «Отбора»: отрасль, связь
     (вернуть значит взять: только прямая и переносимая) и категория. Экран берёт их отсюда, а не держит у себя."""
     def options(name: str, allowed: frozenset[str] | None = None) -> list[dict[str, str]]:
         return [{"code": value["code"], "label": value["label"]} for value in (dictionaries.get(name) or {}).get("values")
@@ -153,8 +153,8 @@ def return_choices(dictionaries: dict[str, Any]) -> dict[str, list[dict[str, str
 
 def return_problems(values: dict[str, Any], dictionaries: dict[str, Any]) -> list[str]:
     """Чем поля «Отбора», которые вписал человек, возвращая отклонённое (#132, спека #128), не по правилам: значение не
-    из справочника или шаги не сходятся по той же таблице конфликтов, что у «Отбора» (вернуть — значит взять: связь
-    прямая или переносимая, у переносимой — применение). Пусто — по правилам."""
+    из справочника или шаги не сходятся по той же таблице конфликтов, что у «Отбора» (вернуть, значит взять: связь
+    прямая или переносимая, у переносимой: применение). Пусто: по правилам."""
     problems = [f"{name}: «{str(values.get(name))[:60]}» нет в справочнике" for name in ("industry", "oilfield_relevance",
                                                                                       "category")
                 if values.get(name) not in codes(dictionaries, name)]
@@ -185,7 +185,7 @@ def technical_failure(reason: str) -> Outcome:
 def outcome(decision: dict[str, Any], dictionaries: dict[str, Any], *, links: int = 0) -> Outcome:
     """Строка итога воркера → решение или сбой. Через неё пишет ядро (otbor.apply_result) и будет мерить экзамен
     (#133): мерится то, что дойдёт до сигнала. Конфликт шагов: в силе ответ повтора, если он по правилам; снова
-    конфликт или повтора нет — решение остаётся с пометкой «спорное». links — ссылок у находки во входе."""
+    конфликт или повтора нет: решение остаётся с пометкой «спорное». links: ссылок у находки во входе."""
     check = partial(conflicts, links=links)
     calls = [call for call in decision.get("calls") or [] if isinstance(call, dict)]
     if not calls or calls[0].get("error"):
@@ -217,8 +217,8 @@ def outcome(decision: dict[str, Any], dictionaries: dict[str, Any], *, links: in
 
 
 def _values(answer: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
-    """Проверенный ответ → значения сигнала и повод для «Хода решения». Применение — только у переносимой связи;
-    причина — только у отказа; категория у отказа — если модель её написала из справочника (её никто не читает)."""
+    """Проверенный ответ → значения сигнала и повод для «Хода решения». Применение: только у переносимой связи;
+    причина: только у отказа; категория у отказа: если модель её написала из справочника (её никто не читает)."""
     relevance = answer["oilfield_relevance"]
     reason = answer["reject_reason"]
     category = answer.get("category")

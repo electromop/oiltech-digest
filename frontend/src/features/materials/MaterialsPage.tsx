@@ -63,7 +63,7 @@ export function MaterialsPage({ onUnauthorized, showToast, isAdmin = false }: Pr
   const [details, setDetails] = useState<DocumentDetails | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
-  // Опрос — пока сервер разбирает документ; зависимость булева, иначе таймер пересоздавался бы на каждом ответе.
+  // Опрос: пока сервер разбирает документ; зависимость булева, иначе таймер пересоздавался бы на каждом ответе.
   const pending = documents.some(isDocumentPending);
 
   useEffect(() => {
@@ -87,7 +87,7 @@ export function MaterialsPage({ onUnauthorized, showToast, isAdmin = false }: Pr
   async function reload(initial = false) {
     try {
       if (initial) setLoading(true);
-      // Документы вносит и видит только админ (сервер: загрузка — админу, список — своих).
+      // Документы вносит и видит только админ (сервер: загрузка: админу, список: своих).
       const [payload, docs] = await Promise.all([listColleagueMaterials(), isAdmin ? listDocuments() : Promise.resolve(null)]);
       setMaterials(Array.isArray(payload?.materials) ? payload.materials : []);
       setVerdicts(Array.isArray(payload?.verdicts) ? payload.verdicts : []);
@@ -356,7 +356,7 @@ function TelegramEntry({ material }: { material: ColleagueMaterial }) {
       <div className="materialCardTop">
         <span className="materialOrigin telegram">{ORIGIN_LABELS.telegram}</span>
         <span className="miniPill muted">{material.kind_label}</span>
-        {/* На карточке — коротко («Сильный сигнал»), полностью — в подсказке и в подокне правки. */}
+        {/* На карточке: коротко («Сильный сигнал»), полностью: в подсказке и в подокне правки. */}
         <span className={`miniPill ${VERDICT_TONE[material.verdict] ?? "muted"}`} title={material.verdict_label}>
           {material.verdict_label.split(" — ")[0]}
         </span>

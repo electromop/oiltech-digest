@@ -42,7 +42,7 @@ type FilterProps = {
   onScoreMax: (value: number) => void;
 };
 
-// Фильтры состава: поиск, тема и балл; на узкой колонке — по два в ряд, на телефоне — столбиком.
+// Фильтры состава: поиск, тема и балл; на узкой колонке: по два в ряд, на телефоне: столбиком.
 export function DigestFilters(props: FilterProps) {
   return (
     <div className="digestFiltersRow">
@@ -86,7 +86,7 @@ function ScoreMark({ score, title }: { score?: number | null; title: string }) {
   );
 }
 
-// Плашка «Технология / Бизнес» у материала выпуска (решение владельца 23.10) — та же, что в самом выпуске.
+// Плашка «Технология / Бизнес» у материала выпуска (решение владельца 23.10): та же, что в самом выпуске.
 export function KindBadge({ kind }: { kind?: ItemKind }) {
   if (!kind?.kind || !kind.label) return null;
   return <span className={`kindBadge ${kind.kind}`}>{kind.label}</span>;
@@ -95,7 +95,7 @@ export function KindBadge({ kind }: { kind?: ItemKind }) {
 // Состав выпуска одним списком в порядке письма и DOCX (решение владельца 24.10): статьи очереди, за ними сигналы
 // радара; откуда материал, говорит плашка «Технология / Бизнес». Порядок PDF считается сам: раздел, рубрика, балл
 // (#161). Статьи двигаются стрелками, «Из выпуска» убирает только из этого выпуска, «Из дайджеста» снимает отметку;
-// ниже — отмеченное, но не вошедшее в выпуск. Суть здесь, как в письме, короткая; в PDF она целиком.
+// ниже: отмеченное, но не вошедшее в выпуск. Суть здесь, как в письме, короткая; в PDF она целиком.
 export function DigestQueue(props: Props) {
   const { items, radarItems, available, issueItems, readOnly, busy, materials, editing } = props;
 

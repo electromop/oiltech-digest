@@ -1,22 +1,22 @@
 """Экзамен агента «Отбор» (#133, спека #128): модель выходит в работу по правилу прохождения на разметке эксперта.
 
-Набор — пакет эксперту (#129): манифест хранит входы агента (заголовок, текст, издатель, язык, даты, ссылки находки),
-таблица — разметку эксперта; она проходит otbor_markup без нарушений. Агенту подаются входы манифеста в той же форме,
-что у ядра (otbor._item, otbor._signal_item), — как их видел эксперт. Коды списков справочников — те, из которых
-выбирал эксперт; тексты правил — новой версии: её и экзаменуют.
+Набор, пакет эксперту (#129): манифест хранит входы агента (заголовок, текст, издатель, язык, даты, ссылки находки),
+таблица: разметку эксперта; она проходит otbor_markup без нарушений. Агенту подаются входы манифеста в той же форме,
+что у ядра (otbor._item, otbor._signal_item), как их видел эксперт. Коды списков справочников: те, из которых
+выбирал эксперт; тексты правил, новой версии: её и экзаменуют.
 
-Рядом с манифестом — файл строк экзамена (утверждает владелец): страницы-списки радара (вне метрики решения,
+Рядом с манифестом, файл строк экзамена (утверждает владелец): страницы-списки радара (вне метрики решения,
 решение 29) и строки, которые стоят примерами в справочниках «Отбора» (только в настройке: иначе модель видит ответ
-в инструкции). Деление на настройку и экзамен — по долям «группа манифеста × решение эксперта», страницы-списки —
+в инструкции). Деление на настройку и экзамен, по долям «группа манифеста × решение эксперта», страницы-списки:
 своей долей, четверть в настройку; оно пишется рядом с манифестом при первом прогоне и дальше не меняется. Инструкцию
 правят только по строкам настройки.
 
-Каждая строка экзамена — три прогона. Мерится то, что дошло бы до сигнала: ответы воркера (otbor.process_payload,
-с повтором при конфликте шагов) после проверки кодом ядра (otbor_answer.outcome). Модели — лестницей по цене: первая,
-прошедшая правило и пороги (otbor_exam_score), — решение; с --all идут все — полная таблица качества и цены. Модель,
-которую поставщик пометил устаревшей, экзамен меряет, но не выбирает. Прогон — только после утверждения (approved в
-файле строк экзамена): деление фиксируется первым же прогоном; экзамен — только если отметка называет текущие
-инструкцию и справочники. Отчёт — рядом с манифестом, вне репозитория: он публичный.
+Каждая строка экзамена: три прогона. Мерится то, что дошло бы до сигнала: ответы воркера (otbor.process_payload,
+с повтором при конфликте шагов) после проверки кодом ядра (otbor_answer.outcome). Модели, лестницей по цене: первая,
+прошедшая правило и пороги (otbor_exam_score), решение; с --all идут все: полная таблица качества и цены. Модель,
+которую поставщик пометил устаревшей, экзамен меряет, но не выбирает. Прогон: только после утверждения (approved в
+файле строк экзамена): деление фиксируется первым же прогоном; экзамен: только если отметка называет текущие
+инструкцию и справочники. Отчёт, рядом с манифестом, вне репозитория: он публичный.
 """
 
 from __future__ import annotations
@@ -36,16 +36,16 @@ from oiltech_digest.otbor_exam_score import BALANCED_MIN, FEED_GROUPS, LABELS, R
 from oiltech_digest.otbor_pack_format import CHOICE_COLUMNS, MANIFEST_NAME, PackError, load_dictionaries
 from oiltech_digest.signal_card_pack import REPO_ROOT, _rank, publication_day, publication_text
 
-# Кандидаты (решение 20 журнала гриля): gpt-5.4-nano, gpt-5.4-mini, gpt-5.5 и самые дешёвые из новых — по прайс-листу
-# OpenAI 26.10.2026 это gpt-6-luna и gpt-5.6-luna. Лестница по цене, следующая — только при провале предыдущей.
+# Кандидаты (решение 20 журнала гриля): gpt-5.4-nano, gpt-5.4-mini, gpt-5.5 и самые дешёвые из новых: по прайс-листу
+# OpenAI 26.10.2026 это gpt-6-luna и gpt-5.6-luna. Лестница по цене, следующая: только при провале предыдущей.
 MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.5")
-# Помеченные поставщиком устаревшими: экзамен их меряет, но решением не выбирает — их скоро снимут (как gpt-5 и
+# Помеченные поставщиком устаревшими: экзамен их меряет, но решением не выбирает: их скоро снимут (как gpt-5 и
 # gpt-5-mini 11.12.2026).
 DEPRECATED = {"gpt-5.4-nano": "OpenAI пометила устаревшей (страница моделей, 26.10.2026)"}
 RUNS = 3
 TUNING_SHARE = 1 / 4
 SPLIT_NAME = "otbor_exam_split.json"
-# Строки экзамена: {"list_pages": [...], "in_instruction": [...], "approved": "когда и кто"} — номера строк
+# Строки экзамена: {"list_pages": [...], "in_instruction": [...], "approved": "когда и кто"}: номера строк
 # манифеста; утверждает владелец, без approved прогона нет.
 ROWS_NAME = "otbor_exam_rows.json"
 ROW_LISTS = ("list_pages", "in_instruction")
@@ -60,8 +60,8 @@ class ExamError(ValueError):
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
         runs: int = RUNS, part: str = "exam", every: bool = False, workers: int = 1) -> dict[str, Any]:
-    """Экзамен по лестнице моделей (every — все модели, полная таблица; workers — параллельных вызовов модели):
-    отчёт и решение — рядом с манифестом."""
+    """Экзамен по лестнице моделей (every, все модели, полная таблица; workers, параллельных вызовов модели):
+    отчёт и решение: рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     if not exam["approved"]:
@@ -88,8 +88,8 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
 
 def rescore(report_path: str | Path, markup_path: str | Path, *,
             manifest_path: str | Path | None = None) -> dict[str, Any]:
-    """Пересчёт сохранённого отчёта без вызовов модели: те же ответы — по нынешним проверке кодом, строкам экзамена,
-    выгрузке с ядра и порогам; новый отчёт — рядом. Ответы относятся к текстам своего манифеста и к своей версии
+    """Пересчёт сохранённого отчёта без вызовов модели: те же ответы: по нынешним проверке кодом, строкам экзамена,
+    выгрузке с ядра и порогам; новый отчёт: рядом. Ответы относятся к текстам своего манифеста и к своей версии
     справочников: с другими пересчёт отказывает."""
     source = Path(report_path).expanduser().resolve()
     try:
@@ -104,7 +104,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *,
         raise ExamError(f"{source.name}: ответы на справочниках {saved['dictionaries_version']}, сейчас "
                         f"{dictionaries.get('version')}: пересчёт неверен, нужен новый прогон")
     items = _part_items(exam, saved["split"], saved["part"])
-    # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
+    # Цена и токены, исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
     tried = [{**_model_scores(one["model"], one["answers"], items, dictionaries, exam["control"]),
               **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
              for one in saved["models"]]
@@ -119,8 +119,8 @@ def rescore(report_path: str | Path, markup_path: str | Path, *,
 
 def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
          runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
-    """Сухой прогон: деление, число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена — по длине
-    запросов (инструкция со справочниками и вход публикации), ответ — оценкой signal_card.estimate; повтор при
+    """Сухой прогон: деление, число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена: по длине
+    запросов (инструкция со справочниками и вход публикации), ответ: оценкой signal_card.estimate; повтор при
     конфликте шагов не учтён."""
     from oiltech_digest.signal_card import estimate
 
@@ -149,14 +149,14 @@ def _check_approved(approved: str, dictionaries: dict[str, Any]) -> None:
 
 
 def _check_runs(runs: int, part: str) -> None:
-    """Экзамен — RUNS прогонов на строку (спека): меньше — устойчивость не измерить. Настройка — от одного."""
+    """Экзамен, RUNS прогонов на строку (спека): меньше: устойчивость не измерить. Настройка: от одного."""
     if runs < 1 or (part == "exam" and runs != RUNS):
         raise ExamError(f"--runs {runs}: на экзамене {RUNS} прогона на строку, на настройке от одного")
 
 
 def _by_price(models: tuple[str, ...]) -> list[str]:
-    """Лестница — от дешёвой модели к дорогой, в каком порядке модели ни назвали: решение — самая дешёвая из
-    прошедших. Модели без своей строки в таблице цен — отказ: цена по умолчанию поставила бы её не на своё место, а
+    """Лестница, от дешёвой модели к дорогой, в каком порядке модели ни назвали: решение: самая дешёвая из
+    прошедших. Модели без своей строки в таблице цен, отказ: цена по умолчанию поставила бы её не на своё место, а
     отчёт солгал бы о цене."""
     unknown = [model for model in models if not any(model.startswith(prefix) for prefix in config.OPENAI_MODEL_PRICES)]
     if unknown:
@@ -166,7 +166,7 @@ def _by_price(models: tuple[str, ...]) -> list[str]:
 
 
 def _decision(tried: list[dict[str, Any]], part: str) -> str | None:
-    """Решение экзамена — первая по цене модель, прошедшая правило и пороги и не устаревшая; настройка модель не
+    """Решение экзамена: первая по цене модель, прошедшая правило и пороги и не устаревшая; настройка модель не
     выбирает."""
     if part != "exam":
         return None
@@ -223,7 +223,7 @@ def _check_codes(lists: dict[str, Any], dictionaries: dict[str, Any]) -> None:
 
 
 def _rows(path: Path, ids: set[str]) -> dict[str, list[str]]:
-    """Файл строк экзамена — решение владельца, его нет — отказ: пустые списки — тоже решение."""
+    """Файл строк экзамена, решение владельца, его нет, отказ: пустые списки: тоже решение."""
     if not path.exists():
         raise ExamError(f"нет {path.name} рядом с манифестом: страницы-списки (вне метрики решения) и строки-примеры "
                         "инструкции (только в настройке) утверждает владелец до первого прогона; пустые списки "
@@ -265,7 +265,7 @@ def _inputs(item: dict[str, Any]) -> dict[str, Any]:
 
 def model_item(item: dict[str, Any]) -> dict[str, Any]:
     """Публикация строки манифеста так, как её получает модель на ядре (otbor._item, otbor._signal_item): те же поля и
-    текст; издатель и ссылки находки — как их видел эксперт (в манифесте они уже подписаны так, как на ядре)."""
+    текст; издатель и ссылки находки: как их видел эксперт (в манифесте они уже подписаны так, как на ядре)."""
     return {
         "ref": item["id"], "title": publication_text(item.get("title"))[:500],
         "text": publication_text(item.get("text")), "publisher": item.get("publisher") or "",
@@ -279,7 +279,7 @@ def model_item(item: dict[str, Any]) -> dict[str, Any]:
 
 def _rules(exam: dict[str, Any]) -> dict[str, Any]:
     """Правила, по которым считается решение экзамена: пороги, правило прохождения, строки экзамена. Пересчёт
-    сверяет их с исходным прогоном: правило, сменённое после того, как ответы увидели, — не то, что утверждали."""
+    сверяет их с исходным прогоном: правило, сменённое после того, как ответы увидели, не то, что утверждали."""
     return {"thresholds": dict(THRESHOLDS), "balanced_min": BALANCED_MIN,
             "rule": [[name, list(kinds)] for name, kinds in RULES], "rows": exam["rows"]}
 
@@ -302,7 +302,7 @@ def _stratum(item: dict[str, Any]) -> str:
 
 
 def stratum_label(code: str) -> str:
-    """Доля деления для людей: группа манифеста и решение эксперта; страницы-списки — своей долей."""
+    """Доля деления для людей: группа манифеста и решение эксперта; страницы-списки: своей долей."""
     if code == LIST_PAGE:
         return "страницы-списки"
     group, decision = code.split(":", 1)
@@ -310,8 +310,8 @@ def stratum_label(code: str) -> str:
 
 
 def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
-    """Деление на настройку и экзамен: из файла рядом с манифестом, а при первом прогоне — новое. Строка-пример
-    инструкции в экзаменационной части — отказ: инструкцию по строкам экзамена не дополняют."""
+    """Деление на настройку и экзамен: из файла рядом с манифестом, а при первом прогоне: новое. Строка-пример
+    инструкции в экзаменационной части, отказ: инструкцию по строкам экзамена не дополняют."""
     path = exam["folder"] / SPLIT_NAME
     ids = sorted(item["id"] for item in exam["items"])
     forced = set(exam["rows"]["in_instruction"])
@@ -338,7 +338,7 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
         counts[stratum] += 1
     tuning: set[str] = set()
     for stratum, group in by_stratum.items():
-        if len(group) >= 2:  # каждая доля — в обеих частях
+        if len(group) >= 2:  # каждая доля: в обеих частях
             counts[stratum] = min(max(counts[stratum], 1), len(group) - 1)
         ordered = sorted(group, key=lambda one: (one not in forced, _rank("split", exam["seed"], one)))
         tuning.update(ordered[:max(counts[stratum], sum(one in forced for one in group))])
@@ -358,7 +358,7 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
 
 def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any],
              workers: int = 1) -> list[dict[str, Any]]:
-    """Ответы воркера «Отбора»: строка на (прогон, публикацию). Технический сбой (модель не ответила) — одна повторная
+    """Ответы воркера «Отбора»: строка на (прогон, публикацию). Технический сбой (модель не ответила): одна повторная
     попытка, как у шага планировщика; обе попытки оплачены. Ответ не по правилам не повторяется, как на ядре."""
     payload = {"model": model, "reasoning": config.OTBOR_REASONING, "dictionaries": dictionaries,
                "items": [model_item(item) for item in items]}
@@ -388,7 +388,7 @@ def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: d
 
 def _decide_all(payload: dict[str, Any], workers: int) -> list[dict[str, Any]]:
     """Ответы воркера на публикации пакета, в порядке публикаций: с workers > 1 публикации делятся на куски, и куски
-    идут параллельно — у каждого свой вызов воркера и свой клиент модели."""
+    идут параллельно: у каждого свой вызов воркера и свой клиент модели."""
     items = payload["items"]
     if workers <= 1 or len(items) <= 1:
         return otbor.process_payload(payload)["decisions"]
@@ -405,7 +405,7 @@ def _technical(decision: dict[str, Any], dictionaries: dict[str, Any]) -> bool:
 
 def _finals(answers: list[dict[str, Any]], items: list[dict[str, Any]],
             dictionaries: dict[str, Any]) -> dict[str, list[dict[str, Any] | None]]:
-    """Значения сигнала по прогонам — как их записало бы ядро (otbor_answer.outcome, «спорное» рядом); сбой — None."""
+    """Значения сигнала по прогонам: как их записало бы ядро (otbor_answer.outcome, «спорное» рядом); сбой: None."""
     links = {item["id"]: len(item["links"] or []) for item in items}
     finals: dict[str, list[dict[str, Any] | None]] = {item["id"]: [] for item in items}
     for answer in sorted(answers, key=lambda one: one["run"]):
@@ -433,7 +433,7 @@ def _spend(answers: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _report(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dict[str, Any],
             tried: list[dict[str, Any]], settings: dict[str, Any], **extra: Any) -> dict[str, Any]:
-    """Отчёт прогона или пересчёта — рядом с манифестом, JSON и читаемый .md (otbor_exam_report.write)."""
+    """Отчёт прогона или пересчёта: рядом с манифестом, JSON и читаемый .md (otbor_exam_report.write)."""
     part, decision = settings["part"], _decision(tried, settings["part"])
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "part": part,
@@ -456,8 +456,8 @@ def _report(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dic
 
 
 def control_values(manifest: dict[str, Any]) -> dict[str, Any]:
-    """Контроль с ядра (там база): размеры страт ленты в окне пакета — кандидаты выборки пакета (otbor_pack.feed_pool),
-    — и категория находки, по которой витрина решала показ (судья или человек), у радарных строк манифеста.
+    """Контроль с ядра (там база): размеры страт ленты в окне пакета: кандидаты выборки пакета (otbor_pack.feed_pool),
+    - и категория находки, по которой витрина решала показ (судья или человек), у радарных строк манифеста.
     Решение машины экзамен берёт из группы манифеста, а не отсюда."""
     window = manifest.get("window") if isinstance(manifest, dict) else None
     items = manifest.get("items") if isinstance(manifest, dict) else None

@@ -1,6 +1,6 @@
 """Общее для тестов агента «Отбор» (#130, спека #128): подставная модель «Отбора», статьи сбора, вставленные
 так, как их вставляет сбор (repository.insert_article: с 08.11 каждая новая статья идёт через «Отбор»), и
-настоящий клиент воркера NL против тестового ядра (signal_card_support.worker). Сами тесты —
+настоящий клиент воркера NL против тестового ядра (signal_card_support.worker). Сами тесты:
 test_otbor_feed.py (шов 1: контур целиком, витрины и разделы), test_otbor_feed_machinery.py (шов 1: прежняя
 механика ленты при «Отборе») и test_otbor_worker.py (шов 1: воркер, контракт, сбои).
 """
@@ -22,7 +22,7 @@ _NUMBERS = itertools.count(1)
 
 
 class OtborModel:
-    """Подставная модель «Отбора»: ответ — заготовка по заголовку публикации; список заготовок — ответы по
+    """Подставная модель «Отбора»: ответ: заготовка по заголовку публикации; список заготовок: ответы по
     очереди вызовов (повтор после конфликта шагов), последняя повторяется. Вызовы запоминает."""
 
     def __init__(self, answers):
@@ -42,7 +42,7 @@ class OtborModel:
 
 
 def answer(**overrides):
-    """Ответ «Отбора» по схеме: нефтегаз, прямая связь, брать, бизнес; повод — по связи и причине (occasion_for),
+    """Ответ «Отбора» по схеме: нефтегаз, прямая связь, брать, бизнес; повод: по связи и причине (occasion_for),
     если его не задали."""
     reply = {
         "industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
@@ -52,7 +52,7 @@ def answer(**overrides):
     return {"occasion": occasion_for(reply), **reply}
 
 
-# Повод отказа без связи — по причине; остальные отказы без связи — «Рынок и финансы».
+# Повод отказа без связи: по причине; остальные отказы без связи: «Рынок и финансы».
 _OCCASION_BY_REASON = {"other_industry_no_transfer": "other_event", "incident_war_politics": "incident_politics",
                        "corporate_promo": "corporate"}
 
@@ -101,7 +101,7 @@ def window_of_published(monkeypatch):
 
 
 def article(title, text, *, source="Нефтегаз", language="ru", published=PUBLISHED):
-    """Статья сбора — как её вставляет сбор (insert_article); номер статьи."""
+    """Статья сбора: как её вставляет сбор (insert_article); номер статьи."""
     number = next(_NUMBERS)
     with repository.get_connection() as conn:
         row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()

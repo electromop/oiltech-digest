@@ -42,6 +42,10 @@
     "feedback_email": "",
     "platform_note": ""
   },
+  "fonts": {
+    "office_family": "",
+    "office_condensed_family": ""
+  },
   "highlights": {
     "analytics_source_keywords": [
       "mckinsey",

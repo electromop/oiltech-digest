@@ -9,20 +9,19 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from pathlib import Path
 import secrets
 import time
 from typing import Any
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import admission, auth, background_jobs, backlog, colleague_materials, config, feed_window
+from oiltech_digest import admission, auth, background_jobs, brand_fonts, colleague_materials, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -55,25 +54,22 @@ from oiltech_digest.processing.digest import (
     write_digest_export,
 )
 from oiltech_digest.processing import digest_materials, external_ai
-from oiltech_digest.source_discovery.learning import apply_candidate_learning
 from oiltech_digest import company_parents
 from oiltech_digest.db import company_description_store, company_parents_repo, issue_edits_store
 
-WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 
 setup_logging("api")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OilTech Digest API")
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 if (FRONTEND_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
 
 
 @app.middleware("http")
 async def log_requests(request, call_next):
-    if request.url.path.startswith("/static") or request.url.path.startswith("/assets"):
+    if request.url.path.startswith(("/assets", "/brand/fonts/")):
         return await call_next(request)
 
     started = time.perf_counter()
@@ -91,9 +87,9 @@ async def log_requests(request, call_next):
     return response
 
 
-# Набор допустимых статусов отметки — единый источник правды в repository.ArticleStatus
-# (там же кортеж для счётчиков). Колонки статуса — свободный TEXT без CHECK, поэтому
-# валидация на границе API — единственное, что не даёт записать мусор: статья с
+# Набор допустимых статусов отметки: единый источник правды в repository.ArticleStatus
+# (там же кортеж для счётчиков). Колонки статуса: свободный TEXT без CHECK, поэтому
+# валидация на границе API, единственное, что не даёт записать мусор: статья с
 # неизвестным статусом молча пропадает из всех вкладок (фильтры перечисляют известный набор).
 class ArticlePatch(BaseModel):
     status: repository.ArticleStatus | None = None
@@ -123,30 +119,6 @@ class SourceCreate(BaseModel):
     priority: float = 1.0
     category: str | None = None
     update_frequency: str | None = None
-
-
-class SourceCandidateEvaluateRequest(BaseModel):
-    article_limit: int = 5
-    offline: bool = True
-    collect: bool = True
-    process: bool = True
-
-
-class SourceCandidateApproveRequest(BaseModel):
-    name: str | None = None
-    source_type: str = "Discovered"
-    parse_strategy: str | None = None
-    enabled: bool = False
-    category: str | None = None
-    priority: float = 1.0
-    network_region: str = "auto"
-    scrape_after_approve: bool = True
-
-
-class SourceCandidatePatch(BaseModel):
-    status: str | None = None
-    recommended_action: str | None = None
-    review_comment: str | None = None
 
 
 class SignalDiscoveryRequest(BaseModel):
@@ -195,58 +167,6 @@ class SignalReturnIn(BaseModel):
     signal_category: str
 
 
-class SourceDiscoveryPlanRequest(BaseModel):
-    days: int = 30
-    target_per_topic: int = 10
-    topic_limit: int = 5
-    candidate_limit: int = 10
-    max_actions: int = 5
-    persist_memory: bool = True
-    offline: bool = True
-    evaluate: bool = True
-
-
-class SourceDiscoveryDiscoverRequest(BaseModel):
-    topic: str
-    seed_url: str
-    limit: int = 20
-    offline: bool = True
-    fetch_inspection: bool = False
-    test_parse: bool = False
-
-
-class SourceDiscoveryLoopRequest(BaseModel):
-    goal: str = "Найти новые полезные источники сигналов"
-    days: int = 30
-    target_per_topic: int = 10
-    topic_limit: int = 5
-    candidate_limit: int = 10
-    max_actions: int = 5
-    max_iterations: int = 3
-    offline: bool = True
-    fetch_inspection: bool = True
-    test_parse: bool = True
-    dry_run: bool = False
-    auto_evaluate: bool = True
-    article_limit: int = 5
-    persist_memory: bool = True
-    max_daily_loop_runs: int = 4
-    max_daily_candidates: int = 100
-    max_daily_evaluations: int = 100
-
-
-class AgentMemoryPatch(BaseModel):
-    status: str
-
-
-class AgentMemoryCreate(BaseModel):
-    memory_type: str
-    subject: str
-    status: str = "active"
-    score: float = 50
-    facts: dict[str, Any] | None = None
-
-
 class ScoringCriterionIn(BaseModel):
     id: int | None = None
     name: str
@@ -270,7 +190,7 @@ class TagIn(BaseModel):
     # `| None` ОБЯЗАТЕЛЕН, а не «на всякий случай». Значение по умолчанию срабатывает
     # только когда ключ ОТСУТСТВУЕТ; пришедший явно `null` Pydantic отвергает 422-й.
     # А приходит он всегда: в БД `negative_keywords_json` равен NULL у ВСЕХ тегов,
-    # `list_enabled_tags` отдаёт `SELECT child.*` как есть, фронт возвращает то же самое —
+    # `list_enabled_tags` отдаёт `SELECT child.*` как есть, фронт возвращает то же самое:
     # и сохранение экрана «Теги» падало ЦЕЛИКОМ на каждой попытке (скрин заказчика 13.09:
     # девять строк «Input should be a valid list», input: null). Репозиторий None
     # переваривает сам (`or []`), поэтому достаточно расширить тип.
@@ -297,7 +217,7 @@ class ManualArticleImportRequest(BaseModel):
 class DigestRequest(BaseModel):
     month: str
     limit: int = 20
-    # Без порога (решение владельца 29.09): отметка человека — членство в выпуске, балл —
+    # Без порога (решение владельца 29.09): отметка человека, членство в выпуске, балл:
     # только порядок. С полом 60 черновик после пересчёта баллов терял бы отмеченное.
     min_score: float = 0
     max_score: float | None = None
@@ -332,23 +252,6 @@ class MaintenanceCleanupRequest(BaseModel):
     export_job_days: int | None = None
 
 
-class BacklogTaskCreate(BaseModel):
-    title: str
-    priority: str = "P3"
-    status: str = "new"
-    details: str | None = None
-    due_date: str | None = None
-
-
-class BacklogTaskPatch(BaseModel):
-    status: str | None = None
-    due_date: str | None = None
-
-
-class BacklogTaskCommentCreate(BaseModel):
-    text: str
-
-
 class ExternalWorkerClaimRequest(BaseModel):
     worker_id: str
     queues: list[str] = []
@@ -361,7 +264,7 @@ class ExternalWorkerLeaseRequest(BaseModel):
 
 
 class ExternalWorkerPageRequest(ExternalWorkerLeaseRequest):
-    # С большим запасом: самые длинные адреса находок поиска — около 300 знаков (04.11).
+    # С большим запасом: самые длинные адреса находок поиска: около 300 знаков (04.11).
     url: str = Field(max_length=4096)
 
 
@@ -383,7 +286,7 @@ class ExternalWorkerFailRequest(ExternalWorkerLeaseRequest):
     retryable: bool = True
     retry_after_seconds: int | None = None
     # Сделанная часть пакета (partial): так зависший ИИ-пакет отдаёт сторож аренды воркера.
-    # Воркер до 28.09 поля не шлёт — тогда это прежний fail.
+    # Воркер до 28.09 поля не шлёт: тогда это прежний fail.
     result: dict[str, Any] | None = None
 
 
@@ -469,37 +372,27 @@ class UserUpdate(BaseModel):
     password: str | None = None
 
 
-def require_backlog_module() -> None:
-    """Трекер задач — архивный модуль (решение владельца 23.09): без флага его нет.
-
-    404, а не 403: для посетителя модуль не существует, как и пункт меню. Вернуть —
-    ARCHIVED_MODULES=backlog (у сервиса tasks в профиле compose `archive` он прописан).
-    """
-    if "backlog" not in config.ARCHIVED_MODULES:
-        raise HTTPException(status_code=404, detail="Not Found")
-
-
 def _session_payload(user: dict[str, Any]) -> dict[str, Any]:
-    """Ответ входа и проверки сессии. `archived_modules` — архивные модули, включённые
-    флагом: фронт показывает их экраны только из этого списка."""
-    return {"ok": True, "user": _clean(user), "archived_modules": sorted(config.ARCHIVED_MODULES)}
+    """Ответ входа и проверки сессии."""
+    return {"ok": True, "user": _clean(user)}
 
 
 @app.get("/", response_model=None)
-def index():
-    if os.environ.get("TASKS_APP_MODE") == "1":
-        return RedirectResponse("/tasks", status_code=307)
-    if (FRONTEND_DIST_DIR / "index.html").exists():
-        return FileResponse(FRONTEND_DIST_DIR / "index.html")
-    return FileResponse(WEB_DIR / "app.html")
+def index() -> FileResponse:
+    page = FRONTEND_DIST_DIR / "index.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="Интерфейс не собран: npm run build в frontend/")
+    return FileResponse(page)
 
 
-@app.get("/tasks", dependencies=[Depends(require_backlog_module)])
-@app.get("/tasks/", dependencies=[Depends(require_backlog_module)])
-def tasks_app() -> FileResponse:
-    if (FRONTEND_DIST_DIR / "index.html").exists():
-        return FileResponse(FRONTEND_DIST_DIR / "index.html")
-    return FileResponse(WEB_DIR / "app.html")
+@app.get("/brand/fonts/{name}", response_model=None)
+def brand_font(name: str) -> FileResponse:
+    """Шрифт бренда для интерфейса: файл с сервера (brand_fonts), в сборке фронта его нет. Без сессии: им рисуется и
+    экран входа. Нет файла: 404, и браузер берёт запасной шрифт из списка семейства."""
+    path = brand_fonts.font_path(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"})
 
 
 def require_user(session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME)) -> dict[str, Any]:
@@ -563,7 +456,7 @@ def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
 
 @app.post("/api/auth/admit")
 def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
-    """Шаг «код допуска» (#113): почта, пароль и код одним запросом — допуск и сессия."""
+    """Шаг «код допуска» (#113): почта, пароль и код одним запросом: допуск и сессия."""
     user = repository.authenticate_user(payload.email, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
@@ -577,7 +470,7 @@ def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
 
 
 def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, Any]:
-    """Допущенной учётке — сессия. Недопущенной — «нужен код допуска» без сессии (200, а не
+    """Допущенной учётке: сессия. Недопущенной: «нужен код допуска» без сессии (200, а не
     отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
     if not admission.is_admitted(int(user["id"])):
         notice = admission.request_code(user)
@@ -632,7 +525,7 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
             raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
         repository.set_user_password(user_id, payload.password)
         if int(user["id"]) != user_id:
-            # Чужой пароль сменён — под ним мог войти кто угодно: снова через код допуска (#113).
+            # Чужой пароль сменён, под ним мог войти кто угодно: снова через код допуска (#113).
             admission.revoke(user_id)
     return {"ok": True, "user": _clean(repository.get_user_by_id(user_id))}
 
@@ -686,13 +579,13 @@ def list_articles(
     month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    # Окно месяца (ADR 0001, п. 6): без `month` — открытые месяцы, с `month` — один
+    # Окно месяца (ADR 0001, п. 6): без `month`: открытые месяцы, с `month`: один
     # месяц, прошлый открывается архивом только на просмотр. Для всех ролей одинаково.
     clauses = [feed_window.current(month).sql("a")]
     params: list[Any] = []
     if search:
         # Ищем по тому, ЧТО ЧЕЛОВЕК ВИДИТ, и по тегу. Раньше было два расхождения:
-        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title) — русский
+        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title): русский
         #     заголовок иностранной статьи поиском НЕ находился;
         # (2) теги в поиск не входили вовсе: набрать «Бурение» и получить статьи этого
         #     направления было нельзя, хотя в сборщике дайджеста такой поиск уже есть
@@ -717,14 +610,14 @@ def list_articles(
         clauses.append(f"{marks.article_status_sql()} = %s")
         params.append(status)
     elif not changed_only:
-        # Пометка «Шум»/«Дубликат» — это «убрать с глаз», и она обязана убирать.
+        # Пометка «Шум»/«Дубликат» это «убрать с глаз», и она обязана убирать.
         # Раньше лента не фильтровала статусы вообще, поэтому помеченное продолжало
         # висеть у того, кто его пометил (замер 24.07: 104 таких статьи в ленте).
         # Отметка общая (#111): «шум», поставленный одним, прячет статью у всех. Явный
         # фильтр по статусу и вкладка «Со статусом»
-        # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
+        # (changed_only) по-прежнему показывают помеченное: иначе его не пересмотреть.
         # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
-        # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
+        # «отработано, с глаз долой»: в том числе после снятия статьи из дайджеста.
         clauses.append(f"{marks.article_status_sql()} NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
         clauses.append(f"{marks.article_status_sql()} <> 'new'")
@@ -735,7 +628,7 @@ def list_articles(
         # Ещё НЕ оценённые статьи (у публикации нет балла: «Карточка» не ответила, у статьи без сигнала нет строки в
         # article_scores) не «низкобалльные»:
         # балла у них попросту нет, и COALESCE(...,0) выдавал бы за 0, отсекая свежий приток
-        # порогом. Порог применяем только к УЖЕ оценённым — иначе новые статьи исчезают из
+        # порогом. Порог применяем только к УЖЕ оценённым: иначе новые статьи исчезают из
         # ленты до прохода ИИ и она выглядит замороженной. Тот же принцип, что строкой ниже
         # для c.relevant IS NULL: необработанное не прячем.
         clauses.append("(pub.total_score IS NULL OR pub.total_score >= %s)")
@@ -749,7 +642,7 @@ def list_articles(
     if date_to:
         clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
         params.append(date_to)
-    # Базовая видимость — одно условие с её счётчиками, архивом и сборщиком выпуска
+    # Базовая видимость: одно условие с её счётчиками, архивом и сборщиком выпуска
     # (отсев «Отбором» и гейтом до него, помеченное на удаление, архивный источник, перепечатка): иначе цифры
     # над лентой расходятся с ней самой (23.09: 2 205 против 1 934). См. feed_window.visible_sql.
     clauses.append(feed_window.visible_sql())
@@ -802,7 +695,7 @@ def dashboard_stats(
     month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
-    """Счётчики ленты — по тому же окну месяца, что и сама лента.
+    """Счётчики ленты: по тому же окну месяца, что и сама лента.
 
     Иначе плитки считали бы всю базу (31 тыс.), а лента показывала бы сентябрь
     (2 тыс.), и цифры над лентой перестали бы с ней сходиться. `window` сообщает
@@ -830,60 +723,9 @@ def feed_window_months(user: dict[str, Any] = Depends(require_user)) -> dict[str
     return _clean(payload)
 
 
-@app.get("/api/backlog", dependencies=[Depends(require_backlog_module)])
-def backlog_endpoint(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return backlog.read_backlog()
-
-
-@app.post("/api/backlog/tasks", dependencies=[Depends(require_backlog_module)])
-def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    try:
-        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status, details=payload.details, due_date=payload.due_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.patch("/api/backlog/tasks/{task_id}", dependencies=[Depends(require_backlog_module)])
-def update_backlog_task_endpoint(
-    task_id: str,
-    payload: BacklogTaskPatch,
-    user: dict[str, Any] = Depends(require_user),
-) -> dict[str, Any]:
-    try:
-        updated: dict[str, Any] | None = None
-        fields_set = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
-        if "status" in fields_set and payload.status is not None:
-            updated = backlog.update_task_status(task_id, payload.status)
-        if "due_date" in fields_set:
-            updated = backlog.update_task_due_date(task_id, payload.due_date)
-        if updated is None:
-            raise HTTPException(status_code=400, detail="Нет изменений для задачи")
-        return updated
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.post("/api/backlog/tasks/{task_id}/comments", dependencies=[Depends(require_backlog_module)])
-def create_backlog_task_comment_endpoint(
-    task_id: str,
-    payload: BacklogTaskCommentCreate,
-    user: dict[str, Any] = Depends(require_user),
-) -> dict[str, Any]:
-    try:
-        return backlog.add_task_comment(task_id, payload.text, str(user.get("email") or "Пользователь"))
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
 @app.patch("/api/articles/{article_id}")
 def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    # Статус и выбор в дайджест — общая отметка (#111). selected_for_digest сводится к статусу.
+    # Статус и выбор в дайджест: общая отметка (#111). selected_for_digest сводится к статусу.
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
         # Снятие из дайджеста ведёт в `archive` (решение владельца 12.09; раньше был
@@ -896,7 +738,7 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Article not found")
-    # Архив — только просмотр (решение владельца 23.09): статус и «в дайджест» у статьи
+    # Архив: только просмотр (решение владельца 23.09): статус и «в дайджест» у статьи
     # прошлого месяца не меняются ни из интерфейса, ни прямым запросом. Ради этого и
     # сделан зазор до FEED_ROLLOVER_DAY: выпуск собирается, пока прошлый месяц виден.
     window = feed_window.current()
@@ -913,8 +755,8 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         article_id, status=target_status, analyst_comment=patch.analyst_comment, user_id=int(user["id"]),
     )
     # Журнал обратной связи. До 12.09 таблица signal_feedback_events была мёртвой:
-    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки —
-    # вот этот эндпоинт — не писал вовсе. Поэтому на вопрос заказчика «я всё что
+    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки:
+    # вот этот эндпоинт: не писал вовсе. Поэтому на вопрос заказчика «я всё что
     # выделил как шум, он на этом обучился?» честный ответ был «обучаться не на чем».
     # Прежний статус возвращает сама запись: в отметке одна строка на статью, истории
     # переходов там нет, после UPDATE прежнее значение уже не достать.
@@ -936,8 +778,8 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
                 comment=patch.analyst_comment,
             )
     except Exception:  # noqa: BLE001
-        # Журнал не должен ронять саму пометку: потерять событие — неприятно,
-        # не дать человеку пометить статью — хуже.
+        # Журнал не должен ронять саму пометку: потерять событие: неприятно,
+        # не дать человеку пометить статью: хуже.
         logger.exception("не удалось записать событие обратной связи article_id=%s", article_id)
     return {"ok": True}
 
@@ -962,454 +804,12 @@ def source_health(
     return [_clean(row) for row in repository.source_health_report(stale_days=stale_days, limit=limit, verdict=verdict)]
 
 
-@app.get("/api/source-candidates")
-def list_source_candidates(
-    status: str | None = None,
-    topic: str | None = None,
-    limit: int = Query(100, ge=1, le=500),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_source_candidates(status=status, topic=topic, limit=limit)]
-
-
-@app.get("/api/source-candidates/triage")
-def source_candidate_triage(
-    limit: int = Query(20, ge=1, le=100),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.source_candidate_triage_report(limit=limit)]
-
-
-def require_source_agent(user: dict[str, Any] = Depends(require_admin)) -> None:
-    """Запуск агента источников: пока он выключен в коде (config.SOURCE_AGENT_DISABLED), 410. Сначала проверка
-    админа, затем отказ; чтение истории агента (кандидаты, память, прогоны) этим не закрыто."""
-    if config.SOURCE_AGENT_DISABLED:
-        raise HTTPException(status_code=410, detail=config.SOURCE_AGENT_DISABLED_MESSAGE)
-
-
-@app.post("/api/source-discovery/discover", dependencies=[Depends(require_source_agent)])
-def source_discovery_discover(
-    payload: SourceDiscoveryDiscoverRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    topic = payload.topic.strip()
-    seed_url = payload.seed_url.strip()
-    if not topic:
-        raise HTTPException(status_code=400, detail="topic is required")
-    if not seed_url:
-        raise HTTPException(status_code=400, detail="seed_url is required")
-    if payload.limit < 1 or payload.limit > 50:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 50")
-
-    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources
-
-    result = discover_sources(DiscoveryConfig(
-        topic=topic,
-        limit=payload.limit,
-        seed_urls=(seed_url,),
-        offline=payload.offline,
-        dry_run=False,
-        fetch_inspection=payload.fetch_inspection,
-        test_parse=payload.test_parse,
-    ))
-    repository.record_agent_action(
-        None,
-        "manual_seed_source_candidate",
-        input_payload={**payload.model_dump(), "user_id": int(user["id"])},
-        output_payload={
-            "topic": topic,
-            "seed_url": seed_url,
-            "candidates": len(result.get("candidates") or []),
-            "candidate_ids": [item.get("id") for item in result.get("candidates") or [] if item.get("id")],
-        },
-        duration_ms=result.get("duration_ms"),
-    )
-    return {"ok": True, "result": _clean(result)}
-
-
-@app.get("/api/source-discovery/plan", dependencies=[Depends(require_source_agent)])
-def source_discovery_plan(
-    days: int = Query(30, ge=1, le=365),
-    target_per_topic: int = Query(10, ge=1, le=100),
-    topic_limit: int = Query(5, ge=1, le=50),
-    candidate_limit: int = Query(10, ge=1, le=50),
-    max_actions: int = Query(5, ge=1, le=50),
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan
-
-    return _clean(build_plan(PlannerConfig(
-        days=days,
-        target_per_topic=target_per_topic,
-        topic_limit=topic_limit,
-        candidate_limit=candidate_limit,
-        max_actions=max_actions,
-        persist_memory=False,
-        record_action=False,
-    )))
-
-
-@app.post("/api/source-discovery/plan/enqueue", dependencies=[Depends(require_source_agent)])
-def enqueue_source_discovery_plan(
-    payload: SourceDiscoveryPlanRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.days < 1 or payload.days > 365:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
-    if payload.topic_limit < 1 or payload.topic_limit > 50:
-        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
-    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
-        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
-    if payload.max_actions < 1 or payload.max_actions > 50:
-        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
-    job = background_jobs.enqueue(
-        "source_discovery_plan",
-        payload.model_dump(),
-        user_id=int(user["id"]),
-        queue_name="default",
-        execution_region="ru",
-        capability="source-discovery",
-        max_attempts=1,
-    )
-    return {"ok": True, "job": _job_payload(job)}
-
-
-@app.post("/api/source-discovery/loop/enqueue", dependencies=[Depends(require_source_agent)])
-def enqueue_source_discovery_loop(
-    payload: SourceDiscoveryLoopRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.days < 1 or payload.days > 365:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
-    if payload.topic_limit < 1 or payload.topic_limit > 50:
-        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
-    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
-        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
-    if payload.max_actions < 1 or payload.max_actions > 50:
-        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
-    if payload.max_iterations < 1 or payload.max_iterations > 10:
-        raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
-    if payload.article_limit < 1 or payload.article_limit > 20:
-        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
-    if payload.max_daily_loop_runs < 0 or payload.max_daily_candidates < 0 or payload.max_daily_evaluations < 0:
-        raise HTTPException(status_code=400, detail="daily budget limits must be non-negative")
-    job = background_jobs.enqueue(
-        "source_discovery_loop",
-        payload.model_dump(),
-        user_id=int(user["id"]),
-        queue_name="default",
-        execution_region="ru",
-        capability="source-discovery",
-        max_attempts=1,
-    )
-    return {"ok": True, "job": _job_payload(job)}
-
-
-@app.post("/api/source-discovery/loop/dry-run", dependencies=[Depends(require_source_agent)])
-def dry_run_source_discovery_loop(
-    payload: SourceDiscoveryLoopRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.days < 1 or payload.days > 365:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
-    if payload.topic_limit < 1 or payload.topic_limit > 50:
-        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
-    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
-        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
-    if payload.max_actions < 1 or payload.max_actions > 50:
-        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
-    if payload.max_iterations < 1 or payload.max_iterations > 10:
-        raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
-    if payload.article_limit < 1 or payload.article_limit > 20:
-        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
-    if payload.max_daily_loop_runs < 0 or payload.max_daily_candidates < 0 or payload.max_daily_evaluations < 0:
-        raise HTTPException(status_code=400, detail="daily budget limits must be non-negative")
-
-    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
-
-    result = run_agent_loop(AgentLoopConfig(
-        goal=payload.goal,
-        days=payload.days,
-        target_per_topic=payload.target_per_topic,
-        topic_limit=payload.topic_limit,
-        candidate_limit=payload.candidate_limit,
-        max_actions=payload.max_actions,
-        max_iterations=payload.max_iterations,
-        offline=payload.offline,
-        fetch_inspection=payload.fetch_inspection,
-        test_parse=payload.test_parse,
-        dry_run=True,
-        auto_evaluate=False,
-        article_limit=payload.article_limit,
-        persist_memory=False,
-        max_daily_loop_runs=payload.max_daily_loop_runs,
-        max_daily_candidates=payload.max_daily_candidates,
-        max_daily_evaluations=payload.max_daily_evaluations,
-    ))
-    return {"ok": True, "result": _clean(result)}
-
-
-@app.get("/api/source-discovery/memory")
-def source_discovery_memory(
-    memory_type: str | None = Query(None),
-    status: str | None = Query("active"),
-    limit: int = Query(100, ge=1, le=500),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    normalized_status = status.strip() if isinstance(status, str) and status.strip() else None
-    return [_clean(row) for row in repository.list_agent_memory(memory_type=memory_type, status=normalized_status, limit=limit)]
-
-
-@app.post("/api/source-discovery/memory")
-def create_source_discovery_memory(
-    payload: AgentMemoryCreate,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    memory_type = payload.memory_type.strip().lower()
-    subject = payload.subject.strip()
-    if memory_type not in {"topic", "domain", "source", "query", "strategy", "rule"}:
-        raise HTTPException(status_code=400, detail="Unknown memory type")
-    if payload.status not in {"active", "muted", "rejected"}:
-        raise HTTPException(status_code=400, detail="Unknown memory status")
-    if not subject:
-        raise HTTPException(status_code=400, detail="Memory subject is required")
-    normalized_subject = repository.normalize_domain(subject) if memory_type == "domain" else subject
-    memory_id = repository.upsert_agent_memory(
-        memory_key=f"manual:{memory_type}:{normalized_subject.lower()}",
-        memory_type=memory_type,
-        subject=normalized_subject,
-        status=payload.status,
-        score=payload.score,
-        facts={**(payload.facts or {}), "manual": True, "created_by_user_id": int(user["id"])},
-    )
-    repository.record_agent_action(
-        None,
-        "create_agent_memory",
-        input_payload=payload.model_dump(),
-        output_payload={"memory_id": memory_id, "memory_type": memory_type, "subject": normalized_subject, "status": payload.status},
-    )
-    return {"ok": True, "id": memory_id}
-
-
-@app.patch("/api/source-discovery/memory/{memory_id}")
-def patch_source_discovery_memory(
-    memory_id: int,
-    payload: AgentMemoryPatch,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.status not in {"active", "muted", "rejected"}:
-        raise HTTPException(status_code=400, detail="Unknown memory status")
-    if not repository.update_agent_memory_status(memory_id, payload.status):
-        raise HTTPException(status_code=404, detail="Agent memory row not found")
-    repository.record_agent_action(
-        None,
-        "update_agent_memory",
-        input_payload={"memory_id": memory_id, "status": payload.status},
-        output_payload={"ok": True},
-    )
-    return {"ok": True}
-
-
-@app.get("/api/source-discovery/actions")
-def source_discovery_actions(
-    action_type: str | None = Query(None),
-    run_id: int | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_agent_actions(action_type=action_type, run_id=run_id, limit=limit)]
-
-
-@app.get("/api/source-discovery/runs")
-def source_discovery_runs(
-    status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_agent_runs(status=status, limit=limit)]
-
-
-@app.get("/api/source-discovery/quality")
-def source_discovery_quality(
-    group_by: str = Query("topic"),
-    limit: int = Query(20, ge=1, le=100),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    if group_by not in {"topic", "domain"}:
-        raise HTTPException(status_code=400, detail="group_by must be topic or domain")
-    return [_clean(row) for row in repository.source_candidate_quality_report(group_by=group_by, limit=limit)]
-
-
-@app.get("/api/source-discovery/query-memory")
-def source_discovery_query_memory(
-    limit: int = Query(20, ge=1, le=100),
-    status: str | None = Query("active"),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    normalized_status = status.strip() if isinstance(status, str) and status.strip() else None
-    return [_clean(row) for row in repository.query_memory_report(status=normalized_status, limit=limit)]
-
-
-@app.get("/api/source-discovery/evaluation")
-def source_discovery_evaluation(
-    limit: int = Query(500, ge=1, le=2000),
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    candidates = repository.list_source_candidates(limit=limit)
-    source_memory = repository.list_agent_memory(memory_type="source", status=None, limit=limit)
-    actions = repository.list_agent_actions(limit=min(limit, 500))
-    return _clean(_source_discovery_evaluation_report(candidates, source_memory, actions))
-
-
-@app.get("/api/source-discovery/readiness")
-def source_discovery_readiness_endpoint(
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    from oiltech_digest.source_discovery.readiness import source_discovery_readiness
-
-    return _clean(source_discovery_readiness())
-
-
-@app.get("/api/source-candidates/{candidate_id}/articles")
-def list_source_candidate_articles(
-    candidate_id: int,
-    limit: int = Query(20, ge=1, le=100),
-    user: dict[str, Any] = Depends(require_admin),
-) -> list[dict[str, Any]]:
-    if repository.get_source_candidate(candidate_id) is None:
-        raise HTTPException(status_code=404, detail="Source candidate not found")
-    return [_clean(row) for row in repository.list_source_candidate_articles(candidate_id, limit=limit)]
-
-
-@app.patch("/api/source-candidates/{candidate_id}")
-def patch_source_candidate(
-    candidate_id: int,
-    payload: SourceCandidatePatch,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.status is not None and payload.status not in repository.SOURCE_CANDIDATE_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown source candidate status")
-    if payload.recommended_action is not None and payload.recommended_action not in repository.SOURCE_CANDIDATE_ACTIONS:
-        raise HTTPException(status_code=400, detail="Unknown source candidate recommended_action")
-    if repository.get_source_candidate(candidate_id) is None:
-        raise HTTPException(status_code=404, detail="Source candidate not found")
-    repository.update_source_candidate_assessment(
-        candidate_id,
-        status=payload.status,
-        recommended_action=payload.recommended_action,
-        review_comment=payload.review_comment,
-    )
-    learning = None
-    if payload.status in {"approved", "rejected", "paused"} or payload.recommended_action == "reject":
-        learning = apply_candidate_learning(
-            candidate_id,
-            event_type="operator_update",
-            status=payload.status,
-            recommended_action=payload.recommended_action,
-            review_comment=payload.review_comment,
-        )
-    repository.record_agent_action(
-        None,
-        "update_source_candidate",
-        input_payload={"candidate_id": candidate_id, **payload.model_dump(exclude_none=True)},
-        output_payload={"ok": True, "learning": learning},
-    )
-    return {"ok": True}
-
-
-@app.post("/api/source-candidates/{candidate_id}/evaluate", dependencies=[Depends(require_source_agent)])
-def evaluate_source_candidate(
-    candidate_id: int,
-    payload: SourceCandidateEvaluateRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate as run_evaluation
-
-    if payload.article_limit < 1 or payload.article_limit > 20:
-        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
-    try:
-        result = run_evaluation(
-            candidate_id,
-            article_limit=payload.article_limit,
-            offline=payload.offline,
-            collect=payload.collect,
-            process=payload.process,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return _clean(result)
-
-
-@app.post("/api/source-candidates/{candidate_id}/approve", dependencies=[Depends(require_source_agent)])
-def approve_source_candidate(
-    candidate_id: int,
-    payload: SourceCandidateApproveRequest,
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
-    if payload.parse_strategy is not None and payload.parse_strategy not in {"rss", "request", "playwright"}:
-        raise HTTPException(status_code=400, detail="parse_strategy must be rss, request or playwright")
-    if payload.network_region not in {"auto", "ru", "external"}:
-        raise HTTPException(status_code=400, detail="network_region must be auto, ru or external")
-    try:
-        source_id = repository.approve_source_candidate(
-            candidate_id,
-            name=payload.name,
-            source_type=payload.source_type,
-            parse_strategy=payload.parse_strategy,
-            enabled=payload.enabled,
-            category=payload.category,
-            priority=payload.priority,
-            network_region=payload.network_region,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    initial_job = None
-    if payload.scrape_after_approve:
-        source = repository.get_source(source_id)
-        strategy = source.get("parse_strategy") if source else None
-        if source and strategy in {"request", "playwright"}:
-            decision = network_policy.route_source_task(source, task_kind="scrape")
-            initial_job = background_jobs.enqueue(
-                "scrape_source",
-                {"source_id": source_id, "reason": "approved_source_candidate", "candidate_id": candidate_id},
-                user_id=int(user["id"]),
-                queue_name=decision.queue_name,
-                execution_region=decision.execution_region,
-                capability=decision.capability,
-                max_attempts=1,
-            )
-        elif source and strategy == "rss":
-            initial_job = background_jobs.enqueue(
-                "parse_source_once",
-                {"source_id": source_id, "reason": "approved_source_candidate", "candidate_id": candidate_id},
-                user_id=int(user["id"]),
-                queue_name="default",
-                execution_region="ru",
-                capability="rss_parse",
-                max_attempts=1,
-            )
-    repository.record_agent_action(
-        None,
-        "approve_source_candidate",
-        input_payload={"candidate_id": candidate_id, **payload.model_dump()},
-        output_payload={"source_id": source_id, "initial_job_id": int(initial_job["id"]) if initial_job else None},
-    )
-    apply_candidate_learning(
-        candidate_id,
-        event_type="approved",
-        status="approved",
-        recommended_action="add",
-        source_id=source_id,
-    )
-    return {"ok": True, "source_id": source_id, "initial_job": _job_payload(initial_job) if initial_job else None}
-
-
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    # Пользователь вставляет просто ссылку — система пробует к ней КАЖДУЮ стратегию:
+    # Пользователь вставляет просто ссылку, система пробует к ней КАЖДУЮ стратегию:
     # RSS-ленту (и проверяет, что она не мёртвая), обычный запрос, браузер; если с
-    # РФ-ядра сайт закрыт — ставит сбор через зарубежный воркер. До 18.09 здесь был
-    # только поиск RSS, а без него — молча `request` по введённому адресу: так
+    # РФ-ядра сайт закрыт: ставит сбор через зарубежный воркер. До 18.09 здесь был
+    # только поиск RSS, а без него, молча `request` по введённому адресу: так
     # заводились источники, не давшие ни одной статьи никогда. RSS, переданный явно,
     # берётся как есть.
     site_url = (payload.url or payload.rss_url or "").strip()
@@ -1426,7 +826,7 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
         else:
             # Сайт открылся, но статей не дала ни одна стратегия. Заводим выключенным:
             # включённый он опрашивался бы вечно впустую. Настроить селектор и
-            # включить — руками, отчёт перебора в ответе.
+            # включить: руками, отчёт перебора в ответе.
             parse_strategy, listing_url, enabled = "request", site_url, False
     source_id = repository.add_rss_source(
         name=payload.name,
@@ -1527,7 +927,7 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
 def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Убрать источник из работы: перестать опрашивать И убрать его статьи из ленты.
 
-    Требование заказчика 12.09 («выключаем источник — не парсится больше, уходит в архив,
+    Требование заказчика 12.09 («выключаем источник: не парсится больше, уходит в архив,
     его статьи уходят из выборки»). Жёсткого DELETE намеренно нет: articles.source_id
     ссылается на sources БЕЗ ON DELETE, поэтому удаление источника со статьями Postgres
     просто отклонит, а каскад уничтожил бы корпус и историю ИИ-затрат. Архив обратим.
@@ -1547,7 +947,7 @@ def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)
 
 @app.post("/api/sources/{source_id}/unarchive")
 def unarchive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть источник из архива. Включать сбор НЕ начинаем — это отдельное решение."""
+    """Вернуть источник из архива. Включать сбор НЕ начинаем: это отдельное решение."""
     with get_connection() as conn:
         cur = conn.execute(
             "UPDATE sources SET archived_at = NULL, updated_at = now() WHERE id = %s RETURNING id, name",
@@ -1635,7 +1035,7 @@ def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin))
     try:
         result = repository.save_tags([i.model_dump() for i in items])
     except ValueError as exc:
-        # Разорванная связь родитель-подтег — не 500, а внятный отказ: сохранение целиком
+        # Разорванная связь родитель-подтег, не 500, а внятный отказ: сохранение целиком
         # отменяется, дерево остаётся прежним.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
@@ -1646,14 +1046,14 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
     try:
         repository.delete_tag(tag_id)
     except ValueError as exc:
-        # Служебный тег-приёмник удалить нельзя — объясняем, а не 500.
+        # Служебный тег-приёмник удалить нельзя: объясняем, а не 500.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
 # --- Дочерние общества (решение владельца 20.10) ------------------------------------------------
 # Список «дочка → мать» для фильтра «всё про компанию»: ведут на экране, правка действует без выката.
-# Проверки и разбор вставки — company_parents.py, база — db/company_parents_repo.py.
+# Проверки и разбор вставки: company_parents.py, база: db/company_parents_repo.py.
 # Одна ли это компания: правило фильтра (signal_card_filters.company_rule), берётся раз на запрос.
 
 
@@ -1698,7 +1098,7 @@ def delete_company_parent(pair_id: int, user: dict[str, Any] = Depends(require_a
 def import_company_parents(
     payload: CompanyParentsImportIn, user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply — все строки одной
+    """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply: все строки одной
     транзакцией, если ни в одной нет ошибки; иначе 400 с тем же разбором (и message), ничего не записано."""
     if not payload.apply:
         return company_parents.paste_answer(_company_parent_lines(payload.text, company_parents_repo.pairs()),
@@ -1745,7 +1145,7 @@ def list_scoring_criteria(
     profile: str = Query(ARTICLE_SCORING_PROFILE),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    """Критерии профиля — вкладки экрана «Скоринг» (сессия G). Без параметра — business:
+    """Критерии профиля: вкладки экрана «Скоринг» (сессия G). Без параметра, business:
     старый бандл фронта профилей не знает и работает с набором ленты, как раньше."""
     try:
         rows = repository.list_enabled_scoring_criteria(profile)
@@ -1790,11 +1190,11 @@ class FeedbackIn(BaseModel):
 @app.get("/api/feedback/reasons")
 def feedback_reasons(target: str = Query("article", pattern="^(article|source)$"),
                      user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
-    """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
+    """Словарь быстрых причин. Фронт не хранит свою копию: иначе списки разойдутся,
     как уже разошлись четыре независимых списка статусов статьи.
 
-    `target=source` — для ОС по источнику: без причин про сам сигнал («Не тот блок»).
-    Какая причина к чему применима, решает сервер — он же отбивает её при сохранении."""
+    `target=source`: для ОС по источнику: без причин про сам сигнал («Не тот блок»).
+    Какая причина к чему применима, решает сервер: он же отбивает её при сохранении."""
     # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
     # статус платформы». Платформа выходит на корпоративный портал заказчика, и разговорный
     # тон («Уже было», «Годный сигнал») там неуместен.
@@ -1824,13 +1224,13 @@ def get_feedback(article_id: int | None = None, source_id: int | None = None,
 
 @app.post("/api/feedback")
 def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Оставить ОС по сигналу или по источнику: оценки 1–5, быстрая причина, комментарий.
+    """Оставить ОС по сигналу или по источнику: оценки 1-5, быстрая причина, комментарий.
 
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
-    (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+    (`/api/feedback/sources`) собирает их вместе: там и появляется общая картина.
 
-    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Явно
-    присланный пустой комментарий стирает его — так фронт шлёт очищенное поле. Не
+    Явный `"reason": null` снимает причину: так фронт шлёт повторный клик по чипу. Явно
+    присланный пустой комментарий стирает его: так фронт шлёт очищенное поле. Не
     присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
     comment = (payload.comment or "").strip() or None
@@ -1855,7 +1255,7 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
 @app.get("/api/feedback/sources")
 def feedback_sources(limit: int = Query(300, ge=1, le=1000),
                      user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
-    """Свод оценок по источникам — на что люди жалуются системно."""
+    """Свод оценок по источникам: на что люди жалуются системно."""
     return [_clean(row) for row in repository.feedback_source_summary(limit=limit)]
 
 
@@ -1892,15 +1292,15 @@ def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[st
 
 
 def _company_filter(
-    # «Всё про компанию» (#97): участник карточки — та же компания по правилу «одна компания» (word_forms) или её
+    # «Всё про компанию» (#97): участник карточки: та же компания по правилу «одна компания» (word_forms) или её
     # дочернее общество по списку «дочка → мать» (экран «Дочерние общества», решение владельца 20.10).
     company: str | None = Query(None, max_length=200),
-    # Имена участников и список дочек фильтр читает из базы — только после входа.
+    # Имена участников и список дочек фильтр читает из базы: только после входа.
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, list[str]] | None:
-    """Фильтр «всё про компанию» — здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
+    """Фильтр «всё про компанию», здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
     signal_card_filters.company_group) и под какими именами участников в базе (names: выборка сверяет их точно).
-    Нет компании — нет фильтра; есть — фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
+    Нет компании: нет фильтра; есть: фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
     сигналов, а не все. Список дочек читается на каждом запросе: правка на экране «Дочерние общества» действует
     сразу, без выката. Список сигналов и сводка берут фильтр зависимостью: в одном запросе он считается один раз."""
     if not (company or "").strip():
@@ -1912,7 +1312,7 @@ def _company_filter(
 def _radar_screen_filters(
     maturity: str | None = Query(None, pattern="^(watch|shortlist|proven|reject)$"),
     theme: str | None = None,
-    # Поиск, период «Поступил» (даты по Москве) и балл — на сервере, по всему радару, а не по
+    # Поиск, период «Поступил» (даты по Москве) и балл: на сервере, по всему радару, а не по
     # загруженной странице (замечание заказчика 19.09).
     q: str | None = Query(None, max_length=200),
     since: date | None = None,
@@ -1920,25 +1320,25 @@ def _radar_screen_filters(
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
     # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
-    # поиском, архив) — только админу (решение владельца 05.10: заказчик Виктор — админ).
+    # поиском, архив): только админу (решение владельца 05.10: эксперт заказчика тоже админ).
     hidden: bool = False,
-    # Витрина (#95, ADR 0003): «technology» — технологический радар, как был; «business» —
+    # Витрина (#95, ADR 0003): «technology», технологический радар, как был; «business»:
     # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
     showcase: str = Query("technology", pattern="^(technology|business)$"),
-    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity —
-    # зрелость технологии; maturity выше — решение радара (наблюдать / кандидат / подтверждено).
+    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity:
+    # зрелость технологии; maturity выше: решение радара (наблюдать / кандидат / подтверждено).
     event_type: str | None = Query(None, max_length=100),
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
     technology_maturity: str | None = Query(None, max_length=100),
     # Страна (#137): имя справочника стран; сигнал находится и по стране события, и по стране участника.
     country: str | None = Query(None, max_length=100),
-    # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
+    # «Всё про компанию» (#97): с дочками по списку «дочка → мать» (_company_filter).
     company_filter: dict[str, list[str]] | None = Depends(_company_filter),
-    # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
+    # Раздел отклонённого «кто убрал → причина» (#130), только админу: вместо витрины его публикации любой
     # категории, у каждой короткая причина (section_reason).
     section: str | None = Query(None, max_length=60),
-    # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью» —
+    # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью»:
     # список тех же карточек, что посчитала плашка.
     tile: str | None = Query(None, pattern="^(new_7d|in_digest|with_feedback)$"),
     # Наличие ОС (решение владельца 03.11): with значит у карточки есть запись блока «Обратная связь» (её «Оценки
@@ -1969,7 +1369,7 @@ def _radar_screen_filters(
         "min_score": min_score,
         "max_score": max_score,
         **card,
-        # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
+        # Пустой список имён: фильтр, который ничего не нашёл, а не «без фильтра».
         "company_names": None if company_filter is None else company_filter["names"],
         "section": found_section,
         "tile": tile,
@@ -1988,15 +1388,15 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
-    # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
+    # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
-    # Месяц выпуска карточки закрыт — «В дайджест» и «Убрать» на экране неактивны. Правило то
+    # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
     # же, что у отказа в PATCH /api/signals/{id}: экран своей формулы не держит.
     window = feed_window.current()
     rows = []
     for row in cards:
-        # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
-        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
+        # Словесная оценка: по порогам ленты (80/65/40), как у бизнес-сигналов (документ
+        # заказчика 19.09); цвет балла на экране: по этому слову, как в ленте. У сигнала с баллами второго
         # вызова «Карточки» (#132) его ступень: сильный, полезный, наблюдать, слабый. Балла нет, нет и подписи
         # (signal_scoring.unscored). Та же подпись у статьи в /api/articles: «Дайджест» и витрины показывают один балл.
         unscored = signal_scoring.unscored(row)
@@ -2021,7 +1421,7 @@ def signal_radar_weekly(
     """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
     weekly = repository.radar_weekly_summary(days=days)
     if user.get("role") != "admin":
-        # Отсеянное и скрытое — служебное, как и сам раздел: число и причины только админу.
+        # Отсеянное и скрытое, служебное, как и сам раздел: число и причины только админу.
         weekly.pop("filtered", None)
         weekly.pop("filtered_reasons", None)
     return _clean(weekly)
@@ -2034,12 +1434,12 @@ def signal_radar_summary(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра. С фильтром «всё про
-    компанию» — и кого он показывает (company_group: сама компания первой, затем её дочки по списку): экран пишет
+    компанию», и кого он показывает (company_group: сама компания первой, затем её дочки по списку): экран пишет
     это рядом с полем «Компания»."""
     _guard_hidden_radar(filters, user)
     summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
-        # Число отсеянных и скрытых — служебное, как и сами карточки.
+        # Число отсеянных и скрытых: служебное, как и сами карточки.
         summary.pop("rejected", None)
     if company_filter is not None:
         summary["company_group"] = company_filter["group"]
@@ -2048,8 +1448,8 @@ def signal_radar_summary(
 
 @app.get("/api/signals/dictionaries")
 def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»; и что можно
-    вписать, возвращая отклонённое (#132) — по справочнику «Отбора»."""
+    """Значения фильтров атрибутов карточки на экранах (#97): справочники агента «Карточка сигнала»; и что можно
+    вписать, возвращая отклонённое (#132): по справочнику «Отбора»."""
     from oiltech_digest.otbor_answer import return_choices
     from oiltech_digest.otbor_pack_format import load_dictionaries
 
@@ -2062,12 +1462,12 @@ def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
 
 
 def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:
-    """«В дайджест» и «Убрать» у карточки радара закрытого месяца — отказ (решение владельца
-    29.09), как статус статьи из архива ленты: выпуск прошлого месяца — только просмотр.
+    """«В дайджест» и «Убрать» у карточки радара закрытого месяца: отказ (решение владельца
+    29.09), как статус статьи из архива ленты: выпуск прошлого месяца: только просмотр.
 
-    Месяц карточки — месяц её поступления на радар по Москве (feed_window.signal_month_sql):
-    по нему сборщик кладёт её в выпуск. Открытые месяцы — окно ленты: текущий, а до
-    FEED_ROLLOVER_DAY ещё и прошлый, пока собирается его выпуск. Отказ — только если запрос
+    Месяц карточки: месяц её поступления на радар по Москве (feed_window.signal_month_sql):
+    по нему сборщик кладёт её в выпуск. Открытые месяцы, окно ленты: текущий, а до
+    FEED_ROLLOVER_DAY ещё и прошлый, пока собирается его выпуск. Отказ: только если запрос
     ставит или снимает «в дайджест»: другой статус у выбранной карточки тоже вывел бы её из
     выпуска закрытого месяца. Статус мимо выпуска, комментарий и отзыв окно не трогает.
     """
@@ -2103,9 +1503,9 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
             raise HTTPException(status_code=409, detail=f"В дайджест не ставится: {refusal}")
     article_id = repository.feed_signal_article(signal_id)
     if article_id is not None:
-        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка — его статьи, та же,
-        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи — «новая».
-        # Прочие статусы и комментарий статьи — в ленте статей, витрина их не меняет.
+        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка: его статьи, та же,
+        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи: «новая».
+        # Прочие статусы и комментарий статьи: в ленте статей, витрина их не меняет.
         if patch.status not in (None, "digest", "watch") or patch.analyst_comment is not None:
             raise HTTPException(status_code=422,
                                 detail="У сигнала ленты витрина меняет только отметку «в дайджест»")
@@ -2136,7 +1536,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         )
     was_selected = previous == "digest"
     if target_status is not None and (target_status == "digest") != was_selected:
-        # Выбор в дайджест — «Сильный сигнал» для обучения агента, один пример на карточку;
+        # Выбор в дайджест: «Сильный сигнал» для обучения агента, один пример на карточку;
         # снятие отметки (любым статусом и любым участником) гасит примеры этой карточки.
         # Учимся на смене отметки, а не на нажатии: повторная «в дайджест» второго примера не даёт.
         # Сбой обучения не должен отменять отметку, которую пользователь уже поставил.
@@ -2154,8 +1554,8 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 @app.post("/api/signals/{signal_id}/return")
 def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
                            user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», — отрасль, связь и
-    применение, категорию — и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
+    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», отрасль, связь и
+    применение, категорию, и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
     человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит только он (решение 05.10)."""
     from oiltech_digest.db import otbor_store
     from oiltech_digest.otbor_answer import return_problems
@@ -2193,15 +1593,15 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
     if payload.article_id is None and payload.signal_id is None and not payload.source_url:
         raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
     if payload.signal_id is not None and not repository.judge_learns_from(payload.signal_id):
-        # Блок ОС (#130, решение владельца 22.10) — у сигнала ленты и у находки радара в бизнес-ленте: только
-        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт — ею, как и всей ОС,
+        # Блок ОС (#130, решение владельца 22.10), у сигнала ленты и у находки радара в бизнес-ленте: только
+        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт: ею, как и всей ОС,
         # будет управлять сервис ОС. Правок карточки и «дубля» у блока нет: экран их не предлагает, сервер не
         # принимает молча.
         if (payload.corrected_title or "").strip() or (payload.corrected_thesis or "").strip() \
                 or payload.duplicate_of_signal_id:
             raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
                                                         "правки карточки и «дубль» — у находки радара на радаре")
-        # Пустой блок не пишется: неизвестная оценка — не оценка, как на пути радара (store_signal_feedback).
+        # Пустой блок не пишется: неизвестная оценка: не оценка, как на пути радара (store_signal_feedback).
         verdict = _normalize_verdict(payload.verdict)
         if not (payload.comment.strip() or verdict or (payload.reason or "").strip()):
             raise HTTPException(status_code=400, detail="comment or structured feedback is required")
@@ -2286,8 +1686,8 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
 
 
 def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
-    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128) — не только блок ОС: категория меняется сразу, баллы
-    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора» — как раньше: блок ОС
+    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128), не только блок ОС: категория меняется сразу, баллы
+    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора», как раньше: блок ОС
     и память судьи. {"recategorized": новая категория} или пусто, если категория не менялась."""
     from oiltech_digest.signal_feedback import _normalize_verdict
 
@@ -2298,8 +1698,8 @@ def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[s
 
 
 def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any] | None:
-    """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
-    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути. Запись без
+    """Сохранённый блок ОС (#130): как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
+    экран добавляет его, не перечитывая витрину. Оценка: тем же словарём, каким её сохранили оба пути. Запись без
     оценки, причины и комментария (только правка заголовка, сути или «дубль») не блок: список и счётчик
     «Обратная связь: N» её не берут (решение владельца 03.11), поэтому None."""
     from oiltech_digest.signal_feedback import _normalize_verdict
@@ -2359,7 +1759,7 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
     from oiltech_digest import signal_discovery
 
     try:
-        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        # Модель поиска GPT и прочие его настройки (#138): решение ядра, едут в задаче.
         research = signal_discovery.research_settings(offline=payload.offline, days=payload.days)
     except signal_discovery.SearchSetupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2408,7 +1808,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
                        fresh: bool = False,
                        user: dict[str, Any] = Depends(require_user)) -> Response:
     """Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же выпуск и та же вёрстка, что у выгрузки
-    PDF, но для окна экрана — inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
+    PDF, но для окна экрана: inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
     отдаётся без повторной сборки (render_digest_preview_pdf); «Обновить PDF» (`fresh`) собирает заново."""
     content = build_digest_content(
         month=month,
@@ -2420,7 +1820,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
     )
     try:
         pdf = render_digest_preview_pdf(content, fresh=fresh)
-    except RuntimeError as exc:  # нет Chromium, занят сборкой, браузер упал — понятное сообщение, не 500
+    except RuntimeError as exc:  # нет Chromium, занят сборкой, браузер упал: понятное сообщение, не 500
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(
         content=pdf,
@@ -2442,7 +1842,7 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
 def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
     """Правка черновика выпуска: месяц «ГГГГ-ММ», не архивный, и без статей из архива.
 
-    Решение владельца 23.09: прошлый выпуск — только просмотр и выгрузка. Статью прошлого
+    Решение владельца 23.09: прошлый выпуск: только просмотр и выгрузка. Статью прошлого
     месяца нельзя провести и в выпуск открытого месяца: PUT принимает готовый список
     статей, и без этой проверки «из архива в дайджест» проходило бы запросом в обход ленты.
     """
@@ -2467,7 +1867,7 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
             status_code=409,
             detail=f"В выпуск нельзя добавить статьи из архива ({labels}): архив открыт только для просмотра.",
         )
-    # У каждого месяца свой выпуск (29.09). 1–4 числа открыты два месяца, и «Все месяцы» +
+    # У каждого месяца свой выпуск (29.09). 1-4 числа открыты два месяца, и «Все месяцы» +
     # «Сохранить draft» клали в черновик следующего месяца статьи предыдущего: тот их терял.
     foreign = sorted(m for m in periods if m != feed_window.month_key(issue_month))
     if foreign:
@@ -2609,7 +2009,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     decision = network_policy.route_digest_export(payload.export_format)
     job = background_jobs.enqueue(
         "digest_export",
-        payload.model_dump(),  # выпуск общий (#111): учётка — только владелец задачи
+        payload.model_dump(),  # выпуск общий (#111): учётка: только владелец задачи
         user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
@@ -2702,7 +2102,7 @@ def external_worker_claim(
 
 @app.get("/api/external-worker/consumers")
 def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
-    """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
+    """Сборки и контракты контейнеров NL: для скрипта выката на NL, где базы нет."""
     return _clean(repository.external_consumers_status())
 
 
@@ -2713,7 +2113,7 @@ def external_worker_page(
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
     """Сбор на РФ (добор находок радара, поручение владельца 04.11): страницу, которую воркер NL не открыл, качает
-    ядро со своего адреса — в аренде задачи и только для прогона радара; что ядро качает, а что нет, — core_page."""
+    ядро со своего адреса: в аренде задачи и только для прогона радара; что ядро качает, а что нет, core_page."""
     lease = _sha256_hex(payload.lease_token)
     if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease):
         raise HTTPException(status_code=409, detail="Job lease is not active")
@@ -2775,14 +2175,14 @@ def external_worker_complete(
     lease_token_hash = _sha256_hex(payload.lease_token)
     # Баг T2 (двойной AI-расход): застолбить завершение АТОМАРНО до применения результата.
     # Пока идёт apply (запись карточек/скоринга + биллинг ai_processing_runs), задача в статусе
-    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст —
+    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст:
     # значит другой воркер не прогонит AI повторно. Лиз истёк/переотдан → 409, ничего не применяем.
     if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
     try:
         result = _apply_external_result(job, result, job_id)
     except Exception:
-        # apply упал — снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
+        # apply упал: снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
         repository.release_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash)
         raise
     ok = repository.finish_external_background_job(
@@ -2798,7 +2198,7 @@ def external_worker_complete(
 
 
 def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Записать итог внешней задачи в базу ядра — полный (complete) или частичный (release)."""
+    """Записать итог внешней задачи в базу ядра: полный (complete) или частичный (release)."""
     if job.get("kind") == "process_articles" and result.get("external_ai"):
         # Какие стадии писать, лежит в payload_json задачи (пересчёт после полного текста: только суть).
         # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи в нём это
@@ -2807,8 +2207,6 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id, only=only)}
     if job.get("kind") == "translate_titles" and result.get("translate_titles"):
         result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
-    if job.get("kind") == "source_candidate_evaluate" and result.get("source_candidate_evaluate"):
-        result = {**result, "applied": external_ai.apply_source_candidate_result(result, job_id=job_id)}
     if job.get("kind") == "process_document" and result.get("process_document"):
         applied = documents_external.apply_document_result(result, job_id=job_id)
         # Конверт ЗАМЕНЯЕТСЯ вычищенным, а не дополняется: result_json уходит клиенту
@@ -2825,8 +2223,8 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         from oiltech_digest import signal_discovery, signal_search_trial
 
         # Конверт ЗАМЕНЯЕТСЯ итогом: кандидаты с подтверждениями и промптами весят
-        # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
-        # Пробный прогон широкого поиска (#138) — по задаче ядра: находки отдельно от радара, затем их «Отбор».
+        # мегабайты и уже лежат в signal_training_examples: в задаче только счётчики.
+        # Пробный прогон широкого поиска (#138), по задаче ядра: находки отдельно от радара, затем их «Отбор».
         trial = (job.get("payload_json") or {}).get("search_trial")
         applied = signal_discovery.apply_external_result(result, job_id=job_id, **({"trial": True} if trial else {}))
         if trial:
@@ -2866,7 +2264,7 @@ def external_worker_release(
 ) -> dict[str, Any]:
     """Воркер останавливается (выкат NL) и возвращает задачу сам, не дожидаясь конца аренды.
 
-    Сделанная часть пакета записывается, как при complete, и вычитается из задачи — при
+    Сделанная часть пакета записывается, как при complete, и вычитается из задачи: при
     следующей выдаче модель не зовётся за уже оплаченное (contract.remaining_after_partial).
     Задача сразу в очереди, попытка не списывается."""
     job = repository.get_background_job(job_id)
@@ -2882,7 +2280,7 @@ def external_worker_release(
     try:
         applied = _apply_external_result(job, partial, job_id) if partial else None
     except Exception:
-        # Итог не лёг — вернуть задачу сразу и целиком: воркер уходит, ждать аренду незачем.
+        # Итог не лёг, вернуть задачу сразу и целиком: воркер уходит, ждать аренду незачем.
         repository.requeue_released_external_job(
             job_id, lease_token_hash=lease_token_hash, payload=contract.without_reservation(original),
             note=f"Возвращена воркером ({reason}); частичный итог не записан",
@@ -2918,18 +2316,18 @@ def external_worker_fail(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
-    # Окончательный сбой отправки кода — текст с кодом стирается (повторяемый — остаётся до попытки).
+    # Окончательный сбой отправки кода: текст с кодом стирается (повторяемый: остаётся до попытки).
     if (repository.get_background_job(job_id) or {}).get("kind") == admission.KIND:
         admission.settle_notifications()
     return {"ok": True}
 
 
 def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> bool:
-    """Сбой ИИ-пакета со снимком сделанного (шаг завис — external_worker.LeaseKeeper).
+    """Сбой ИИ-пакета со снимком сделанного (шаг завис: external_worker.LeaseKeeper).
 
-    Сделанное пишется и вычитается из задачи, как при release, — модель не зовётся второй раз
+    Сделанное пишется и вычитается из задачи, как при release, модель не зовётся второй раз
     за оплаченное. Но попытка списывается (repository.fail_finalizing_external_job): зависание
-    может сидеть в самой задаче. False — снимок не принимается (вид без частичного итога,
+    может сидеть в самой задаче. False: снимок не принимается (вид без частичного итога,
     пробный прогон): тогда это обычный fail."""
     job = repository.get_background_job(job_id)
     if job is None:
@@ -2952,7 +2350,7 @@ def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> boo
         remaining = contract.remaining_after_partial(job.get("kind"), original, payload.result)
         applied = _apply_external_result(job, payload.result, job_id)
     except Exception:
-        # Снимок не лёг — задача уходит целиком, как обычный fail.
+        # Снимок не лёг: задача уходит целиком, как обычный fail.
         fail(contract.without_reservation(original), "частичный итог не записан")
         raise
     if remaining is None:
@@ -2972,7 +2370,7 @@ def monthly_stats(
     """Месячные результаты платформы + активность ВСЕХ пользователей.
 
     ADMIN-ONLY по решению владельца: раздел сводный, показывает работу каждого
-    пользователя и общий итог. Гейт стоит здесь, на API, а не только во фронте —
+    пользователя и общий итог. Гейт стоит здесь, на API, а не только во фронте:
     аудит изоляции 24.07 показал, что фронтовый гейт без серверного (брендинг,
     maintenance) означает, что любой залогиненный получает данные запросом в обход UI.
     """
@@ -2994,7 +2392,7 @@ def analytics_monthly(
 ) -> dict[str, Any]:
     """Месячная аналитика платформы: воронка, источники, темы, скорость, цели ГД.
 
-    Только администратору — решение владельца 19.09 («показываем только админам»):
+    Только администратору: решение владельца 19.09 («показываем только админам»):
     в ответе стоимость ИИ, коммерческая сторона. Гейт на API, а не только во фронте
     (аудит изоляции 24.07)."""
     return _clean(analytics.monthly_analytics(months, include_cost=True))
@@ -3064,7 +2462,7 @@ def digest_export(
             top_tag=top_tag.strip() or None,
         )
         repository.finish_export_job(job_id, "ok", result["path"])
-    except RuntimeError as exc:  # PDF без Chromium и т.п. — понятное сообщение, не 500
+    except RuntimeError as exc:  # PDF без Chromium и т.п.: понятное сообщение, не 500
         repository.finish_export_job(job_id, "failed", error_message=str(exc))
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -3086,219 +2484,6 @@ def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(req
         articles = repository.get_articles_needing_pipeline(payload.limit)
     stats = process_pipeline_articles(articles, client, fetch_full=True)
     return {"pipeline": stats}
-
-
-def _source_discovery_evaluation_report(
-    candidates: list[dict[str, Any]],
-    source_memory: list[dict[str, Any]],
-    actions: list[dict[str, Any]],
-) -> dict[str, Any]:
-    candidate_eval = _candidate_recommendation_eval(candidates)
-    source_eval = _source_audit_eval(source_memory)
-    recent_agent_actions = _recent_agent_action_eval(actions)
-    weak_rules = [
-        item for item in source_eval["rules"]
-        if item["confidence_low"] or item["suppressed"] or item["avg_source_score"] < -40
-    ][:8]
-    return {
-        "summary": {
-            "candidates": candidate_eval["total"],
-            "candidate_decisions": candidate_eval["decided"],
-            "candidate_agreement_rate": candidate_eval["agreement_rate"],
-            "source_memories": source_eval["total"],
-            "sources_under_watch": source_eval["under_watch"],
-            "high_confidence_sources": source_eval["confidence"].get("high", 0),
-            "weak_rules": len(weak_rules),
-            "recent_actions": recent_agent_actions["total"],
-        },
-        "candidate_recommendations": candidate_eval,
-        "source_audit": source_eval,
-        "weak_rules": weak_rules,
-        "recent_actions": recent_agent_actions,
-    }
-
-
-def _candidate_recommendation_eval(candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    total = len(candidates)
-    decided = 0
-    agreements = 0
-    disagreements = 0
-    by_recommendation: dict[str, dict[str, Any]] = {}
-    disagreements_examples: list[dict[str, Any]] = []
-    for row in candidates:
-        recommendation = str(row.get("recommended_action") or "unknown")
-        status = str(row.get("status") or "unknown")
-        bucket = by_recommendation.setdefault(recommendation, {
-            "recommendation": recommendation,
-            "total": 0,
-            "decided": 0,
-            "agreed": 0,
-            "disagreed": 0,
-            "agreement_rate": 0.0,
-        })
-        bucket["total"] += 1
-        agreement = _candidate_agreement(status, recommendation)
-        if agreement is None:
-            continue
-        decided += 1
-        bucket["decided"] += 1
-        if agreement:
-            agreements += 1
-            bucket["agreed"] += 1
-        else:
-            disagreements += 1
-            bucket["disagreed"] += 1
-            if len(disagreements_examples) < 8:
-                disagreements_examples.append({
-                    "candidate_id": row.get("id"),
-                    "name": row.get("name") or row.get("normalized_domain") or row.get("url"),
-                    "status": status,
-                    "recommended_action": recommendation,
-                    "topic": row.get("topic"),
-                    "avg_score": row.get("avg_score"),
-                })
-    rows = []
-    for bucket in by_recommendation.values():
-        if bucket["decided"]:
-            bucket["agreement_rate"] = round(bucket["agreed"] / bucket["decided"], 3)
-        rows.append(bucket)
-    rows.sort(key=lambda item: (item["decided"], item["total"]), reverse=True)
-    return {
-        "total": total,
-        "decided": decided,
-        "agreed": agreements,
-        "disagreed": disagreements,
-        "agreement_rate": round(agreements / decided, 3) if decided else 0.0,
-        "by_recommendation": rows,
-        "disagreements": disagreements_examples,
-    }
-
-
-def _candidate_agreement(status: str, recommendation: str) -> bool | None:
-    if status not in {"approved", "rejected", "paused"}:
-        return None
-    if recommendation == "add":
-        return status == "approved"
-    if recommendation == "reject":
-        return status == "rejected"
-    if recommendation == "test_more":
-        return status in {"approved", "paused"}
-    if recommendation == "human_review":
-        return True
-    return None
-
-
-def _source_audit_eval(source_memory: list[dict[str, Any]]) -> dict[str, Any]:
-    by_problem: dict[str, dict[str, Any]] = {}
-    by_recommendation: dict[str, dict[str, Any]] = {}
-    confidence = {"low": 0, "medium": 0, "high": 0}
-    severity = {"low": 0, "medium": 0, "high": 0, "critical": 0}
-    rule_stats: dict[str, dict[str, Any]] = {}
-    under_watch = 0
-    examples = []
-    for row in source_memory:
-        facts = row.get("facts_json") or {}
-        recommendation = str(facts.get("recommendation") or "keep")
-        problem_type = str(facts.get("problem_type") or facts.get("status") or "stable")
-        confidence_key = str(facts.get("confidence") or "medium")
-        severity_key = str(facts.get("severity") or "low")
-        score = float(row.get("score") or 0)
-        confidence[confidence_key] = confidence.get(confidence_key, 0) + 1
-        severity[severity_key] = severity.get(severity_key, 0) + 1
-        if recommendation != "keep":
-            under_watch += 1
-        problem_bucket = by_problem.setdefault(problem_type, {"problem_type": problem_type, "count": 0, "avg_source_score": 0.0})
-        problem_bucket["count"] += 1
-        problem_bucket["avg_source_score"] += score
-        rec_bucket = by_recommendation.setdefault(recommendation, {
-            "recommendation": recommendation,
-            "label": str(facts.get("recommendation_label") or recommendation),
-            "count": 0,
-            "avg_source_score": 0.0,
-        })
-        rec_bucket["count"] += 1
-        rec_bucket["avg_source_score"] += score
-        decision_log = facts.get("decision_log") if isinstance(facts.get("decision_log"), dict) else {}
-        for rule in decision_log.get("triggered_rules") or []:
-            if isinstance(rule, dict):
-                _bump_rule(rule_stats, str(rule.get("rule") or "unknown"), "triggered", score, confidence_key)
-        for rule in decision_log.get("suppressed_rules") or []:
-            if isinstance(rule, dict):
-                _bump_rule(rule_stats, str(rule.get("rule") or "unknown"), "suppressed", score, confidence_key)
-        if recommendation != "keep" and len(examples) < 8:
-            examples.append({
-                "source_id": facts.get("source_id"),
-                "source_name": row.get("subject"),
-                "problem_type": problem_type,
-                "severity": severity_key,
-                "confidence": confidence_key,
-                "recommendation": recommendation,
-                "recommendation_label": facts.get("recommendation_label") or recommendation,
-                "score": score,
-            })
-    problems = _average_count_rows(by_problem.values())
-    recommendations = _average_count_rows(by_recommendation.values())
-    rules = []
-    for row in rule_stats.values():
-        total = max(int(row["triggered"]) + int(row["suppressed"]), 1)
-        row["suppression_rate"] = round(int(row["suppressed"]) / total, 3)
-        row["avg_source_score"] = round(float(row["avg_source_score"]) / total, 2)
-        rules.append(row)
-    rules.sort(key=lambda item: (item["suppressed"], item["confidence_low"], -item["avg_source_score"]), reverse=True)
-    return {
-        "total": len(source_memory),
-        "under_watch": under_watch,
-        "confidence": confidence,
-        "severity": severity,
-        "problems": problems,
-        "recommendations": recommendations,
-        "rules": rules,
-        "examples": examples,
-    }
-
-
-def _bump_rule(rule_stats: dict[str, dict[str, Any]], rule: str, field: str, score: float, confidence: str) -> None:
-    bucket = rule_stats.setdefault(rule, {
-        "rule": rule,
-        "triggered": 0,
-        "suppressed": 0,
-        "confidence_low": 0,
-        "avg_source_score": 0.0,
-        "suppression_rate": 0.0,
-    })
-    bucket[field] += 1
-    if confidence == "low":
-        bucket["confidence_low"] += 1
-    bucket["avg_source_score"] += score
-
-
-def _average_count_rows(rows: Any) -> list[dict[str, Any]]:
-    result = []
-    for row in rows:
-        count = max(int(row.get("count") or 0), 1)
-        item = dict(row)
-        item["avg_source_score"] = round(float(item.get("avg_source_score") or 0) / count, 2)
-        result.append(item)
-    result.sort(key=lambda item: item.get("count", 0), reverse=True)
-    return result
-
-
-def _recent_agent_action_eval(actions: list[dict[str, Any]]) -> dict[str, Any]:
-    by_type: dict[str, int] = {}
-    learning_events = 0
-    for row in actions:
-        action_type = str(row.get("action_type") or "unknown")
-        by_type[action_type] = by_type.get(action_type, 0) + 1
-        if action_type == "source_candidate_learning":
-            learning_events += 1
-    return {
-        "total": len(actions),
-        "learning_events": learning_events,
-        "by_type": [
-            {"action_type": key, "count": value}
-            for key, value in sorted(by_type.items(), key=lambda item: item[1], reverse=True)
-        ],
-    }
 
 
 def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -3347,12 +2532,11 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "scrape_source": lambda payload, job_id: external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload),
     "reprint_review": lambda payload, job_id: external_ai.build_reprint_review_payload(payload),
     "refetch_text": lambda payload, job_id: external_fetch.build_refetch_text_payload(payload),
-    # Агенты (полоса external-agents): снимок базы для радара, статьи кандидата для оценки.
-    "source_candidate_evaluate": lambda payload, job_id: external_ai.build_source_candidate_evaluate_payload(payload),
+    # Агенты (полоса external-agents): снимок базы для радара.
     "signal_discovery": lambda payload, job_id: _signal_discovery_payload(payload),
-    # Агент «Карточка сигнала» (#96): публикации и справочники — воркеру без базы.
+    # Агент «Карточка сигнала» (#96): публикации и справочники: воркеру без базы.
     "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
-    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС — воркеру без базы.
+    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС: воркеру без базы.
     "otbor": lambda payload, job_id: otbor.build_payload(payload),
     # «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», с его категорией и связью.
     "signal_summary": lambda payload, job_id: signal_summary.build_payload(payload),
@@ -3362,7 +2546,7 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
 
 
 def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Payload для воркера — по таблице полос (lanes.py), а не по имени очереди.
+    """Payload для воркера: по таблице полос (lanes.py), а не по имени очереди.
 
     Раньше ИИ-виды собирались только при queue_name == "external-ai": задача той же
     природы в новой полосе (external-ai-bulk) ушла бы воркеру сырым payload без статей."""
@@ -3380,8 +2564,8 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
 
     Вес у балла статьи берётся из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
     после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
-    профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
-    в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
+    профилей снимка нет (или он битый): вес текущий, как раньше. Вес достаётся из снимка
+    в запросе: сам снимок в каждой строке разбивки: ~0,7 КБ × пять подпунктов × до 2000
     статей ленты, мегабайты на каждое открытие ленты (ревью PR #82)."""
     if not article_ids:
         return {}
@@ -3490,11 +2674,11 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         tag = f"{row['parent_tag_name']} / {tag}"
     score = float(row["total_score"]) if row.get("total_score") is not None else None
     # Эмодзи снимаем НА ВЫДАЧЕ, а не при вставке (решение владельца 12.09:
-    # «чтобы в любой части сигнала — название, суть и так далее — не было эмодзи»).
-    # Этот сериализатор — единственный шов, через который лента, поиск и карточка
+    # «чтобы в любой части сигнала: название, суть и так далее: не было эмодзи»).
+    # Этот сериализатор: единственный шов, через который лента, поиск и карточка
     # получают текст, поэтому чистка здесь накрывает весь пользовательский показ.
     # Исходники в БД не трогаем: content_hash остаётся прежним, бэкфилл не нужен,
-    # решение обратимо. Экспорт дайджеста идёт мимо — он чистится в processing/digest.py.
+    # решение обратимо. Экспорт дайджеста идёт мимо: он чистится в processing/digest.py.
     return {
         "id": row["id"],
         "title": normalize.strip_emoji(row["title"]),
@@ -3550,7 +2734,7 @@ def _date(value: Any) -> str | None:
 # Приём файлов: загрузка документа, карточка, оригинал
 # =========================================================================
 # Разбор идёт ИНЛАЙНОМ в этом процессе, а не фоновой задачей, и это осознанное
-# отступление от спеки под срок. Основание — замер: pypdf на 299-страничном документе
+# отступление от спеки под срок. Основание, замер: pypdf на 299-страничном документе
 # держит пик 35 МБ и 5,5 секунды, а размер файла ограничен 25 МБ. Фоновая задача
 # потребовала бы локального обработчика, а тип без него не откладывается, а гибнет:
 # локальный воркер заберёт задачу и терминально завалит её как неизвестную.
@@ -3605,7 +2789,7 @@ async def upload_document(
     try:
         parsed = doc_parsing.parse_document(data, kind)
     except DocumentError as exc:
-        # Скан, пароль, повреждение — понятный отказ, а не пустая карточка. Разбор
+        # Скан, пароль, повреждение: понятный отказ, а не пустая карточка. Разбор
         # документа без текстового слоя дал бы уверенную сводку из ничего.
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -3671,7 +2855,7 @@ def download_document(document_id: int, user: dict[str, Any] = Depends(require_u
     if document is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     path = Path(document["storage_path"]).resolve()
-    # Проверка принадлежности каталогу. Существующая выдача файлов её НЕ делает —
+    # Проверка принадлежности каталогу. Существующая выдача файлов её НЕ делает:
     # копировать тот образец нельзя.
     if not str(path).startswith(str(_documents_dir().resolve())) or not path.exists():
         raise HTTPException(status_code=404, detail="Файл недоступен")
@@ -3752,7 +2936,7 @@ async def external_worker_save_material(
         file_fields = {"file_name": (file.filename or "файл")[:300], "file_path": str(path), "file_size": len(content)}
     row, created = colleague_materials.save(fields, **file_fields)
     if created:
-        # Материал — сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
+        # Материал, сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
         # записан, сигнал заведёт команда накопленных (otbor-materials).
         try:
             row = {**row, "signal_id": material_signals.to_signal(row)}
@@ -3793,7 +2977,7 @@ def external_worker_list_materials(
     offset: int = Query(default=0, ge=0),
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
-    """История материалов автора со статусом, страницами — для команды бота /history."""
+    """История материалов автора со статусом, страницами: для команды бота /history."""
     rows = colleague_materials.list_materials(limit=limit, tg_user_id=tg_user_id, offset=offset)
     return {"ok": True, "materials": [_clean(colleague_materials.brief(row)) for row in rows],
             "total": colleague_materials.count_materials(tg_user_id=tg_user_id)}
@@ -3829,7 +3013,7 @@ def update_colleague_material(
     payload: ColleagueMaterialPatch,
     user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Правка материала из бота на платформе (решение владельца 23.10) — только админ, проверки как у бота."""
+    """Правка материала из бота на платформе (решение владельца 23.10): только админ, проверки как у бота."""
     try:
         row = colleague_materials.update_material(material_id, payload.model_dump(exclude_unset=True),
                                                   user_id=int(user["id"]))
@@ -3842,8 +3026,8 @@ def update_colleague_material(
 
 @app.delete("/api/materials/{material_id}")
 def delete_colleague_material(material_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Удаление материала из бота на платформе (решение владельца 23.10) — только админ. Сигнал материала уходит в
-    архив; выбранный «в дайджест» — отказ 409 с объяснением (ревью PR #155)."""
+    """Удаление материала из бота на платформе (решение владельца 23.10): только админ. Сигнал материала уходит в
+    архив; выбранный «в дайджест»: отказ 409 с объяснением (ревью PR #155)."""
     try:
         deleted = colleague_materials.delete_material(material_id)
     except colleague_materials.MaterialInDigest as exc:
@@ -3877,7 +3061,7 @@ def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
         "anchor_unit": row.get("anchor_unit"),
         "anchor_count": row.get("anchor_count"),
         # Сколько якорей без текста. На реальном заключении экспертизы это 67 страниц
-        # из 107 — пользователь обязан видеть, что часть документа не прочитана,
+        # из 107: пользователь обязан видеть, что часть документа не прочитана,
         # иначе полнота карточки выглядит выше, чем она есть.
         "empty_anchors": row.get("empty_anchors"),
         "text_chars": row.get("text_chars"),

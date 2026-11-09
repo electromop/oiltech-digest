@@ -35,7 +35,7 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     now = datetime.now(timezone.utc)
 
     with connection.get_connection() as conn:
-        # Выбор в дайджест — общая отметка (#111): dashboard_stats считает selected_for_digest
+        # Выбор в дайджест, общая отметка (#111): dashboard_stats считает selected_for_digest
         # из article_marks, а не из article_cards.
         analyst_id = conn.execute(
             """
@@ -101,7 +101,7 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
             """,
             (article_ids["Old article"], article_ids["Digest candidate"]),
         )
-        # Общая отметка (#111) — источник правды для selected_for_digest.
+        # Общая отметка (#111): источник правды для selected_for_digest.
         conn.execute(
             """
             INSERT INTO article_marks (set_by_user_id, article_id, status)
@@ -139,7 +139,7 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         "total_articles": 2,
         "with_summary": 2,
         "processed_articles": 2,
-        # Весь объём базы под плитку «Всего». В этой фикстуре обе статьи — видимые сигналы,
+        # Весь объём базы под плитку «Всего». В этой фикстуре обе статьи: видимые сигналы,
         # поэтому all_articles совпадает с total_articles; семантику «считает и отсев,
         # и вычищенные» проверяет отдельный тест ниже.
         "all_articles": 2,
@@ -164,9 +164,9 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     assert health[0]["name"] == "No Articles"
     assert repository.source_health_report(stale_days=3, verdict="stale")[0]["name"] == "Stale Source"
 
-    # Месяц выпуска — месяц статьи (feed_window.period_month_sql: пояс сессии БД, UTC), а не
+    # Месяц выпуска: месяц статьи (feed_window.period_month_sql: пояс сессии БД, UTC), а не
     # «сейчас»: кандидат датирован «вчера», и первого числа месяца это уже прошлый месяц (тест
-    # падал 1.10). По Москве нельзя: 02.10 00:23 МСК — по UTC ещё 1.10, месяцы расходятся.
+    # падал 1.10). По Москве нельзя: 02.10 00:23 МСК: по UTC ещё 1.10, месяцы расходятся.
     candidate_month = (now - timedelta(days=1)).astimezone(timezone.utc).strftime("%Y-%m")
     digest_rows = repository.digest_candidates(month=candidate_month, min_score=60)
     assert len(digest_rows) == 1
@@ -178,11 +178,11 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
 
 
 def test_source_health_report_separates_archive_and_counts_last_30_days(isolated_db):
-    """Архив — свой вердикт, а не «Выкл».
+    """Архив: свой вердикт, а не «Выкл».
 
     Архив выключает сбор (enabled = FALSE), и в «Выкл» он тонул: экран считал плитки
-    по отчёту с архивом, а список — без него, и 19.09 заказчик видел «133 источника» и
-    «173» на одном экране. «Материалов за 30 дней» — по дате сбора: колонка таблицы
+    по отчёту с архивом, а список: без него, и 19.09 заказчик видел «133 источника» и
+    «173» на одном экране. «Материалов за 30 дней», по дате сбора: колонка таблицы
     источников отвечает на вопрос «что источник принёс за месяц».
     """
     now = datetime.now(timezone.utc)
@@ -222,14 +222,14 @@ def test_source_health_report_separates_archive_and_counts_last_30_days(isolated
     assert (by_name["Working"]["articles"], by_name["Working"]["articles_30d"]) == (2, 1)
     assert by_name["Archived"]["articles_30d"] == 1
     assert by_name["Archived"]["archived_at"] is not None
-    # Архив — в конце выдачи, после выключенных, и фильтруется своим вердиктом.
+    # Архив: в конце выдачи, после выключенных, и фильтруется своим вердиктом.
     assert [row["verdict"] for row in report] == ["ok", "disabled", "archived"]
     assert [row["name"] for row in repository.source_health_report(verdict="archived")] == ["Archived"]
     assert repository.source_health_report(verdict="disabled")[0]["name"] == "Switched off"
 
 
 def test_dashboard_all_articles_counts_whole_base_not_just_signals(isolated_db):
-    """Плитка «Всего» (all_articles) считает ВЕСЬ объём базы, а total_articles — только сигналы.
+    """Плитка «Всего» (all_articles) считает ВЕСЬ объём базы, а total_articles: только сигналы.
 
     Решение владельца 25.07: первая плитка показывает всё собранное, включая отсев по
     релевантности и вычищенное перепроверкой (pending_deletion). Разделение полей нужно,
@@ -259,8 +259,8 @@ def test_dashboard_all_articles_counts_whole_base_not_just_signals(isolated_db):
                 """,
                 (source_id, key, url, now, now, chash, key == "cleaned"),
             ).fetchone()[0]
-        # signal — прошёл гейт (relevant TRUE); rejected — отсеян (relevant FALSE);
-        # cleaned — relevant, но помечен на вычистку (pending_deletion выше).
+        # signal: прошёл гейт (relevant TRUE); rejected: отсеян (relevant FALSE);
+        # cleaned: relevant, но помечен на вычистку (pending_deletion выше).
         conn.execute(
             """
             INSERT INTO article_cards (article_id, summary, relevant, status)
@@ -401,7 +401,7 @@ def test_needing_summary_skips_rejected_articles(isolated_db):
     На проде (внешний путь) гейт релевантности шёл ПЕРВЫМ (снят 08.11), и отклонённой статье суть
     НЕ писалась (external_ai.process_payload: `if not relevant: continue`). Раз выборка
     в обработку шла по `WHERE c.summary IS NULL` без фильтра по relevant, такая статья
-    возвращалась в очередь КАЖДЫЙ цикл — навсегда.
+    возвращалась в очередь КАЖДЫЙ цикл: навсегда.
 
     Последствия (баг «ИИ не работает» + утечка денег из аудита 09.07):
     - гейт резал ~78%, значит бюджет цикла (AI_PROCESS_LIMIT) съедали ПОВТОРНЫЕ отказы
@@ -429,7 +429,7 @@ def test_needing_summary_skips_rejected_articles(isolated_db):
                 (source_id, f"Article {slug}", f"https://example.com/{slug}", now, now),
             ).fetchone()[0]
 
-        fresh_id = add_article("fresh")           # карточки нет вовсе — ИИ её ещё не видел
+        fresh_id = add_article("fresh")           # карточки нет вовсе: ИИ её ещё не видел
         rejected_id = add_article("rejected")     # гейт отклонил: relevant=false, сути нет
         done_id = add_article("done")             # суть уже есть
         retry_id = add_article("retry")           # релевантна, но суть не записалась (сбой)
@@ -450,13 +450,13 @@ def test_needing_summary_skips_rejected_articles(isolated_db):
 
     ids = [row["id"] for row in repository.get_articles_needing_summary(limit=50)]
 
-    # Никогда не обработанная — берём.
+    # Никогда не обработанная: берём.
     assert fresh_id in ids
-    # Релевантная, но без сути (сбой записи) — берём, это честный повтор.
+    # Релевантная, но без сути (сбой записи): берём, это честный повтор.
     assert retry_id in ids
-    # Уже с сутью — не трогаем.
+    # Уже с сутью: не трогаем.
     assert done_id not in ids
-    # ГЛАВНОЕ: отклонённую гейтом НЕ переспрашиваем — иначе она жрёт бюджет цикла вечно.
+    # ГЛАВНОЕ: отклонённую гейтом НЕ переспрашиваем: иначе она жрёт бюджет цикла вечно.
     assert rejected_id not in ids
 
 

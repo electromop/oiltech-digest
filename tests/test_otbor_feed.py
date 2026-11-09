@@ -1,4 +1,4 @@
-"""Агент «Отбор» для ленты (#130, спека #128, ADR 0005), шов 1 — контур целиком: статья сбора → шаг
+"""Агент «Отбор» для ленты (#130, спека #128, ADR 0005), шов 1, контур целиком: статья сбора → шаг
 планировщика → воркер NL на подставной модели → ядро → API витрин и разделов отклонённого
 (tests/otbor_support.py).
 """
@@ -36,7 +36,7 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     assert {card["card_set_by"][key] for key in ("industry", "oilfield_relevance", "signal_category")} == {"otbor"}
     assert [step["stage"] for step in card["decision_log"]] == ["«Отбор»"]
     [call] = model.calls
-    # Вход модели — публикация, справочники и приёмщик ОС; происхождения в нём нет: его использует только код.
+    # Вход модели, публикация, справочники и приёмщик ОС; происхождения в нём нет: его использует только код.
     header = call["input"].split("Текст публикации:", 1)[0]
     assert [line.split(":", 1)[0] for line in header.strip().splitlines()] == [
         "Заголовок", "Источник", "Язык", "Дата публикации", "Дата поступления", "Ссылки находки",
@@ -46,7 +46,7 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     assert "происхожд" not in (call["instructions"] + call["input"]).lower()
     for word in ("лента", "радар", "поиск", "feed", "radar"):
         assert word not in call["input"].lower()
-    # Справочники «Отбора» — в каждом вызове: в инструкции и в схеме ответа.
+    # Справочники «Отбора», в каждом вызове: в инструкции и в схеме ответа.
     dictionaries = load_dictionaries()
     properties = call["schema"]["schema"]["properties"]
     assert list(properties) == ["industry", "occasion", "oilfield_relevance", "oilfield_application", "decision",
@@ -73,10 +73,10 @@ def test_showcase_is_chosen_by_category_for_feed_articles_and_other_is_admin_onl
                          "Контракт Weatherford": answer(industry="oilfield_services"),
                          "Интервью о кадрах": answer(industry="oilfield_services", category="other")})
 
-    # Витрину определяет категория: технологическая статья сбора — на радаре, бизнес — в бизнес-ленте.
+    # Витрину определяет категория: технологическая статья сбора: на радаре, бизнес: в бизнес-ленте.
     assert set(showcase(user, "technology")) == {"Пилот робота Equinor"}
     assert set(showcase(user, "business")) == {"Контракт Weatherford"}
-    # «Другое» — ни в одной витрине, только админу, в разделах.
+    # «Другое»: ни в одной витрине, только админу, в разделах.
     assert [card["title"] for card in api_get("/api/signals", admin, section="other")] == ["Интервью о кадрах"]
     assert _status("/api/signals", user, section="other") == 403
     assert _status("/api/signals", user, section="all") == 403
@@ -90,7 +90,7 @@ def test_rejected_and_failed_articles_lie_in_sections_by_who_removed_them_with_a
     decide(monkeypatch, {"Котировки нефти": reject("oil_gas_no_link"), "Модель молчит": AIClientError("timeout"),
                          "Не по схеме": {"decision": "accept"}})
 
-    # «Отбор» — по разделу на каждую из шести причин справочника, сбой — свои разделы.
+    # «Отбор»: по разделу на каждую из шести причин справочника, сбой: свои разделы.
     for value in load_dictionaries()["reject_reason"]["values"]:
         assert _status("/api/signals", admin, section=f"otbor:{value['code']}") == 200
     assert {card["title"]: card["section_reason"].split(":")[0]
@@ -206,7 +206,7 @@ def test_digest_mark_of_a_rejected_or_failed_article_is_refused_by_the_server(us
         assert "«Отбор»" in response.json()["detail"]
     assert api_get("/api/articles", admin, status="digest") == []
     # У сигнала ленты меняется только отметка «в дайджест» (одна механика на две витрины, решение 23.10): прочие
-    # статусы статьи — в ленте статей.
+    # статусы статьи: в ленте статей.
     response = api_request("PATCH", f"/api/signals/{business_card['id']}", user, {"status": "noise"})
     assert response.status_code == 422, response.text
     assert showcase(user)["Контракт Weatherford"]["user_status"] != "noise"
@@ -225,15 +225,15 @@ def test_feedback_of_a_card_is_a_stored_block_unless_the_radar_judge_made_it_and
 
     saved = api_send("POST", "/api/signals/feedback", user, {"signal_id": business_find, "verdict": "не тот блок",
                                                           "comment": "Это технология"})
-    # Оценка — тем же словарём, что у судьи радара: «не тот блок» → wrong_block, и блок ответа — сохранённый.
+    # Оценка, тем же словарём, что у судьи радара: «не тот блок» → wrong_block, и блок ответа: сохранённый.
     assert (saved["memories"], saved["block"]["verdict"]) == (0, "wrong_block")
     assert api_get("/api/signals/memory", admin) == []
-    # Правки карточки и «дубль» — только у находки радара на радаре: у блока их нет, и сервер это говорит.
+    # Правки карточки и «дубль», только у находки радара на радаре: у блока их нет, и сервер это говорит.
     response = api_request("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"],
                                                                "corrected_title": "Другой заголовок"})
     assert response.status_code == 422, response.text
     assert showcase(user, "technology")["Пилот робота Equinor"]["title"] == "Пилот робота Equinor"
-    # Пустой блок не пишется: неизвестная оценка — не оценка (как на пути радара).
+    # Пустой блок не пишется: неизвестная оценка: не оценка (как на пути радара).
     response = api_request("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"], "verdict": "xyz"})
     assert response.status_code == 400, response.text
 

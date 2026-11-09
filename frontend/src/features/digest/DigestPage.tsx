@@ -3,7 +3,7 @@ import { listArticles, updateArticle } from "../../api/articles";
 import { editIssueMaterial, updateSignal } from "../../api/signals";
 import { getDigestContent, getMonthlyDigest, saveIssueHighlight, updateMonthlyDigest } from "../../api/digest";
 import type { Article, DigestContent, DigestMaterial, DigestSectionKey, IssueMaterialPatch, MonthlyDigestDraft } from "../../api/types";
-import { monthLabel, useFeedWindow } from "../articles/feedWindow";
+import { monthLabel, useFeedWindow } from "../shared/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 import { DigestArchive } from "./DigestArchive";
 import { exportDigestFile, type DigestExportFormat } from "./digestExport";
@@ -17,19 +17,18 @@ type ToastWriter = (text: string, tone?: "default" | "error") => void;
 type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
-  onArticlesChanged?: () => void;
 };
 
 const DIGEST_PREVIEW_LIMIT = 500;
 // Один и тот же пустой массив, пока грузится архивный выпуск. Новый `[]` на каждом рендере
 // пересоздавал бы цепочку useMemo до previewCandidateIds, а эффект синхронизации очереди
-// звал бы setManualOrderIds снова и снова — бесконечный цикл рендеров.
+// звал бы setManualOrderIds снова и снова: бесконечный цикл рендеров.
 const NO_ARTICLES: Article[] = [];
 
-// Месячный дайджест (пересмотр 23-24.10): «Сборка выпуска» — всегда выпуск, который собирается сейчас: слева состав,
-// справа тот же выпуск в PDF и действия с ним. Прошлые выпуски — только во вкладке «Архив выпусков» и только на
-// просмотр (решение владельца 24.10). Оформление выпуска с экрана убрано: шапка и подвал — из сохранённого на сервере.
-export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
+// Месячный дайджест (пересмотр 23-24.10): «Сборка выпуска», всегда выпуск, который собирается сейчас: слева состав,
+// справа тот же выпуск в PDF и действия с ним. Прошлые выпуски: только во вкладке «Архив выпусков» и только на
+// просмотр (решение владельца 24.10). Оформление выпуска с экрана убрано: шапка и подвал: из сохранённого на сервере.
+export function DigestPage({ onUnauthorized, showToast }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,22 +42,22 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
   const [view, setView] = useState<DigestView>("issue");
-  // Прошлый выпуск, открытый во вкладке архива; null — список архива.
+  // Прошлый выпуск, открытый во вкладке архива; null: список архива.
   const [archiveOpen, setArchiveOpen] = useState<string | null>(null);
   // PDF собирается заново, когда растёт число: открытие, смена выпуска, сохранённый черновик, «Обновить PDF».
   const [pdfToken, setPdfToken] = useState(0);
-  // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
+  // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML»): без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
   // Материал, открытый на правку (#162): ключ «article:12» или «signal:34».
   const [editing, setEditing] = useState<string | null>(null);
   // Окно месяца (ADR 0001, п. 6): открытые месяцы и прошлые выпуски с выбранными статьями.
-  // Прошлый выпуск — только просмотр и выгрузка (решение владельца 23.09): статусы и
+  // Прошлый выпуск: только просмотр и выгрузка (решение владельца 23.09): статусы и
   // черновик не меняются, сервер такие правки отклоняет.
   const feedWindow = useFeedWindow();
   const firstOpenMonth = feedWindow?.months?.[0] ?? "";
-  // Собирается выпуск первого открытого месяца окна (1–10 числа — прошлый месяц, дальше — текущий); прошлый
-  // выпуск — только открытый во вкладке архива.
+  // Собирается выпуск первого открытого месяца окна (1-10 числа: прошлый месяц, дальше: текущий); прошлый
+  // выпуск: только открытый во вкладке архива.
   const month = view === "archive" && archiveOpen ? archiveOpen : firstOpenMonth;
   const activeMonth = month || new Date().toISOString().slice(0, 7);
   const archiveIssueMonths = useMemo(
@@ -67,16 +66,16 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   );
   const [archiveArticles, setArchiveArticles] = useState<Article[] | null>(null);
   const isArchiveMonth = Boolean(month) && Boolean(firstOpenMonth) && month < firstOpenMonth;
-  // Лента (/api/articles) без месяца отдаёт только открытые месяцы — для прошлого выпуска
+  // Лента (/api/articles) без месяца отдаёт только открытые месяцы: для прошлого выпуска
   // выбранные статьи приходят отдельным запросом с `month`.
   const sourceArticles = isArchiveMonth ? archiveArticles ?? NO_ARTICLES : articles;
-  // Прошлый выпуск — целиком (ревью 24.10): фильтры состава к нему не применяются и на экране их нет, иначе выгрузка
+  // Прошлый выпуск: целиком (ревью 24.10): фильтры состава к нему не применяются и на экране их нет, иначе выгрузка
   // из панели и из таблицы архива давала бы разные файлы.
   const appliedSearch = isArchiveMonth ? "" : search;
   const appliedTag = isArchiveMonth ? "" : tag;
   const appliedMin = isArchiveMonth ? 0 : scoreMin;
   const appliedMax = isArchiveMonth ? 100 : scoreMax;
-  // Фильтры, с которыми собран показанный PDF: сменились — PDF устарел до «Обновить PDF».
+  // Фильтры, с которыми собран показанный PDF: сменились: PDF устарел до «Обновить PDF».
   const filterSignature = JSON.stringify([appliedMin, appliedMax, appliedSearch, appliedTag]);
   const [pdfFilterSignature, setPdfFilterSignature] = useState(filterSignature);
 
@@ -121,8 +120,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     void loadDigestPreview();
   }, [loading, month, appliedMin, appliedMax, appliedSearch, appliedTag]);
 
-  // PDF — заново на открытии экрана и при смене выпуска; фильтры его только помечают устаревшим. Ждём окно
-  // месяца и выпуск по умолчанию: иначе первый PDF собрался бы за все месяцы и сразу ещё раз — за выпуск.
+  // PDF: заново на открытии экрана и при смене выпуска; фильтры его только помечают устаревшим. Ждём окно
+  // месяца и выпуск по умолчанию: иначе первый PDF собрался бы за все месяцы и сразу ещё раз: за выпуск.
   const windowKnown = feedWindow !== null;
   useEffect(() => {
     if (loading || !windowKnown || (!month && firstOpenMonth)) return;
@@ -186,7 +185,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     }
   }
 
-  // Сигнал радара снят из дайджеста: выпуск на сервере сменился — состав и PDF собираются заново.
+  // Сигнал радара снят из дайджеста: выпуск на сервере сменился: состав и PDF собираются заново.
   async function removeSignalFromDigest(signalId: number) {
     try {
       setBusy(true);
@@ -239,7 +238,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       setBusy(true);
       await updateArticle(articleId, { status: "archive" });
       await reload();
-      onArticlesChanged?.();
       showToast("Статья убрана из дайджеста");
     } catch (error) {
       handleError(error, "Не удалось убрать статью из дайджеста");
@@ -279,7 +277,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   }, [sourceArticles]);
   // useMemo обязателен: пока превью не пришло, `|| []` давал НОВЫЙ массив на каждом рендере,
   // цепочка useMemo до previewCandidateIds пересчитывалась, а эффект синхронизации очереди
-  // звал setManualOrderIds с новым массивом — рендер за рендером, пока не придёт превью (23.09).
+  // звал setManualOrderIds с новым массивом: рендер за рендером, пока не придёт превью (23.09).
   const exportPreviewItems = useMemo(() => digestPreview?.news || [], [digestPreview]);
   const radarItems = useMemo(() => exportPreviewItems.filter((item) => item.item_type === "signal"), [exportPreviewItems]);
   // Поля материалов PDF (#161, #162) по ключу материала: правленый заголовок, чего не хватает, правка.
@@ -294,7 +292,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     return map;
   }, [digestPreview]);
   // Материал, как он выйдет в выпуске (состав на сервере): плашка «Технология / Бизнес» и суть, сжатая под площадь
-  // карточки выпуска, — очередь показывает то же, что уйдёт в PDF.
+  // карточки выпуска, очередь показывает то же, что уйдёт в PDF.
   const issueItems = useMemo(() => {
     const map = new Map<number, IssueItem>();
     for (const item of exportPreviewItems) {
@@ -334,7 +332,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     setManualOrderIds(baseIds);
   }, [draftDirty, previewCandidateIds, savedDraftVisibleIds]);
 
-  // Выгрузка выпуска файлом. monthOverride — выпуск из архива: целиком, без фильтров экрана.
+  // Выгрузка выпуска файлом. monthOverride, выпуск из архива: целиком, без фильтров экрана.
   async function handleDigestExport(format: DigestExportFormat, monthOverride?: string) {
     try {
       setBusy(true);
@@ -355,7 +353,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   }
 
   async function handleSaveDraft() {
-    // Прошлый выпуск — только просмотр и выгрузка; кнопки в архиве нет, это страховка.
+    // Прошлый выпуск: только просмотр и выгрузка; кнопки в архиве нет, это страховка.
     if (isArchiveMonth) return;
     try {
       setDraftBusy(true);
@@ -372,7 +370,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       });
       await loadSavedDraft(draftMonth);
       await loadDigestPreview();
-      // Порядок выпуска на сервере сменился — PDF собирается заново.
+      // Порядок выпуска на сервере сменился: PDF собирается заново.
       rebuildPdf();
       showToast(`Черновик сохранён: ${monthLabel(saved.month)}`);
     } catch (error) {

@@ -1,23 +1,19 @@
 """Допуск по коду (#113, спека #110): вход только допущенной учётки.
 
-Шов — API на изолированной базе: вход, ввод кода, лимиты, смена пароля, задача на отправку
+Шов, API на изолированной базе: вход, ввод кода, лимиты, смена пароля, задача на отправку
 в очереди external-notify и стирание текста после неё. Время двигаем в базе, а не часами
 процесса: срок кода и интервал выдачи считает Postgres (now())."""
 
 import re
-from pathlib import Path
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import admission, api, config
-from oiltech_digest.config import DATABASE_URL
 from oiltech_digest.db import connection, repository
 
 PASSWORD = "long-enough-password"
 EMAIL = "newcomer.person@example.test"
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "admission" / "admission-before-deploy.sql"
 
 
 @pytest.fixture()
@@ -146,8 +142,8 @@ def test_self_registration_stays_closed(isolated_db):
 
 
 def test_login_puts_notify_job_with_platform_account_number_full_email_code_and_expiry(newcomer, notify_on):
-    """Владелец 20.10: подтверждающему должно быть видно, откуда код и чей он — название платформы
-    и полная почта учётки (прежде — только начало почты, история 40 спеки #110)."""
+    """Владелец 20.10: подтверждающему должно быть видно, откуда код и чей он: название платформы
+    и полная почта учётки (прежде: только начало почты, история 40 спеки #110)."""
     _login(_client())
 
     jobs = _notify_jobs()
@@ -228,7 +224,7 @@ def test_right_code_admits_and_opens_session(newcomer, notify_on):
     assert response.json()["user"]["email"] == EMAIL
     assert client.get("/api/auth/me").status_code == 200
     assert _admitted(newcomer["id"])
-    # Дальше — обычный вход, без кода.
+    # Дальше: обычный вход, без кода.
     assert _login(_client()).json()["user"]["id"] == newcomer["id"]
 
 
@@ -408,35 +404,6 @@ def test_retryable_failure_keeps_text_for_next_attempt(newcomer, notify_on, work
     assert "text" in payload
 
 
-# --- выкат: нынешние учётки допущены, один раз ------------------------------------------------
-
-
-def _run_script():
-    with psycopg.connect(DATABASE_URL) as conn:
-        conn.execute(f'SET search_path TO "{_schema()}"')
-        conn.execute(SCRIPT.read_text())
-        conn.commit()
-
-
-def _schema():
-    with connection.get_connection() as conn:
-        return conn.execute("SELECT current_schema()").fetchone()[0]
-
-
-def test_before_deploy_script_admits_existing_accounts_once(isolated_db):
-    _sql("ALTER TABLE users DROP COLUMN admitted_at")
-    _sql("DROP TABLE admission_codes")
-    old = repository.create_user("old@example.test", PASSWORD, "user")
-
-    _run_script()
-    assert _admitted(old["id"])
-
-    admission.revoke(old["id"])
-    _run_script()
-    connection.init_db()
-    assert not _admitted(old["id"])
-
-
 def test_jobs_list_does_not_show_the_code(newcomer, notify_on, admin_and_member):
     admin, _ = admin_and_member
     _login(_client())
@@ -455,7 +422,7 @@ def test_jobs_list_does_not_show_the_code(newcomer, notify_on, admin_and_member)
 def test_admission_code_command_prints_fresh_code_that_admits(newcomer, notify_on, capsys):
     from oiltech_digest import cli
 
-    _login(_client())  # действующий код уже есть и ушёл в чат — команда всё равно выдаёт новый
+    _login(_client())  # действующий код уже есть и ушёл в чат: команда всё равно выдаёт новый
     cli.main(["admission-code", "--email", EMAIL.upper()])
     out = capsys.readouterr().out
     code = re.search(r"\b(\d{8})\b", out).group(1)
@@ -482,7 +449,7 @@ def test_admission_code_command_unknown_account(isolated_db, capsys):
 
 
 def test_failure_by_expired_lease_is_settled_by_queue_sweep(newcomer, notify_on):
-    """Окончательный сбой без /fail — аренда истекла на последней попытке (сторож очередей)."""
+    """Окончательный сбой без /fail: аренда истекла на последней попытке (сторож очередей)."""
     from oiltech_digest import background_jobs
 
     _login(_client())

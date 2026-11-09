@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { getFeedWindow } from "../../api/stats";
-import type { FeedWindowInfo, FeedWindowPayload } from "../../api/types";
+import type { FeedWindowPayload } from "../../api/types";
 
 // Окно месяца на фронте: подписи и загрузка списка месяцев. Само правило живёт на сервере
-// (oiltech_digest/feed_window.py; ADR 0001 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
+// (oiltech_digest/feed_window.py; ADR 0001: lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
 
-// Открытые и прошлые месяцы — при открытии экрана и при возврате на вкладку: вкладку,
+// Открытые и прошлые месяцы, при открытии экрана и при возврате на вкладку: вкладку,
 // оставленную на ночь, день смены окна застал бы со старым окном, и конструктор выпуска показал бы
 // кнопку сохранения у уже закрытого месяца (сервер всё равно ответит 409). Сбой не мешает
 // работе с текущим периодом: остаётся прежнее значение, без него переключатель не появится.
@@ -37,10 +37,6 @@ const MONTHS = [
   "январь", "февраль", "март", "апрель", "май", "июнь",
   "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
 ];
-const MONTHS_GENITIVE = [
-  "января", "февраля", "марта", "апреля", "мая", "июня",
-  "июля", "августа", "сентября", "октября", "ноября", "декабря",
-];
 
 // «2026-08» → «август 2026». Незнакомый формат возвращается как есть.
 export function monthLabel(month: string): string {
@@ -49,24 +45,8 @@ export function monthLabel(month: string): string {
   return match && name ? `${name} ${match[1]}` : month;
 }
 
-// Какие месяцы открыты и до какого числа виден прошлый.
-export function windowPeriodText(feedWindow: FeedWindowInfo | null | undefined): string {
-  if (!feedWindow || !feedWindow.months.length) return "";
-  const first = feedWindow.months[0];
-  const last = feedWindow.months[feedWindow.months.length - 1];
-  if (first === last) return `Показан ${monthLabel(first)}. Прошлые месяцы — в архиве, только для просмотра.`;
-  const firstName = MONTHS[Number(first.slice(5, 7)) - 1] ?? first;
-  const lastGenitive = MONTHS_GENITIVE[Number(last.slice(5, 7)) - 1] ?? last;
-  // Смена окна — в 00:00 МСК дня rollover_day: последний открытый день прошлого месяца — накануне.
-  return `Показаны ${monthLabel(first)} и ${monthLabel(last)}: ${firstName} виден по ${feedWindow.rollover_day - 1} ${lastGenitive} включительно, пока собирается его выпуск.`;
-}
-
-export function archiveNoticeText(month: string): string {
-  return `Архив за ${monthLabel(month)} — только просмотр: статус и отметку «в дайджест» здесь не поменять.`;
-}
-
 // Подсказка у неактивной «В дайджест» / «Убрать» карточки радара закрытого месяца (решение
-// владельца 29.09). Месяц карточки — по дате поступления на радар; закрыт ли он, решает сервер.
+// владельца 29.09). Месяц карточки: по дате поступления на радар; закрыт ли он, решает сервер.
 export function radarDigestLockedText(month: string): string {
   return `Карточка в архиве за ${monthLabel(month)} (по дате поступления): отметку «в дайджест» не поменять — архив только для просмотра.`;
 }

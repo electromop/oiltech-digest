@@ -25,8 +25,8 @@ function pluralRu(count: number, one: string, few: string, many: string) {
 }
 
 // Ключ группы не может быть именем: имя правят в этой же форме, и не может быть
-// позицией: удаление тега выше сдвигает её (ревью F — раскрывалось соседнее).
-// У несохранённой группы — клиентский ключ, выданный при создании.
+// позицией: удаление тега выше сдвигает её (ревью F: раскрывалось соседнее).
+// У несохранённой группы: клиентский ключ, выданный при создании.
 function groupKey(tag: Tag, index: number) {
   return tag.id ? `id-${tag.id}` : tag.client_key ?? `new-${index}`;
 }
@@ -36,7 +36,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   // По умолчанию направления свёрнуты (документ заказчика 19.09): 13 развёрнутых
-  // тематик по 30–50 ключей — это несколько экранов прокрутки.
+  // тематик по 30-50 ключей: это несколько экранов прокрутки.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const clientKeySeq = useRef(0);
 
@@ -87,7 +87,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
     setTags((prev) => {
       const target = prev[index];
       // Переименование НАПРАВЛЕНИЯ обязано протянуться в его подтеги. Связь хранится
-      // именем, и без этого каскада сохранение делало все подтеги корневыми — молча,
+      // именем, и без этого каскада сохранение делало все подтеги корневыми: молча,
       // без ошибки. Бэкенд теперь такое отклоняет, но чинить надо здесь, в источнике.
       const renamingParent =
         field === "name" && !target.parent_name && typeof value === "string" && value !== target.name;

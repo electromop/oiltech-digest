@@ -13,7 +13,7 @@ type ExportRequest = {
 };
 
 // Выгрузка выпуска файлом: документ собирает на сервере фоновая задача, экран ждёт файл и сохраняет его.
-// Номер задачи и прогресс наружу не показываются — для человека это просто ожидание документа.
+// Номер задачи и прогресс наружу не показываются: для человека это просто ожидание документа.
 export async function exportDigestFile(format: DigestExportFormat, request: ExportRequest): Promise<string> {
   const queued = await enqueueDigestExport(request.month, request.limit, request.minScore, format, {
     maxScore: request.maxScore,

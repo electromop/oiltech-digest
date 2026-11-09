@@ -1,10 +1,9 @@
-"""Агент «Карточка сигнала» (#96, спека #93), шов 1 — применение ответа и API списка сигналов на
+"""Агент «Карточка сигнала» (#96, спека #93), шов 1: применение ответа и API списка сигналов на
 изолированной базе. Ядро проверяет ответ модели кодом и пишет карточку; путь «задача → воркер →
-применение → карточка в API» — целиком, модель подставная (tests/signal_card_support.py).
+применение → карточка в API»: целиком, модель подставная (tests/signal_card_support.py).
 """
 
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -12,7 +11,7 @@ from oiltech_digest import cli, external_worker, signal_card, signal_card_pack
 from oiltech_digest.db import connection, repository
 from tests.signal_card_support import (CARD_KEYS, DRILLING, MODEL, FakeModel, answer, api_get, business, feed_signal,
                                        fill, radar_finding, run_worker, worker)
-from tests.signal_card_support import admin, contour, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import admin, contour, user  # noqa: F401: фикстуры
 
 
 def test_accepted_article_gets_a_card_through_the_worker(user, contour, monkeypatch):
@@ -49,7 +48,7 @@ def test_value_outside_the_dictionaries_becomes_undefined(user, contour, monkeyp
     fill(monkeypatch, {
         "Форум": answer(event_type="форум", region="Марс", technology_class="блокчейн", maturity="TRL 7",
                         event_date_source="из головы"),
-        # Регистр — не чужое значение; фраза длиннее 400 знаков — обрезана, как у судьи радара.
+        # Регистр: не чужое значение; фраза длиннее 400 знаков: обрезана, как у судьи радара.
         "Контракт SLB": answer(event_type="Контракт", region="ближний восток", why_important="Важно. " * 200),
     })
 
@@ -87,7 +86,7 @@ def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_co
 
 
 def test_company_only_beginning_like_a_word_of_the_quote_is_not_named_in_it(user, contour, monkeypatch):
-    # Общее начало слова — не падеж: «Сибур» не назван в цитате про «Сибнефть», «Роснефть» — в цитате про
+    # Общее начало слова, не падеж: «Сибур» не назван в цитате про «Сибнефть», «Роснефть»: в цитате про
     # «Роснефтегаз». Иначе не та компания записалась бы проверенным участником.
     feed_signal("Контракт Сибнефти", "Сибнефть и Роснефтегаз подписали контракт на бурение. Сделку одобрил совет "
                                      "директоров Роснефти.")
@@ -95,7 +94,7 @@ def test_company_only_beginning_like_a_word_of_the_quote_is_not_named_in_it(user
         {"name": "Сибур", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
         {"name": "Роснефть", "quote": "Сибнефть и Роснефтегаз подписали"},
         {"name": "Сибнефть", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
-        {"name": "Роснефть", "quote": "Сделку одобрил совет директоров Роснефти"},  # она же — в падеже
+        {"name": "Роснефть", "quote": "Сделку одобрил совет директоров Роснефти"},  # она же: в падеже
     ])})
 
     participants = business(user)["Контракт Сибнефти"]["participants_json"]
@@ -105,7 +104,7 @@ def test_company_only_beginning_like_a_word_of_the_quote_is_not_named_in_it(user
 
 
 def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recognised(user, contour, monkeypatch):
-    # «BP» — не часть «bpd»; «Газпромнефть-Хантос» — это «Газпром нефть»: так слитно пишут её дочерние общества.
+    # «BP», не часть «bpd»; «Газпромнефть-Хантос» это «Газпром нефть»: так слитно пишут её дочерние общества.
     feed_signal("Бурение Хантоса", "Газпромнефть-Хантос начала бурение на Приобском. Добыча составила 100,000 bpd.")
     fill(monkeypatch, {"Бурение Хантоса": answer(companies=[
         {"name": "Газпром нефть", "quote": "Газпромнефть-Хантос начала бурение"},
@@ -117,10 +116,10 @@ def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recogn
 
 
 def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, contour, monkeypatch):
-    # Компания названа, когда в цитате все слова её имени: одного общего слова мало — «and» из «Helmerich and
+    # Компания названа, когда в цитате все слова её имени: одного общего слова мало: «and» из «Helmerich and
     # Payne», «Oil Company» из «Abu Dhabi National Oil Company», «ПАО» из «ПАО «Газпром»». Форма собственности
-    # — не обязательна («Equinor ASA» названа в «Equinor испытала» и записана именем справочника), а «total»
-    # строчными — не Total.
+    # - не обязательна («Equinor ASA» названа в «Equinor испытала» и записана именем справочника), а «total»
+    # строчными: не Total.
     feed_signal("Сейсмика у Малайзии", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia. Kuwait "
                                        "Oil Company awarded the drilling contract. The well reached a total depth "
                                        "of 4,000 m.")
@@ -147,7 +146,7 @@ def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, c
 
 def test_name_inside_a_longer_name_of_another_company_does_not_name_it_in_the_quote(user, contour, monkeypatch):
     # Длинное имя справочника закрывает короткое: «Газпром» стоит внутри «Газпром нефть» и «Gazprom Neft», и в
-    # цитате про них он не назван — ни в кавычках, ни в падеже, ни по-английски. Назван, если стоит и отдельно.
+    # цитате про них он не назван: ни в кавычках, ни в падеже, ни по-английски. Назван, если стоит и отдельно.
     feed_signal("Бурение Газпром нефти", "«Газпром нефть» начала бурение на Приобском. Проект Газпром нефти "
                                          "рассчитан до 2030 года. Gazprom Neft reported first oil.")
     feed_signal("Соглашение Газпрома", "Газпром и Газпром нефть подписали соглашение о поставках газа.")
@@ -172,7 +171,7 @@ def test_name_inside_a_longer_name_of_another_company_does_not_name_it_in_the_qu
 def test_quote_cut_from_a_longer_name_or_word_of_the_text_does_not_name_the_company(user, contour, monkeypatch):
     # Цитата стоит в тексте целыми словами, а длинное имя справочника закрывает короткое и на словах текста вокруг
     # цитаты: обрывок «Газпром» из «Газпром нефть» и «Газпромнефть-Хантос», «…подписали Газпром» перед «нефть»,
-    # «100,000 bp» из «bpd» компанию не называют. Целая цитата называет — и с кавычками и тире, переписанными моделью.
+    # «100,000 bp» из «bpd» компанию не называют. Целая цитата называет: и с кавычками и тире, переписанными моделью.
     feed_signal("Соглашение Газпром нефти", "«Газпром нефть» начала бурение на Приобском. Соглашение подписали "
                                             "Газпром нефть и Татнефть — на пять лет.")
     feed_signal("Бурение Хантоса", "Газпромнефть-Хантос начала бурение на Приобском. Добыча составила 100,000 bpd.")
@@ -203,7 +202,7 @@ def test_quote_cut_from_a_longer_name_or_word_of_the_text_does_not_name_the_comp
 
 
 def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
-    # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
+    # Пресс-релиз компании: издатель: она сама и главный участник. Не участник: издатель-СМИ.
     feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",
                 source="Halliburton", source_type="Company")
     fill(monkeypatch, {"Пресс-релиз Halliburton": answer(companies=[
@@ -216,14 +215,14 @@ def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, 
 
 
 def test_publisher_is_dropped_only_when_it_is_a_media_outlet(user, contour, monkeypatch):
-    # Пресс-релиз компании, найденный поиском радара: статьи корпуса нет — нет и типа издателя (#98:
+    # Пресс-релиз компании, найденный поиском радара: статьи корпуса нет, нет и типа издателя (#98:
     # так выпадали 12 из 38 компаний эксперта на радарной части набора).
     radar_finding("fugro", "Fugro: контракт на диагностику", "Fugro has secured a marine asset integrity "
                   "contract with Woodside for offshore Australia.", publisher="Fugro")
-    # RSS — канал, а не вид издателя: так приходят и собственные новости компаний.
+    # RSS: канал, а не вид издателя: так приходят и собственные новости компаний.
     feed_signal("JOGMEC: сейсмика", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia.",
                 source="JOGMEC", source_type="RSS")
-    # Журнал сообщает о чужом событии — его участником не становится.
+    # Журнал сообщает о чужом событии: его участником не становится.
     feed_signal("World Oil: контракт", "Halliburton won a drilling contract in Oman, World Oil reports.",
                 source="World Oil", source_type="Journal")
     fill(monkeypatch, {
@@ -249,7 +248,7 @@ def test_event_date_after_publication_or_before_2000_is_undefined(user, contour,
         feed_signal(title, "Компания запустила новый буровой станок.",
                     published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc))
     fill(monkeypatch, {
-        # Дата публикации — день по UTC; сутки допуска — на часовой пояс события, не больше.
+        # Дата публикации: день по UTC; сутки допуска: на часовой пояс события, не больше.
         "После публикации": answer(event_date="2026-09-27"),
         "Через день": answer(event_date="2026-09-26"),
         "До 2000 года": answer(event_date="1999-12-31"),
@@ -266,7 +265,7 @@ def test_event_date_after_publication_or_before_2000_is_undefined(user, contour,
 
 
 def test_from_text_without_a_date_is_the_publication_date(user, contour, monkeypatch):
-    # Ответ сам себе противоречит: «из текста», а даты нет. Даты в тексте нет — инструкция велит «по дате
+    # Ответ сам себе противоречит: «из текста», а даты нет. Даты в тексте нет: инструкция велит «по дате
     # публикации» (экзамен 20.10: так gpt-5.5 ответила на «в течение 2026 года» в трёх прогонах из трёх).
     feed_signal("В течение года", "MODEC расширила применение технологии в течение 2026 года.",
                 published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc))
@@ -279,7 +278,7 @@ def test_from_text_without_a_date_is_the_publication_date(user, contour, monkeyp
 def test_agent_does_not_overwrite_values_set_by_a_human(user, contour, monkeypatch):
     signal_id = None
     feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco 24 сентября 2026 года.")
-    # Правку человека внесёт сервис ОС; здесь — её след в карточке.
+    # Правку человека внесёт сервис ОС; здесь: её след в карточке.
     with repository.get_connection() as conn:
         signal_id = conn.execute("SELECT id FROM signals WHERE title = 'Контракт SLB'").fetchone()[0]
         conn.execute("UPDATE signals SET event_type = 'сделка (M&A)', participants_json = '[]', "
@@ -309,7 +308,7 @@ def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, c
     card = api_get("/api/signals", user)[0]
     assert (card["event_date"], card["oilfield_relevance"], card["oilfield_application"]) == (
         "2026-09-01", "transferable", "Роботизация буровой площадки")
-    assert card["event_date_source"] is None  # откуда дата у судьи — неизвестно
+    assert card["event_date_source"] is None  # откуда дата у судьи: неизвестно
     assert card["why_interesting"] == "Первый промышленный пилот"  # у судьи было пусто
     assert (card["event_type"], card["region"], card["technology_class"], card["technology_maturity"]) == (
         "пилот", "Европа", "робототехника", "пилот/ОПИ")
@@ -318,14 +317,14 @@ def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, c
     assert card["card_set_by"] == {key: ("radar_judge" if key in judge else "agent") for key in (*CARD_KEYS, *judge)}
 
 
-# Атрибуты карточки и время правки — то, что агент меняет у находки радара по замыслу.
+# Атрибуты карточки и время правки: то, что агент меняет у находки радара по замыслу.
 _CARD_FIELDS = {"event_date", "event_date_source", "event_date_precision", "participants_json", "event_type", "region",
                 "event_countries", "technology_class", "technology_maturity", "why_interesting", "card_set_by",
                 "card_recipe", "updated_at", "user_status_updated_at"}
 
 
 def _radar_views(user, admin):
-    """Всё, что радар показывает: список, сводка, «Отсеянные и скрытые», итоги недели — без атрибутов карточки."""
+    """Всё, что радар показывает: список, сводка, «Отсеянные и скрытые», итоги недели: без атрибутов карточки."""
     def strip(rows):
         return [{key: value for key, value in row.items() if key not in _CARD_FIELDS} for row in rows]
     weekly = api_get("/api/signals/weekly", admin)
@@ -421,51 +420,16 @@ def test_judge_finding_again_takes_back_the_field_the_agent_filled(user, contour
 
     radar_finding("robot", "Робот-бурильщик", text, event_date="2026-09-05")  # повторная находка
 
-    # Дата судьи — день: ни источник, ни точность агента (#132) к ней не относятся.
+    # Дата судьи, день: ни источник, ни точность агента (#132) к ней не относятся.
     card = api_get("/api/signals", user)[0]
     assert (card["event_date"], card["event_date_source"], card["event_date_precision"]) == ("2026-09-05", None, None)
     assert card["card_set_by"]["event_date"] == "radar_judge"
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "signal-card-before-deploy.sql"
-NEW_COLUMNS = {"event_type", "region", "technology_class", "technology_maturity", "participants_json",
-               "event_date_source", "card_set_by", "card_recipe"}
-
-
-def _columns(table):
-    with connection.get_connection() as conn:
-        return {row[0] for row in conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
-            "AND table_name = %s", (table,))}
-
-
-def test_before_deploy_sql_adds_the_card_to_the_old_schema_and_repeats_safely(isolated_db):
-    with connection.get_connection() as conn:
-        for column in NEW_COLUMNS:
-            conn.execute(f"ALTER TABLE signals DROP COLUMN {column}")
-        conn.execute("ALTER TABLE ai_processing_runs DROP COLUMN signal_id")
-        conn.execute("INSERT INTO signals (signal_key, title, theme, event_date, oilfield_relevance) "
-                     "VALUES ('radar', 'Находка', 'Бурение', '2026-09-01', 'direct')")
-        conn.execute("INSERT INTO signals (signal_key, title, theme, origin) VALUES ('feed:1', 'Статья', 'Бурение', 'feed')")
-        conn.commit()
-
-    for _ in range(2):  # повтор безопасен
-        with connection.get_connection() as conn:
-            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
-            conn.autocommit = True
-            conn.execute(SCRIPT.read_text(encoding="utf-8"))
-
-    assert NEW_COLUMNS <= _columns("signals") and "signal_id" in _columns("ai_processing_runs")
-    with connection.get_connection() as conn:
-        rows = conn.execute("SELECT signal_key, card_set_by FROM signals ORDER BY signal_key").fetchall()
-    # Значения судьи у прежней находки — его; у сигнала ленты карточки ещё нет.
-    assert rows == [("feed:1", None), ("radar", {"event_date": "radar_judge", "oilfield_relevance": "radar_judge"})]
-
-
 def test_judge_finding_again_does_not_overwrite_a_human_correction(user, contour, monkeypatch):
     text = "Equinor и SLB испытали робота-бурильщика на платформе."
     signal_id = radar_finding("robot", "Робот-бурильщик", text, event_date="2026-09-01")
-    # Правку человека внесёт сервис ОС; здесь — её след в карточке.
+    # Правку человека внесёт сервис ОС; здесь: её след в карточке.
     with connection.get_connection() as conn:
         conn.execute("UPDATE signals SET event_date = '2026-08-30', card_set_by = card_set_by || "
                      "'{\"event_date\": \"human\"}' WHERE id = %s", (signal_id,))
@@ -479,8 +443,8 @@ def test_judge_finding_again_does_not_overwrite_a_human_correction(user, contour
 
 
 def test_chatgpt_finding_link_date_is_not_a_publication_date(user, contour, monkeypatch):
-    # У находки «режима ChatGPT» дата ссылки — дата события по версии модели (и после докачки страницы
-    # без даты): модель не должна получить её как дату публикации, а «по дате публикации» — опереться на неё.
+    # У находки «режима ChatGPT» дата ссылки: дата события по версии модели (и после докачки страницы
+    # без даты): модель не должна получить её как дату публикации, а «по дате публикации»: опереться на неё.
     signal_id = repository.upsert_signal({"signal_key": "chatgpt", "title": "Робот на буровой", "theme": DRILLING,
                                           "maturity": "shortlist", "score": 70, "signal_category": "technology"})
     repository.upsert_signal_evidence(signal_id, {

@@ -1,17 +1,17 @@
 """Экзамен агента «Карточка сигнала» (#98, спека #93): модель выходит в работу по порогам на разметке эксперта.
 
-Набор — пакет эксперту (#94): манифест хранит замороженные входы — заголовок, текст, дату публикации,
-издателя и его тип, — таблица хранит разметку эксперта. Агенту подаются входы манифеста, а не база: ручные
+Набор, пакет эксперту (#94): манифест хранит замороженные входы: заголовок, текст, дату публикации,
+издателя и его тип, таблица хранит разметку эксперта. Агенту подаются входы манифеста, а не база: ручные
 поправки с первоисточника есть только там. Строка разметки сопоставляется с манифестом по номеру строки
 (ID таблицы), а не по сигналу в базе: сигнал радара мог стать дублем.
 
-Деление — 15 сигналов на настройку и 35 на экзамен по долям манифеста (наибольшие остатки, каждая доля в
+Деление: 15 сигналов на настройку и 35 на экзамен по долям манифеста (наибольшие остатки, каждая доля в
 обеих частях); оно пишется рядом с манифестом при первом прогоне и дальше не меняется. Инструкцию правят
 только по строкам настройки: повторы экзамена на тех же строках превращали бы их в настройку.
 
-Каждый сигнал — три прогона. Ответ проходит те же проверки кодом, что на ядре (signal_card.card_values),
-— мерится то, что дойдёт до карточки. Модели — лестницей по цене: первая, прошедшая пороги
-(signal_card_exam_score), — решение. Отчёт и решение пишутся рядом с манифестом, вне репозитория: он публичный.
+Каждый сигнал: три прогона. Ответ проходит те же проверки кодом, что на ядре (signal_card.card_values),
+- мерится то, что дойдёт до карточки. Модели, лестницей по цене: первая, прошедшая пороги
+(signal_card_exam_score), решение. Отчёт и решение пишутся рядом с манифестом, вне репозитория: он публичный.
 """
 
 from __future__ import annotations
@@ -29,22 +29,22 @@ from oiltech_digest.signal_card_exam_score import CompanyNames, baseline_metrics
 from oiltech_digest.signal_card_pack import (LISTS_SHEET, MANIFEST_NAME, MARKUP_COLUMNS, MARKUP_SHEET, REPO_ROOT,
                                              UNDEFINED, _rank, load_dictionaries, publication_text)
 
-# Лестница по цене (спека #93): сначала nano, при провале — mini. Названные модели идут так же — по цене.
+# Лестница по цене (спека #93): сначала nano, при провале: mini. Названные модели идут так же: по цене.
 MODELS = ("gpt-5.4-nano", "gpt-5.4-mini")
-# Прогонов на сигнал экзамена (спека); на настройке — сколько угодно.
+# Прогонов на сигнал экзамена (спека); на настройке: сколько угодно.
 RUNS = 3
 TUNING_SHARE = 15 / 50
 SPLIT_NAME = "signal_card_exam_split.json"
-# Допуски — ячейки, где текст и правила законно допускают второй ответ: {ID: {атрибут: [ответы]}}; у
-# компаний — необязательные участники. Утверждает владелец; ключи на «_» и «note» — пояснения.
+# Допуски, ячейки, где текст и правила законно допускают второй ответ: {ID: {атрибут: [ответы]}}; у
+# компаний: необязательные участники. Утверждает владелец; ключи на «_» и «note»: пояснения.
 TOLERANCES_NAME = "signal_card_exam_tolerances.json"
-# Алиасы экзамена — для названий, которые эксперт записал не так, как в тексте: [{name, aliases}], как у
-# справочника компаний; к нему и добавляются (только для сравнения имён — агенту не передаются).
+# Алиасы экзамена, для названий, которые эксперт записал не так, как в тексте: [{name, aliases}], как у
+# справочника компаний; к нему и добавляются (только для сравнения имён: агенту не передаются).
 ALIASES_NAME = "signal_card_exam_aliases.json"
-# Значения судьи радара у радарных строк набора — выгрузка с ядра (signal-card-exam-judge): {ID: {event_date, …}}.
-# Экзамен идёт там, где доступна модель, а база — на ядре.
+# Значения судьи радара у радарных строк набора, выгрузка с ядра (signal-card-exam-judge): {ID: {event_date, …}}.
+# Экзамен идёт там, где доступна модель, а база: на ядре.
 JUDGE_NAME = "signal_card_exam_judge.json"
-# Колонка таблицы разметки → атрибут; справочник значения — у выбора из списка. Связь с нефтесервисом в таблице
+# Колонка таблицы разметки → атрибут; справочник значения: у выбора из списка. Связь с нефтесервисом в таблице
 # эксперта осталась, но с #132 её ставит «Отбор»: экзамен карточки её не мерит.
 LABEL_COLUMNS = {"Дата события": "event_date", "Источник даты события": "event_date_source",
                  "Компании-участники": "companies", "Тип события": "event_type", "Регион": "region",
@@ -58,7 +58,7 @@ class ExamError(ValueError):
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
         runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
-    """Экзамен по лестнице моделей: отчёт и решение — рядом с манифестом."""
+    """Экзамен по лестнице моделей: отчёт и решение: рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=True)
@@ -79,8 +79,8 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
 
 def rescore(report_path: str | Path, markup_path: str | Path, *,
             manifest_path: str | Path | None = None) -> dict[str, Any]:
-    """Пересчёт сохранённого отчёта без вызовов модели: те же ответы — по нынешним проверкам ядра
-    (card_values), допускам, алиасам и выгрузке судьи; новый отчёт — рядом, с пометкой, откуда ответы. Ответы
+    """Пересчёт сохранённого отчёта без вызовов модели: те же ответы: по нынешним проверкам ядра
+    (card_values), допускам, алиасам и выгрузке судьи; новый отчёт: рядом, с пометкой, откуда ответы. Ответы
     относятся к текстам своего манифеста и к своей версии справочников: с другими пересчёт отказывает."""
     source = Path(report_path).expanduser().resolve()
     try:
@@ -96,7 +96,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *,
                         f"{dictionaries.get('version')} — пересчёт неверен, нужен новый прогон")
     items = _part_items(exam, saved["split"], saved["part"])
     names = CompanyNames(dictionaries["companies"], exam["aliases"])
-    # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
+    # Цена и токены, исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
     tried = [{**_model_scores(one["model"], one["answers"], items, dictionaries, names),
               **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
              for one in saved["models"]]
@@ -113,13 +113,13 @@ def _part_items(exam: dict[str, Any], split: dict[str, Any], part: str) -> list[
 
 
 def _decision(tried: list[dict[str, Any]], part: str) -> str | None:
-    """Решение экзамена — первая по цене модель, прошедшая пороги; настройка модель не выбирает."""
+    """Решение экзамена: первая по цене модель, прошедшая пороги; настройка модель не выбирает."""
     return next((one["model"] for one in tried if one["passed"]), None) if part == "exam" else None
 
 
 def _model_scores(model: str, answers: list[dict[str, Any]], items: list[dict[str, Any]],
                   dictionaries: dict[str, Any], names: CompanyNames) -> dict[str, Any]:
-    """Ответы модели против разметки — строго и с допусками; цена — по токенам ответов."""
+    """Ответы модели против разметки: строго и с допусками; цена: по токенам ответов."""
     finals = _finals(answers, items, dictionaries)
     scored = {view: evaluate(items, finals, names, lenient=view == "lenient") for view in ("strict", "lenient")}
     return {"model": model, **_spend(answers), "answers": answers, **scored,
@@ -129,7 +129,7 @@ def _model_scores(model: str, answers: list[dict[str, Any]], items: list[dict[st
 
 def _report(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dict[str, Any], names: CompanyNames,
             tried: list[dict[str, Any]], settings: dict[str, Any], **extra: Any) -> dict[str, Any]:
-    """Отчёт прогона или пересчёта (settings — часть, прогоны, деление, рассуждение и версия инструкции) — рядом
+    """Отчёт прогона или пересчёта (settings: часть, прогоны, деление, рассуждение и версия инструкции): рядом
     с манифестом, JSON и читаемый .md (signal_card_exam_report.write)."""
     part, decision = settings["part"], _decision(tried, settings["part"])
     report = {
@@ -151,7 +151,7 @@ def _report(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dic
 
 def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
          runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
-    """Сухой прогон: число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена — по длине
+    """Сухой прогон: число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена: по длине
     запросов набора (signal_card.estimate)."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
@@ -170,19 +170,19 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
 
 
 def _check_runs(runs: int, part: str) -> None:
-    """Экзамен — RUNS прогонов на сигнал (спека): меньше — устойчивость не измерить, и решение о модели было бы
-    принято не так, как задано. Настройка — от одного."""
+    """Экзамен, RUNS прогонов на сигнал (спека): меньше: устойчивость не измерить, и решение о модели было бы
+    принято не так, как задано. Настройка: от одного."""
     if runs < 1 or (part == "exam" and runs != RUNS):
         raise ExamError(f"--runs {runs}: на экзамене — {RUNS} прогона на сигнал, на настройке — от одного")
 
 
 def _by_price(models: tuple[str, ...]) -> list[str]:
-    """Лестница — от дешёвой модели к дорогой, в каком порядке модели ни назвали: решение — самая дешёвая из прошедших."""
+    """Лестница, от дешёвой модели к дорогой, в каком порядке модели ни назвали: решение: самая дешёвая из прошедших."""
     return sorted(models, key=config.price_for_model)
 
 
 def judge_values(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Выгрузка с ядра (там база): значения судьи у радарных строк манифеста — по номеру строки."""
+    """Выгрузка с ядра (там база): значения судьи у радарных строк манифеста: по номеру строки."""
     from oiltech_digest.db import signal_card_store
 
     numbers = {item["id"]: int(item["signal_id"]) for item in manifest.get("items") or []
@@ -263,7 +263,7 @@ def _mark_if_exists(path: Path) -> dict[str, str] | None:
 
 
 def _tolerances(path: Path, ids: set[str], dictionaries: dict[str, Any]) -> dict[str, dict[str, list[Any]]]:
-    """Список допусков: значения — в той же форме, что метки эксперта (справочники, даты ГГГГ-ММ-ДД)."""
+    """Список допусков: значения: в той же форме, что метки эксперта (справочники, даты ГГГГ-ММ-ДД)."""
     if not path.exists():
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -303,7 +303,7 @@ def _file_mark(path: Path) -> dict[str, str]:
 
 
 def _inputs(item: dict[str, Any]) -> dict[str, Any]:
-    """Входы агента из манифеста — так же, как ядро готовит главную публикацию (signal_card._publication)."""
+    """Входы агента из манифеста: так же, как ядро готовит главную публикацию (signal_card._publication)."""
     published = item.get("published")
     return {
         "id": item["id"], "stratum": item["stratum"], "origin": item.get("origin"),
@@ -386,7 +386,7 @@ def _label(key: str, raw: Any, dictionaries: dict[str, Any], problems: list[str]
 
 
 def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
-    """Деление на настройку и экзамен: из файла рядом с манифестом, а при первом прогоне — новое."""
+    """Деление на настройку и экзамен: из файла рядом с манифестом, а при первом прогоне: новое."""
     path = exam["folder"] / SPLIT_NAME
     ids = sorted(item["id"] for item in exam["items"])
     if path.exists():
@@ -407,7 +407,7 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
     for stratum in ranked[:total - sum(counts.values())]:
         counts[stratum] += 1
     for stratum, group in by_stratum.items():
-        if len(group) >= 2:  # каждая доля — в обеих частях
+        if len(group) >= 2:  # каждая доля: в обеих частях
             counts[stratum] = min(max(counts[stratum], 1), len(group) - 1)
     tuning = {number for stratum, group in by_stratum.items()
               for number in sorted(group, key=lambda one: _rank("split", exam["seed"], one))[:counts[stratum]]}
@@ -433,12 +433,12 @@ def _model_item(index: int, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _themes(items: list[dict[str, Any]]) -> list[str]:
-    """Тематики для схемы ответа — темы строк манифеста (тематики заказчика на день пакета): экзамен идёт без базы."""
+    """Тематики для схемы ответа, темы строк манифеста (тематики заказчика на день пакета): экзамен идёт без базы."""
     return sorted({item["theme"] for item in items if item["theme"]})
 
 
 def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
-    """Ответы модели: строка на (прогон, сигнал). Сбой вызова — одна повторная попытка, как у шага
+    """Ответы модели: строка на (прогон, сигнал). Сбой вызова: одна повторная попытка, как у шага
     планировщика; обе попытки оплачены."""
     payload: dict[str, Any] = {"model": model, "reasoning": config.SIGNAL_CARD_REASONING, "dictionaries": dictionaries,
                                "themes": _themes(items),
@@ -479,7 +479,7 @@ def _publication(item: dict[str, Any]) -> dict[str, Any]:
 
 def _finals(answers: list[dict[str, Any]], items: list[dict[str, Any]],
             dictionaries: dict[str, Any]) -> dict[str, list[dict[str, Any] | None]]:
-    """Значения карточки по прогонам — как их записало бы ядро; без карточки — None."""
+    """Значения карточки по прогонам: как их записало бы ядро; без карточки: None."""
     by_id = {item["id"]: item for item in items}
     finals: dict[str, list[dict[str, Any] | None]] = {item["id"]: [] for item in items}
     for answer in answers:

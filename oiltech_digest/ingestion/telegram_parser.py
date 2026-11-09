@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{3,64}$")
 _POST_RE = re.compile(r"^([A-Za-z0-9_]{3,64})/(\d+)$")
-# Граница строк поста: `<br>` и концы блоков. Переносы в исходнике HTML — не граница.
+# Граница строк поста: `<br>` и концы блоков. Переносы в исходнике HTML: не граница.
 _LINE_BREAK = "\u2028"
 _BLOCK_TAGS = ("p", "div", "blockquote", "li")
-# Первая строка короче — рубрика («#ЦифраДня», «⚡️ Энергофакт»), а не заголовок.
+# Первая строка короче: рубрика («#ЦифраДня», «⚡️ Энергофакт»), а не заголовок.
 MIN_TITLE_CHARS = 25
 
 
@@ -100,11 +100,11 @@ def listing_unchanged(source: dict, posts: list[TelegramPost]) -> bool:
 
 
 def post_steps(source: dict, posts: list[TelegramPost], max_age_days: int | None = None) -> Iterator[Step]:
-    """Рубежи сбора по каждому посту превью (от новых к старым) — как их проходит сбор.
+    """Рубежи сбора по каждому посту превью (от новых к старым): как их проходит сбор.
 
     Единственная реализация: parse_source вставляет READY, проба источника
     (`source-probe`) печатает вердикты. Последний пост прошлого сбора останавливает
-    просмотр: он и всё, что ниже, — KNOWN, сбор их не смотрит.
+    просмотр: он и всё, что ниже, KNOWN, сбор их не смотрит.
     """
     cutoff = verdicts.old_cutoff(source, max_age_days)
 
@@ -185,7 +185,7 @@ def channel_from_url(raw_url: str) -> str | None:
 def extract_posts(content: bytes | str, limit: int = 20) -> list[TelegramPost]:
     try:
         doc = html.fromstring(content)
-    except (ValueError, TypeError, etree.ParserError):  # пустое тело — «Document is empty»
+    except (ValueError, TypeError, etree.ParserError):  # пустое тело: «Document is empty»
         return []
 
     posts: list[TelegramPost] = []
@@ -233,8 +233,8 @@ def _message_lines(node) -> list[str]:
 
 
 def title_from_text(text: str) -> str:
-    """Заголовок поста: первая строка (строки — через перевод строки), в ней — первое
-    предложение. Короткая первая строка — рубрика: тогда первое предложение всего текста."""
+    """Заголовок поста: первая строка (строки: через перевод строки), в ней: первое
+    предложение. Короткая первая строка, рубрика: тогда первое предложение всего текста."""
     lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").split("\n")]
     lines = [line for line in lines if line]
     if not lines:

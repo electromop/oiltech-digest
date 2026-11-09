@@ -1,5 +1,5 @@
 """Починка даты публикации собранных статей (#139): в план идёт только дата, которая противоречит
-адресу статьи, «стало» — дата нового разбора той же страницы; пишется ровно согласованный план."""
+адресу статьи, «стало»: дата нового разбора той же страницы; пишется ровно согласованный план."""
 
 from datetime import datetime, timezone
 
@@ -161,7 +161,7 @@ def test_apply_takes_only_the_plan(tmp_path):
 
 
 def test_stored_midnight_utc_a_day_off_the_url_is_a_time_zone_shift_not_a_defect():
-    # Выпуск в 17:00 по Калифорнии 13.07 — это полночь UTC 14.07; адрес пишут по местному дню.
+    # Выпуск в 17:00 по Калифорнии 13.07 это полночь UTC 14.07; адрес пишут по местному дню.
     article = _article(url="https://techcrunch.com/2026/07/13/startup-raises/",
                        published_at=datetime(2026, 7, 14, tzinfo=timezone.utc))
 

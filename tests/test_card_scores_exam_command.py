@@ -1,6 +1,6 @@
-"""Экзамен «Карточки» (#133, спека #128), шов 2 — команды: выгрузка с ядра на изолированной базе, отказы до оплаты,
+"""Экзамен «Карточки» (#133, спека #128), шов 2, команды: выгрузка с ядра на изолированной базе, отказы до оплаты,
 вход второго вызова такой же, как у ядра, сбои, сухой прогон, пересчёт без вызовов, полная таблица и читаемый отчёт.
-Пакет и разметка — card_scores_exam_support."""
+Пакет и разметка: card_scores_exam_support."""
 
 import json
 import re
@@ -12,9 +12,9 @@ from oiltech_digest.db import marks, repository
 from oiltech_digest.otbor_pack_format import MANIFEST_NAME, load_rubrics
 from tests.card_scores_exam_support import (CARD, CONTROL_NAME, LUNA, MINI, SUMMARY, ScoresModel, add_strong,
                                             approve_scores, oracle_card, oracle_scores, part_rows, run_exam)
-from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
+from tests.card_scores_exam_support import scores_pack  # noqa: F401: фикстура
 from tests.otbor_exam_support import ROWS_NAME, write_rows
-from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
+from tests.otbor_pack_support import pack  # noqa: F401: фикстура
 from tests.otbor_pack_support import radar
 
 DASHES = re.compile("[–—]")
@@ -24,7 +24,7 @@ def test_core_export_gives_criteria_tags_control_and_strong_signals_beyond_the_p
     corpus, items = pack["corpus"], pack["items"]
     strong = add_strong(corpus)
     with repository.get_connection() as conn:
-        # Тег ленты бывает подтегом: контроль — его корневая тематика.
+        # Тег ленты бывает подтегом: контроль: его корневая тематика.
         drilling = conn.execute("SELECT id FROM tags WHERE name = 'Бурение'").fetchone()[0]
         child = conn.execute("INSERT INTO tags (name, parent_id) VALUES ('Долота', %s) RETURNING id",
                              (drilling,)).fetchone()[0]
@@ -32,7 +32,7 @@ def test_core_export_gives_criteria_tags_control_and_strong_signals_beyond_the_p
         conn.execute("UPDATE article_tags SET tag_id = %s WHERE article_id = %s", (child, feed["article_id"]))
         conn.execute("UPDATE article_scores SET total_score = 81.5 WHERE article_id = %s", (feed["article_id"],))
         conn.commit()
-    # Эталон заказчика в памяти радара: ссылка находки — среди его ссылок (адрес записан иначе).
+    # Эталон заказчика в памяти радара: ссылка находки: среди его ссылок (адрес записан иначе).
     reference = radar("reference-hit", links=1)
     repository.upsert_signal_agent_memory(
         memory_key="signal_verdict:customer_reference:x", memory_type="signal_verdict", subject="strong_signal",
@@ -70,7 +70,7 @@ def test_core_export_gives_criteria_tags_control_and_strong_signals_beyond_the_p
     assert found[f"article:{strong['digest_article']}"]["category"] == "business"  # статья ленты без своего сигнала
     assert found[f"signal:{strong['top_signal']}"]["sources"] == ["top"]
     assert found[f"signal:{reference}"]["category"] == "technology"
-    # Публикация — по правилам пакета: текст издателя, у находки поиска сайт из ссылки и нет даты модели поиска.
+    # Публикация, по правилам пакета: текст издателя, у находки поиска сайт из ссылки и нет даты модели поиска.
     top = found[f"signal:{strong['top_signal']}"]
     assert top["publisher"] == "radar0.example.com" and top["published"] is None and "Page text" in top["text"]
     assert data["skipped"] == {"in_pack": 1, "other": 1, "no_text": 1}
@@ -88,7 +88,7 @@ def test_rescore_marks_a_new_core_export_and_refuses_one_without_core_scores(sco
     [source] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))
     path = scores_pack["out"] / CONTROL_NAME
     control = json.loads(path.read_text(encoding="utf-8"))
-    # Выгрузку сняли заново: у строки другой балл ядра, порог ступени при пересчёте другой — отчёт это говорит.
+    # Выгрузку сняли заново: у строки другой балл ядра, порог ступени при пересчёте другой: отчёт это говорит.
     number = next(key for key, one in control["rows"].items() if one["score"] is not None)
     rows = {**control["rows"], number: {**control["rows"][number], "score": 10}}
     path.write_text(json.dumps({**control, "rows": rows}, ensure_ascii=False), encoding="utf-8")
@@ -116,21 +116,21 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
                       "--card-markup", str(scores_pack["card_markup"]),
                       *(["--card-model", card_model] if card_model else []), *args])
 
-    # Экзамен — три прогона на строку; меньше — только на настройке.
+    # Экзамен: три прогона на строку; меньше: только на настройке.
     refused("--runs", "--runs", "1")
     # Модель без своей строки в таблице цен: лестница по цене и расход солгали бы.
     refused("цены gpt-7-mega нет", "--models", "gpt-7-mega")
-    # Экзамен — только на утверждённых правилах: без отметки и с отметкой прежних версий он не идёт.
+    # Экзамен, только на утверждённых правилах: без отметки и с отметкой прежних версий он не идёт.
     approve_scores(out, approved=None)
     refused("approved_scores")
     approve_scores(out, approved="утверждено: карточка 2026-10-01.1, баллы 2026-10-01.1, линейки 2026-10-01.1")
     refused("не называет текущие правила")
-    # Пороги — часть утверждения: отметка с нынешними версиями, но без порогов экзамен не пускает.
+    # Пороги, часть утверждения: отметка с нынешними версиями, но без порогов экзамен не пускает.
     approve_scores(out, approved=(f"утверждено: карточка {signal_card.PROMPT_VERSION}, баллы "
                                   f"{signal_scores.PROMPT_VERSION}, линейки {load_rubrics()['version']}"))
     refused("пороги: границы итога")
     approve_scores(out)
-    # Границы итога — тоже часть утверждения: отметка при других границах экзамен не пускает.
+    # Границы итога, тоже часть утверждения: отметка при других границах экзамен не пускает.
     monkeypatch.setattr(card_scores_exam.config, "SIGNAL_SCORE_BANDS", (74, 61, 40))
     refused("границы итога 74/61/40")
     monkeypatch.setattr(card_scores_exam.config, "SIGNAL_SCORE_BANDS", (80, 65, 40))
@@ -139,11 +139,11 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     write_rows(out, {key: rows[key] for key in ("list_pages", "in_instruction")}, approved=None)
     refused("approved", "--part", "tuning", "--runs", "1")
     (out / ROWS_NAME).write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-    # Модель основного вызова и сути — со ставкой в таблице цен; без модели основного вызова тема и дата не те.
+    # Модель основного вызова и сути: со ставкой в таблице цен; без модели основного вызова тема и дата не те.
     refused("цены gpt-9-card нет", card_model="gpt-9-card")
     monkeypatch.setattr(card_scores_exam.config, "SIGNAL_CARD_MODEL", "")
     refused("--card-model", card_model=None)
-    # Выгрузка с ядра: без неё весов и тегов нет; с испорченной — итог исказился бы.
+    # Выгрузка с ядра: без неё весов и тегов нет; с испорченной: итог исказился бы.
     control = json.loads((out / CONTROL_NAME).read_text(encoding="utf-8"))
     (out / CONTROL_NAME).unlink()
     refused("card-scores-exam-control")
@@ -153,12 +153,12 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": {"signal:999999": {}}}, ensure_ascii=False),
                                     encoding="utf-8")
     refused("signal:999999")
-    # Балл контроля не числом упал бы уже после оплаченных вызовов: проверка — при загрузке набора.
+    # Балл контроля не числом упал бы уже после оплаченных вызовов: проверка: при загрузке набора.
     number = next(iter(control["rows"]))
     (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": {**control["rows"], number: {"score": "n/a"}}},
                                                ensure_ascii=False), encoding="utf-8")
     refused("число или null")
-    # Порог ступени — нынешние баллы ядра. Выгрузка, где их нет ни у одной строки, прошла бы проверку, лестница
+    # Порог ступени: нынешние баллы ядра. Выгрузка, где их нет ни у одной строки, прошла бы проверку, лестница
     # оплатилась бы вся, и каждая модель «не прошла» бы ступень: отказ до вызовов, и на сухом прогоне тоже.
     empty = {key: {**one, "score": None} for key, one in control["rows"].items()}
     (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": empty}, ensure_ascii=False), encoding="utf-8")
@@ -173,7 +173,7 @@ def test_the_second_call_gets_the_core_input_with_the_expert_fields_and_the_main
     _, first = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     number = next(one for one in part_rows(first, scores_pack) if scores_pack["expert"][one]["profile"] == "business")
     title = scores_pack["expert"][number]["title"]
-    # Дата и зрелость основного вызова — свои у каждого прогона: второй вызов прогона получает свои.
+    # Дата и зрелость основного вызова, свои у каждого прогона: второй вызов прогона получает свои.
     dates = {}
 
     def card(found):
@@ -192,13 +192,13 @@ def test_the_second_call_gets_the_core_input_with_the_expert_fields_and_the_main
     for run, call in enumerate(calls, start=1):
         assert f"Дата события из текста: {20 + run}.09.2026" in call["input"]
         assert "Стадия зрелости: пилот/ОПИ" in call["input"]
-        # Категория, отрасль и связь — эксперта (подписи справочника), применения он не писал; суть — «Сути».
+        # Категория, отрасль и связь: эксперта (подписи справочника), применения он не писал; суть: «Сути».
         assert "Категория: бизнес" in call["input"] and "Отрасль: нефтегаз" in call["input"]
         assert "Связь с нефтесервисом: прямая" in call["input"] and "Применение" not in call["input"]
         assert f"Суть: Суть публикации: {title}" in call["input"]
     assert model.of("article_summary") == []  # суть уже лежала рядом с манифестом
     card_call = next(call for call in model.of("signal_card") if call["title"] == title)
-    # Основной вызов: категория, 13 тем и кандидаты по ключам, без сути — как у ядра (signal_card.payload_signal).
+    # Основной вызов: категория, 13 тем и кандидаты по ключам, без сути: как у ядра (signal_card.payload_signal).
     assert "Категория: бизнес" in card_call["input"] and "Темы-кандидаты по ключам:" in card_call["input"]
     assert "Суть публикации" not in card_call["input"]
     assert "Бурение" in card_call["instructions"]
@@ -220,7 +220,7 @@ def test_a_failed_call_is_retried_once_and_a_lost_answer_is_a_miss(scores_pack, 
         number = scores_pack["titles"][title]
         attempts[number] = attempts.get(number, 0) + 1
         if number == flaky and attempts[number] % 2 == 1:
-            return RuntimeError("сеть")  # каждый первый ответ прогона — сбой, повтор отвечает
+            return RuntimeError("сеть")  # каждый первый ответ прогона: сбой, повтор отвечает
         if number == broken:
             return RuntimeError("сеть")
         return oracle_scores(scores_pack)(title, criteria, run)
@@ -228,12 +228,12 @@ def test_a_failed_call_is_retried_once_and_a_lost_answer_is_a_miss(scores_pack, 
 
     model, report = run_exam(monkeypatch, scores_pack, {LUNA: scores}, card=card)
 
-    # Основной вызов без ответа — повтор, затем без карточки: второй вызов ему не делается (как на ядре).
+    # Основной вызов без ответа, повтор, затем без карточки: второй вызов ему не делается (как на ядре).
     assert len([call for call in model.of("signal_card") if titles.get(call["title"]) == cardless]) == 6
     assert attempts.get(cardless) is None
     assert attempts[flaky] == 6 and attempts[broken] == 6
     answers = report["models"][0]["scores"]["answers"]
-    assert answers["failures"] == 3 * 2  # «сломанная» и «без карточки» — промах в каждом прогоне
+    assert answers["failures"] == 3 * 2  # «сломанная» и «без карточки»: промах в каждом прогоне
     lost = [one for one in report["models"][0]["answers"] if one["id"] in (broken, cardless)]
     assert {one["attempts"] for one in lost if one["id"] == cardless} == {0}
     assert {one["attempts"] for one in lost if one["id"] == broken} == {2}
@@ -246,7 +246,7 @@ def test_dry_run_prints_rows_calls_and_price_and_writes_nothing(scores_pack, mon
     model = ScoresModel(oracle_card(scores_pack), {})
     for module in (card_scores_exam_calls, signal_card, signal_scores):
         monkeypatch.setattr(module, "make_client", lambda: model)
-    # Цена входа — ноль, выхода — круглая: в цене остаётся только оценка ответа (600 токенов на вызов).
+    # Цена входа, ноль, выхода, круглая: в цене остаётся только оценка ответа (600 токенов на вызов).
     for name, price in {SUMMARY: 1.0, CARD: 2.0, LUNA: 0.5, MINI: 4.0}.items():
         monkeypatch.setitem(config.OPENAI_MODEL_PRICES, name, (0.0, price))
     capsys.readouterr()
@@ -290,7 +290,7 @@ def test_exam_writes_summaries_with_the_summary_agent_model(scores_pack, monkeyp
 def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monkeypatch):
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     [source] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))
-    # Границы ступеней сменились после прогона: ответы те же, ступень по новым границам, правило — с пометкой. При
+    # Границы ступеней сменились после прогона: ответы те же, ступень по новым границам, правило: с пометкой. При
     # нижней границе «полезного» 71 балл судьи 70 уходит в «наблюдать», балл ленты 77 остаётся «полезным».
     monkeypatch.setattr(config, "SIGNAL_SCORE_BANDS", (95, 71, 40))
 
@@ -306,7 +306,7 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monk
     pack = [one for one in rescored["rows"] if one["rating"] != "strong_extra"]
     strong = sum(one["band"] == "strong" for one in pack)
     assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(pack))
-    # Порог ступени при пересчёте — нынешние баллы ядра по тем же новым границам: модель с баллами эксперта лучше них.
+    # Порог ступени при пересчёте, нынешние баллы ядра по тем же новым границам: модель с баллами эксперта лучше них.
     control = scores_pack["control"]["rows"]
     controlled = [one for one in pack if (control.get(one["id"]) or {}).get("score") is not None]
     assert {control[one["id"]]["score"] for one in controlled} == {77, 70}
@@ -370,7 +370,7 @@ def test_parallel_calls_give_the_same_answers_and_scores(scores_pack, monkeypatc
 
 def test_readable_report_has_the_quality_and_price_table_with_the_monthly_feed_estimate(scores_pack, monkeypatch,
                                                                                         capsys):
-    # Размеры страт окна пакета — выгрузка otbor-exam-control: 2000 отклонённых и 3000 принятых гейтом статей.
+    # Размеры страт окна пакета, выгрузка otbor-exam-control: 2000 отклонённых и 3000 принятых гейтом статей.
     (scores_pack["out"] / "otbor_exam_control.json").write_text(json.dumps(
         {"strata": {"feed_rejected": 2000, "feed_accepted": 3000}, "rows": {}}), encoding="utf-8")
 
@@ -396,6 +396,6 @@ def test_a_changed_summary_instruction_asks_for_a_new_summary(scores_pack, monke
     model, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
 
     # Суть по старой инструкции не годится. Основной вызов переспрашивается, только если суть стала другой: его
-    # отпечаток — по его же запросу (подставная модель пишет ту же суть).
+    # отпечаток: по его же запросу (подставная модель пишет ту же суть).
     assert len(model.of("article_summary")) == len(report["rows"])
     assert model.of("signal_card") == []

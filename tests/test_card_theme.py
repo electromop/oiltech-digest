@@ -1,6 +1,6 @@
 """Основной вызов «Карточки» в конвейере «Отбора» (#132, спека #128), шов 1: статья сбора → «Отбор» → суть → вызов
 «Карточки» на подставной модели через настоящий клиент воркера NL → ядро → API витрин (tests/card_pipeline_support.py).
-Тема — по содержанию, одна из 13; связь с нефтесервисом ставит только «Отбор»; дата события хранится с точностью; дата
+Тема: по содержанию, одна из 13; связь с нефтесервисом ставит только «Отбор»; дата события хранится с точностью; дата
 из текста старше 180 дней возвращает публикацию в «Отбор» один раз.
 """
 
@@ -9,10 +9,10 @@ from datetime import datetime, timezone
 from oiltech_digest import cli, signal_card
 from oiltech_digest.db import marks, repository
 from tests.card_pipeline_support import (DRILLING, MARKET, THEMES, accepted, answer, card_answer, fill_cards,
-                                         pipeline)  # noqa: F401 — фикстура pipeline
+                                         pipeline)  # noqa: F401: фикстура pipeline
 from tests.otbor_support import JUSTIFICATION, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, feed_signal, run_worker, user  # noqa: F401 — фикстуры
+from tests.otbor_support import contour  # noqa: F401: фикстура
+from tests.signal_card_support import admin, api_get, feed_signal, run_worker, user  # noqa: F401: фикстуры
 
 CONTRACT = "Контракт Weatherford в Омане"
 CONTRACT_TEXT = ("Weatherford получила контракт на бурение 274 скважин в Омане. Контракт подписан 24 сентября "
@@ -30,7 +30,7 @@ def test_card_gets_the_category_but_neither_the_summary_nor_anything_of_otbor_an
     [call] = model.calls
     header = call["input"].split("Текст публикации:", 1)[0]
     # На входе категория. Суть не идёт: короткая суть сбивала тему (экзамен 01.11); её читает только второй вызов.
-    # Решения, причины и обоснования «Отбора», его отрасли и связи — тоже нет.
+    # Решения, причины и обоснования «Отбора», его отрасли и связи: тоже нет.
     assert "Категория: бизнес" in header and "Суть" not in header and summary not in call["input"]
     assert JUSTIFICATION not in call["input"] and "accept" not in call["input"]
     for word in ("Отрасль", "Связь", "нефтесервис:"):
@@ -45,7 +45,7 @@ def test_card_gets_the_category_but_neither_the_summary_nor_anything_of_otbor_an
     assert "oilfield_relevance" not in call["instructions"] and "связь с нефтесервисом" not in call["instructions"].lower()
     card = showcase(user)[CONTRACT]
     assert (card["theme"], card["card_set_by"]["theme"]) == (MARKET, "agent")
-    # Связь и применение — по-прежнему от «Отбора».
+    # Связь и применение: по-прежнему от «Отбора».
     assert (card["oilfield_relevance"], card["card_set_by"]["oilfield_relevance"]) == ("direct", "otbor")
 
 
@@ -58,7 +58,7 @@ def test_the_theme_rule_sends_a_market_review_to_the_market_theme_named_as_in_th
 
     model = fill_cards(monkeypatch, {REVIEW: card_answer(theme=MARKET)})
 
-    # Правило из выпуска эксперта (#149): обзор рынка одной технологии — тема рынка, по её имени в списке 13.
+    # Правило из выпуска эксперта (#149): обзор рынка одной технологии: тема рынка, по её имени в списке 13.
     [call] = model.calls
     assert (f"Обзор, прогноз или исследование рынка (объёмы, рост, спрос, инвестиции) относится к теме «{MARKET}», "
             "даже если это рынок одной технологии.") in " ".join(call["instructions"].split())
@@ -77,7 +77,7 @@ def test_theme_is_set_only_after_otbor_and_only_from_the_list(user, pipeline, mo
                              "Контракт до «Отбора»": card_answer(theme=MARKET)})
 
     twin = showcase(user, "technology")["Цифровой двойник бурения"]
-    # Тема не из списка — не тема: остаётся прежняя, поле не помечено как заполненное агентом.
+    # Тема не из списка, не тема: остаётся прежняя, поле не помечено как заполненное агентом.
     assert twin["theme"] != "Космос" and "theme" not in twin["card_set_by"]
     legacy = showcase(user)["Контракт до «Отбора»"]
     assert legacy["theme"] == before and "theme" not in (legacy["card_set_by"] or {})
@@ -109,7 +109,7 @@ def test_old_event_date_from_the_text_returns_the_publication_to_otbor_once(user
 
     fill_cards(monkeypatch, {OLD: card_answer(event_date="2026-03-10", theme=MARKET)})
 
-    # Публикация 20.10, событие 10.03: 224 дня. «Отбор» получил её снова — с этим фактом, и снова принял: «спорное».
+    # Публикация 20.10, событие 10.03: 224 дня. «Отбор» получил её снова, с этим фактом, и снова принял: «спорное».
     first, again = otbor_model.calls
     assert "Факт «Карточки»" not in first["input"]
     assert "Факт «Карточки»: дата события в тексте 10.03.2026, событию 224 дн. к дате публикации 20.10.2026" in (
@@ -149,7 +149,7 @@ def test_no_return_without_an_event_date_in_the_text_or_when_its_month_may_be_re
     decisions = len(otbor_model.calls)
 
     fill_cards(monkeypatch, {
-        # Апрель 2026: последний день периода 30.04 — 173 дня к 20.10; первое число месяца не подставляется.
+        # Апрель 2026: последний день периода 30.04: 173 дня к 20.10; первое число месяца не подставляется.
         "Апрельский контракт": card_answer(event_date="2026-04"),
         "Дата не названа": card_answer(event_date="", event_date_source="не определено"),
         # Дата публикации вместо даты события не подставляется ни для «Свежести», ни для возврата.

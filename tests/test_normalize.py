@@ -1,4 +1,4 @@
-"""Тесты нормализации — чистые функции, без сети и БД."""
+"""Тесты нормализации: чистые функции, без сети и БД."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -49,7 +49,7 @@ def test_is_future_date_flags_far_future_only():
 
 
 def test_parse_date_rejects_future_event_dates():
-    # Дата-анонс из будущего (как Equinor «Q3 results — analyst conference») → None,
+    # Дата-анонс из будущего (как Equinor «Q3 results: analyst conference») → None,
     # чтобы такие «события» не выдавались за дату публикации.
     future = (datetime.now(timezone.utc) + timedelta(days=120)).strftime("%a, %d %b %Y %H:%M:%S +0000")
     assert normalize.parse_date({"published": future}) is None
@@ -66,7 +66,7 @@ def test_title_matches_body_accepts_own_text():
 
 
 def test_title_matches_body_rejects_foreign_text():
-    """Кейс владельца 28.07: заголовок про суд над TotalEnergies, тело — про клапан."""
+    """Кейс владельца 28.07: заголовок про суд над TotalEnergies, тело: про клапан."""
     assert not normalize.title_matches_body(
         "TotalEnergies обжалует решение суда Франции о климатических целях компании",
         "Исследователи Пермского Политеха разработали цифровую модель обратного клапана "
@@ -77,7 +77,7 @@ def test_title_matches_body_rejects_foreign_text():
 def test_title_matches_body_ignores_publisher_suffix():
     """Регресс на ЛОЖНОЕ срабатывание, найденное замером 28.07: хвост издания
     («— Новости о нефти и газе в России и мире») топил долю совпадения и заставлял
-    стража резать ВЕРНЫЕ статьи OilCapital — 19.6% его ленты."""
+    стража резать ВЕРНЫЕ статьи OilCapital: 19.6% его ленты."""
     assert normalize.title_matches_body(
         "Сахалин надеется построить свой НПЗ к 2030 году — Новости о нефти и газе в России и мире",
         "На Сахалине планируется создание собственного нефтеперерабатывающего завода, "
@@ -86,7 +86,7 @@ def test_title_matches_body_ignores_publisher_suffix():
 
 
 def test_title_matches_body_skips_too_short_titles():
-    """«SOCAR» или «May 2026» судить не позволяют — страж обязан пропускать, а не резать."""
+    """«SOCAR» или «May 2026» судить не позволяют: страж обязан пропускать, а не резать."""
     assert normalize.title_matches_body("SOCAR", "Совершенно посторонний длинный текст про Баку.")
     assert normalize.title_matches_body("May 2026", "Unrelated content about pipelines and rigs.")
 
@@ -110,7 +110,7 @@ def test_strip_emoji_removes_default_emoji_from_title():
 def test_strip_emoji_keeps_meaningful_symbols():
     """Замер 12.09: наивная регулярка на \\p{Emoji} дала 100% ложных именно на этих знаках.
 
-    Стрелки и градусы несут смысл в отраслевых формулировках — резать их нельзя.
+    Стрелки и градусы несут смысл в отраслевых формулировках: резать их нельзя.
     """
     legit = "Добыча ↓ 3% при ±5 °C — Baker Hughes © 2026, ГОСТ™ и ® знак, проверено ✓"
     assert normalize.strip_emoji(legit) == legit
@@ -132,10 +132,10 @@ def test_strip_emoji_collapses_gap_and_handles_empty():
     assert normalize.strip_emoji(None) == ""
 
 
-# Адреса — с прода 25.09: у этих источников статья опознаётся ТОЛЬКО по query, а ключ
-# без query склеивал все их статьи в одну. Проба на ядре: Минэнерго — 25 пунктов ленты
-# из 25 отбиты как «дубль» чужой статьи, EIA — 17 из 18, РГУ Губкина — 257 из 260,
-# свежие релизы Лукойла и Новатэка — тоже.
+# Адреса: с прода 25.09: у этих источников статья опознаётся ТОЛЬКО по query, а ключ
+# без query склеивал все их статьи в одну. Проба на ядре: Минэнерго: 25 пунктов ленты
+# из 25 отбиты как «дубль» чужой статьи, EIA: 17 из 18, РГУ Губкина: 257 из 260,
+# свежие релизы Лукойла и Новатэка: тоже.
 QUERY_IDENTIFIED = [
     ("https://lukoil.ru/PressCenter/Pressreleases/Pressrelease?rid=740957",
      "https://lukoil.ru/PressCenter/Pressreleases/Pressrelease?rid=739353"),
@@ -157,7 +157,7 @@ def test_url_key_separates_articles_identified_by_query():
 
 
 def test_url_key_still_collapses_spellings_of_one_article():
-    """Три причины 940 копий (13.09) по-прежнему дают один ключ, и к ним — хвосты,
+    """Три причины 940 копий (13.09) по-прежнему дают один ключ, и к ним: хвосты,
     найденные замером параметров прода 25.09: `ysclid` (Яндекс) и подписи `gaa_*`."""
     same = [
         "https://www.rbc.ru/politics/24/08/2026/6a8c1725?from=newsfeed",

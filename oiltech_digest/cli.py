@@ -29,7 +29,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     print(f"БД инициализирована. Таблиц в схеме: {len(tables)}")
     for t in tables:
         print(f"  - {t}")
-    # Если админов нет, а пользователи есть — назначить админом первого (бутстрап #12).
+    # Если админов нет, а пользователи есть: назначить админом первого (бутстрап #12).
     admin_id = repository.ensure_admin_bootstrap()
     if admin_id is not None:
         print(f"Бутстрап ролей: пользователь id={admin_id} назначен администратором")
@@ -62,7 +62,7 @@ def cmd_list_users(args: argparse.Namespace) -> None:
 
 
 def cmd_admission_code(args: argparse.Namespace) -> None:
-    """Запасной путь допуска (#113): новый код учётке — при сбое отправки в Telegram или до
+    """Запасной путь допуска (#113): новый код учётке: при сбое отправки в Telegram или до
     включения отправки. Заменяет прежний код, интервал в 10 минут не действует."""
     from oiltech_digest import admission, auth
     from oiltech_digest.db import repository
@@ -204,7 +204,7 @@ def cmd_cleanup_future_dates(args: argparse.Namespace) -> None:
 
 
 def cmd_seed_tags(args: argparse.Namespace) -> None:
-    # 13.09: перешли с 18 направлений D01–D18 из xlsx на 13 тематик заказчика
+    # 13.09: перешли с 18 направлений D01-D18 из xlsx на 13 тематик заказчика
     # (data/seed/tags_13_tematik.md). Прежние теги выключаются, а не удаляются:
     # на них ссылается article_tags со всей историей классификации.
     from oiltech_digest.processing.seed import seed_tags_13
@@ -227,8 +227,8 @@ def cmd_seed_scoring(args: argparse.Namespace) -> None:
 def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
     """Поставить именованный набор критериев активным набором профиля (решение владельца 29.09).
 
-    Сид непустой профиль не трогает — на проде набор меняется только этой командой. По умолчанию
-    сухой прогон: «до» и «после»; --apply — одной транзакцией, критерии не удаляются."""
+    Сид непустой профиль не трогает: на проде набор меняется только этой командой. По умолчанию
+    сухой прогон: «до» и «после»; --apply: одной транзакцией, критерии не удаляются."""
     from oiltech_digest.db import repository
     from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
@@ -251,7 +251,7 @@ def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
     if not result["changed"]:
         print("  изменений нет — набор уже применён")
         return
-    # Прежний набор после записи выключен, не удалён: вернуть его — один UPDATE (ранбук ADR 0002).
+    # Прежний набор после записи выключен, не удалён: вернуть его: один UPDATE (ранбук ADR 0002).
     ids = ", ".join(str(item) for item in result["before_ids"]) or "—"
     print(f"  id прежнего набора: {ids}; откат после --apply: UPDATE scoring_criteria SET enabled = id IN "
           f"({ids}), updated_at = now() WHERE profile = '{result['profile']}';")
@@ -272,7 +272,7 @@ def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
     print(f"Оверрайды источников: изменено={stats['changed']}, без изменений={stats['unchanged']}, "
           f"не найдено={stats['not_found']}, неоднозначно={stats['ambiguous']}")
     # Промах по имени = «починил, а источник всё так же молчит». В bootstrap вызов обёрнут
-    # в `|| true`, поэтому кода возврата никто не увидит — единственный сигнал деплою это
+    # в `|| true`, поэтому кода возврата никто не увидит: единственный сигнал деплою это
     # напечатанное ИМЯ, а не счётчик, который легко прочитать как 0.
     problems = (
         [(name, "не найден в БД (проверьте sources.name)") for name in stats["missing_names"]]
@@ -341,13 +341,13 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
     if getattr(args, "scripts_only", False):
-        # Только алфавит буквы и пробел на стыке — безопасно по всему корпусу. Полный
+        # Только алфавит буквы и пробел на стыке: безопасно по всему корпусу. Полный
         # словарь по старым карточкам без ревью не гоняем: его замены ломали падеж.
         from oiltech_digest.processing import mixed_script
 
         report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
         if args.json:
-            # Полный список: по нему откатывают (ревью 27.09), --show — только для экрана.
+            # Полный список: по нему откатывают (ревью 27.09), --show: только для экрана.
             print(json.dumps(report, ensure_ascii=False, default=str))
             return
         suffix = " [dry-run]" if args.dry_run else ""
@@ -565,7 +565,7 @@ def cmd_enqueue_process(args: argparse.Namespace) -> None:
     """Поставить AI-обработку в очередь, НЕ выполняя её локально.
 
     route_ai_processing() решает куда: при AI_EXECUTION_REGION=external и включённом
-    внешнем контуре — в очередь external-ai (её разбирает зарубежный worker), иначе —
+    внешнем контуре, в очередь external-ai (её разбирает зарубежный worker), иначе:
     в локальную очередь ai. Пустой article_ids → worker берёт следующие N статей без
     суммы (выбор делается на стороне core в момент claim). Используется scheduler'ом,
     чтобы РФ-core не звал OpenAI напрямую.
@@ -635,7 +635,7 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
 
-    decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
+    decision = network_policy.route_ai_bulk()  # пересчёт: своя полоса (lanes.py)
     ids = repository.article_ids_needing_title_ru()
     if args.limit:
         ids = ids[: args.limit]
@@ -660,7 +660,7 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
 def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
     """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
 
-    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь — полуперевод
+    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь: полуперевод
     («управляego», «наshore»), который лечит только новый ответ модели. Ядро запишет только
     суть и перевод (прежние вердикт гейта, тег и балл статьи не трогаются). По умолчанию только выборка.
     """
@@ -687,8 +687,8 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
     """Правка русских заголовков, написанных до правки (решение владельца 03.11): принятые и отмеченные «в дайджест»
-    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию — сухой
-    прогон с N и ценой; задачи — только с --no-dry-run, после пересборки NL."""
+    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию: сухой
+    прогон с N и ценой; задачи: только с --no-dry-run, после пересборки NL."""
     from oiltech_digest.processing import rescore, title_edit
 
     selection = title_edit.selection()
@@ -721,13 +721,13 @@ def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
 
 
 def _utc_datetime(value: str) -> datetime:
-    """ISO-время из командной строки; без пояса — UTC (пояс сессии базы тут ни при чём)."""
+    """ISO-время из командной строки; без пояса: UTC (пояс сессии базы тут ни при чём)."""
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
-    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
+    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк): без сети."""
     from oiltech_digest.ingestion import telegram_titles
 
     if not args.dry_run and not args.before:
@@ -748,7 +748,7 @@ def cmd_reprints(args: argparse.Namespace) -> None:
     """Показать помеченные перепечатки или снять пометку.
 
     Снятие обязательно: решение принимает модель, и у человека должен быть способ
-    её отменить — иначе ошибка ИИ необратима так же, как удаление."""
+    её отменить: иначе ошибка ИИ необратима так же, как удаление."""
     from oiltech_digest.db import repository
 
     if args.unmark:
@@ -770,7 +770,7 @@ def cmd_reprints(args: argparse.Namespace) -> None:
 def cmd_find_reprints(args: argparse.Namespace) -> None:
     """Найти перепечатки: правило даёт кандидатов, модель решает (№21).
 
-    По умолчанию СУХОЙ прогон — ничего не помечается. Так задумано: схлопывание
+    По умолчанию СУХОЙ прогон: ничего не помечается. Так задумано: схлопывание
     убирает материал из ленты, а заказчик уже жаловался на исчезновение статей.
     Сначала он смотрит список, потом --apply."""
     from oiltech_digest.db import repository
@@ -783,7 +783,7 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         raise SystemExit("--max-overlap задаётся долей от 0 до 1 и не меньше --min-overlap")
     if args.days < 1 or args.limit < 1 or args.max_days_apart < 0:
         raise SystemExit("--days и --limit должны быть положительными, --max-days-apart неотрицательным")
-    # Для планировщика: срок — от прошлого прогона с записью в базе, а не от счётчика
+    # Для планировщика: срок: от прошлого прогона с записью в базе, а не от счётчика
     # циклов, который обнуляется при каждом перезапуске (19.09: 16,5 ч без прогона).
     min_interval = getattr(args, "min_interval_hours", 0) or 0
     if args.apply and min_interval > 0 and repository.has_recent_background_job(
@@ -809,10 +809,10 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
 
     # ЛЮБОЙ прогон с моделью идёт через контур, а не только --apply: сухой прогон
     # тоже зовёт OpenAI, и с РФ-адреса он ловит 403 по географии. Именно на этом
-    # первый прогон 17.09 дал 12 ошибок из 12 — а сухой прогон здесь умолчание,
+    # первый прогон 17.09 дал 12 ошибок из 12: а сухой прогон здесь умолчание,
     # то есть сломан был основной путь.
     if not args.local:
-        # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии —
+        # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии:
         # первый прогон 17.09 дал 12 ошибок из 12. Поэтому запись идёт через тот же
         # внешний контур, что и остальные ИИ-стадии, а не прямым вызовом.
         from oiltech_digest import network_policy
@@ -828,7 +828,7 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         )
         mode = "СУХОЙ ПРОГОН (ничего не помечается)" if not args.apply else "С ЗАПИСЬЮ пометок"
         print(f"find-reprints: задача {job['id']} в очереди {job['queue_name']}, пар={len(pairs)}, режим: {mode}")
-        print(f"Смотреть результат: cli jobs-show {job['id']} или таблица article_reprints")
+        print(f"Смотреть результат: задача {job['id']} на экране «Фоновые задачи» (GET /api/jobs/{job['id']}) или таблица article_reprints")
         return
 
     client = make_client(offline=args.offline)
@@ -863,7 +863,7 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
 
     Перерасчёт ставится только статьям открытых месяцев окна ленты: у статьи закрытого месяца новая суть
     переписала бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
-    такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
+    такой статьи меняется (выпуск его не показывает); пропущенные: в отчёте."""
     from oiltech_digest import feed_window
     from oiltech_digest.db import repository
     from oiltech_digest.ingestion import body_repair
@@ -988,7 +988,7 @@ def cmd_repair_article_dates(args: argparse.Namespace) -> None:
 
 
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:
-    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
+    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер: в query
     (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
     По умолчанию сухой прогон: сколько ключей пересчитается и сколько статей вернётся."""
     from oiltech_digest.ingestion import url_key_repair
@@ -1011,7 +1011,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     """Дозаполнить тело статей-обрывков у источников зарубежного контура.
 
     Локальная дозагрузка их не берёт намеренно: с РФ-адреса эти сайты отдают 403, а
-    попытка там одна и навсегда. Замер 17.09 — у Oil & Gas Journal и Offshore Magazine
+    попытка там одна и навсегда. Замер 17.09: у Oil & Gas Journal и Offshore Magazine
     25 статей из 25 короче 600 знаков, средняя длина 183; у McKinsey 76 из 78.
 
     Ставится пакетами: воркер качает страницы, ядро записывает тела, пропуская
@@ -1031,7 +1031,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     ids = [int(r["id"]) for r in rows]
     # Маршрут спрашиваем как у ФЕТЧ-задачи, а не у ИИ: это скачивание страниц.
     # Раньше здесь стоял route_ai_processing и хардкод очереди, из-за чего при
-    # неexternal-решении задача уезжала в 'default' с execution_region='external' —
+    # неexternal-решении задача уезжала в 'default' с execution_region='external':
     # несогласованная пара, которую никто бы не разобрал.
     probe = {"parse_strategy": "request", "network_region": "external", "network_profile": "direct"}
     decision = network_policy.route_source_task(probe, task_kind="refetch")
@@ -1052,7 +1052,7 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
 def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
     """Поставить в очередь фетч источников network_region='external' через зарубежный воркер.
 
-    Эти источники недоступны с РФ-сервера (WAF/таймаут/гео-блок) — их рендер/фетч идёт
+    Эти источники недоступны с РФ-сервера (WAF/таймаут/гео-блок): их рендер/фетч идёт
     из NL. Действует ТОЛЬКО при EXTERNAL_WORKERS_ENABLED=1 и FETCH_EXTERNAL_ENABLED=1,
     иначе no-op (источники парсятся локально как обычно). Вызывается планировщиком
     каждый цикл; можно и руками для разового прогона."""
@@ -1088,38 +1088,6 @@ def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
     print(f"enqueue-external-scrape: external-источников={len(sources)}, задач={enq} ({detail})")
 
 
-def cmd_enqueue_source_discovery(args: argparse.Namespace) -> None:
-    """Поставить в очередь автоматический цикл поиска кандидатов источников."""
-    from oiltech_digest.db import repository
-
-    topics = [item.strip() for item in (args.topic or []) if item.strip()]
-    seed_urls = [item.strip() for item in (args.seed_url or []) if item.strip()]
-    payload = {
-        "topics": topics,
-        "seed_urls": seed_urls,
-        "topic_limit": int(args.topic_limit),
-        "limit": int(args.limit),
-        "offline": bool(args.offline),
-        "fetch_inspection": bool(args.fetch_inspection),
-        "test_parse": bool(getattr(args, "test_parse", True)),
-        "auto_evaluate": bool(args.evaluate),
-        "article_limit": int(args.article_limit),
-    }
-    job = repository.create_background_job(
-        "discover_source_candidates",
-        payload,
-        queue_name="default",
-        execution_region="ru",
-        capability="source-discovery",
-        max_attempts=1,
-    )
-    topic_label = str(len(topics)) if topics else f"auto:{args.topic_limit}"
-    print(
-        f"enqueue-source-discovery: job id={job['id']} "
-        f"topics={topic_label} limit={args.limit} evaluate={args.evaluate}"
-    )
-
-
 def cmd_set_source_region(args: argparse.Namespace) -> None:
     """Проставить network_region (auto|ru|external) источникам по списку id.
 
@@ -1139,10 +1107,10 @@ def cmd_set_source_region(args: argparse.Namespace) -> None:
 
 
 def cmd_source_dump_listing(args: argparse.Namespace) -> None:
-    """Выгрузить анкеры листинга источника — для подбора listing_selector у no_candidates.
+    """Выгрузить анкеры листинга источника: для подбора listing_selector у no_candidates.
 
     Уважает стратегию (playwright → рендер, иначе http_client.fetch с боевыми SSL-фоллбэками).
-    Печатает href + текст + контейнер (тег.class родителя) — этого достаточно, чтобы понять,
+    Печатает href + текст + контейнер (тег.class родителя): этого достаточно, чтобы понять,
     каким селектором цеплять ссылки на статьи."""
 
     from oiltech_digest.db import repository
@@ -1160,7 +1128,7 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
         from oiltech_digest.ingestion import playwright_parser
         if not playwright_parser.is_available():
             raise SystemExit("playwright недоступен в этом контейнере")
-        # больший settle — JS-SPA успевают дорисовать листинг
+        # больший settle: JS-SPA успевают дорисовать листинг
         content = playwright_parser.fetch_rendered(listing_url, settle_ms=8000)
     else:
         content = http_client.fetch(listing_url)
@@ -1171,7 +1139,7 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
     doc = normalize.parse_html(content)
     try:
         doc.make_links_absolute(listing_url)
-    except Exception:  # noqa: BLE001 — относительные ссылки тоже информативны
+    except Exception:  # noqa: BLE001: относительные ссылки тоже информативны
         pass
     anchors = doc.xpath("//a[@href]")
     print(f"всего <a> с href: {len(anchors)}; показываю до {args.limit} с непустым текстом:")
@@ -1256,7 +1224,7 @@ def cmd_source_health(args: argparse.Namespace) -> None:
     # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
     if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
         raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
-    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09 — 3 дня).
+    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09: 3 дня).
     stale_days = config.SOURCE_STALE_DAYS if args.stale_days is None else args.stale_days
     rows = repository.source_health_report(stale_days=stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
@@ -1325,8 +1293,8 @@ def cmd_source_probe(args: argparse.Namespace) -> None:
 
     Отвечает на «почему источник молчит» там, где source-diagnose останавливается на
     «скачалось и прошло предфильтр»: ключ адреса занят той же или другой статьёй, то же
-    тело, адрес уже в базе. Рубежи — те же функции, что у вставки. Ничего не пишет: все
-    соединения процесса — только для чтения, запись отклонит сама база."""
+    тело, адрес уже в базе. Рубежи: те же функции, что у вставки. Ничего не пишет: все
+    соединения процесса: только для чтения, запись отклонит сама база."""
     from oiltech_digest.db import connection, repository
     from oiltech_digest.ingestion import source_probe
 
@@ -1372,7 +1340,7 @@ def _audit_row(source: dict, diag: dict) -> dict:
 def cmd_source_audit(args: argparse.Namespace) -> None:
     """Аудит ВСЕХ источников: какая ссылка установлена сейчас и почему не парсится.
 
-    По каждому источнику — read-only diagnose_source (живая проба + кандидаты). Запускать
+    По каждому источнику: read-only diagnose_source (живая проба + кандидаты). Запускать
     там, где правильное гео и установлен playwright (прод), иначе иностранные/JS-источники
     дадут ложные вердикты. Сетевые пробы идут параллельно."""
     from collections import Counter
@@ -1544,8 +1512,8 @@ def _print_issue_months(months: list[dict]) -> None:
 
 def cmd_migrate_shared_marks(args: argparse.Namespace) -> None:
     """Перенос личных отметок и черновиков учётки-основы в общие (#111). Пробный прогон по
-    умолчанию; --write — записать; --check — сверка после переноса только чтением. Расхождение
-    состава закрытого месяца — выход с кодом 1."""
+    умолчанию; --write: записать; --check: сверка после переноса только чтением. Расхождение
+    состава закрытого месяца: выход с кодом 1."""
     from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
 
     if args.check:
@@ -1674,14 +1642,14 @@ def cmd_external_queues_status(args: argparse.Namespace) -> None:
 def cmd_check_lanes(args: argparse.Namespace) -> None:
     """Сторож полос: застой очереди, очередь без живого воркера, истёкшие аренды.
 
-    Шаг планировщика каждый цикл. При тревоге — строки в лог и код 2: run_step пишет
+    Шаг планировщика каждый цикл. При тревоге, строки в лог и код 2: run_step пишет
     «FAIL check-lanes», цикл продолжается. 20.09 208 задач без потребителя было видно
-    только по последствиям через 8,5 ч; здесь — через ~15 мин."""
+    только по последствиям через 8,5 ч; здесь: через ~15 мин."""
     from oiltech_digest.db import repository
 
     logger = logging.getLogger(__name__)
     status = repository.external_queue_status()
-    # Версии потребителей — каждый цикл в лог: «пересобран ли NL» видно без раскопок.
+    # Версии потребителей, каждый цикл в лог: «пересобран ли NL» видно без раскопок.
     print(f"check-lanes: контракт ядра {status.get('contract')}")
     for line in _consumer_lines(status.get("consumers") or []):
         print(f"check-lanes: {line}")
@@ -1696,7 +1664,7 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
 
 
 def cmd_live_ai_leases(args: argparse.Namespace) -> None:
-    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, — scripts/deploy-core.sh
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, scripts/deploy-core.sh
     тогда отказывается перезапускать ядро без --force."""
     from oiltech_digest.db import repository
 
@@ -1743,7 +1711,7 @@ def _fetch_consumer_versions() -> dict:
 
 
 def cmd_worker_versions(args: argparse.Namespace) -> None:
-    """Версии контейнеров NL глазами ядра — на NL, где базы нет.
+    """Версии контейнеров NL глазами ядра: на NL, где базы нет.
 
     --self: этот контейнер обязан уже отметиться в ядре нужной сборкой и контрактом ядра
     (код 1, если нет). Так скрипт выката NL убеждается, что перезапущенный воркер жив и
@@ -1766,7 +1734,7 @@ def cmd_worker_versions(args: argparse.Namespace) -> None:
     else:
         if args.expect_build and row.get("build") != args.expect_build:
             problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
-        if row.get("mismatch"):  # правило одно — lanes.consumer_mismatch на ядре
+        if row.get("mismatch"):  # правило одно: lanes.consumer_mismatch на ядре
             problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
     for problem in problems:
         print(f"worker-versions: НЕ ГОТОВО — {problem}")
@@ -1834,169 +1802,6 @@ def cmd_bench_readiness(args: argparse.Namespace) -> None:
         print(format_benchmark_report(report))
 
 
-def cmd_source_candidate_add(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    candidate_id = repository.upsert_source_candidate({
-        "url": args.url,
-        "name": args.name,
-        "candidate_type": args.type,
-        "topic": args.topic,
-        "discovered_by": "manual",
-        "discovery_reason": args.reason,
-        "confidence": args.confidence,
-        "status": args.status,
-        "expected_tags_json": args.expected_tag or [],
-        "review_comment": args.comment,
-    })
-    print(f"source-candidate-add: id={candidate_id} url={args.url}")
-    # Решение оператора (одобрен/отклонён/отложен) повторное добавление не сбрасывает — скажем об этом.
-    current = (repository.get_source_candidate(candidate_id) or {}).get("status")
-    if args.status and current and current != args.status:
-        print(f"  статус остался «{current}» — решение оператора; сменить: PATCH кандидата в интерфейсе")
-
-
-def cmd_source_candidates(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    rows = repository.list_source_candidates(
-        status=args.status,
-        topic=args.topic,
-        limit=args.limit,
-    )
-    if args.json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
-        return
-    for row in rows:
-        print(
-            f"#{row['id']} [{row['status']}] {row.get('name') or row['normalized_domain']} "
-            f"url={row['url']} topic={row.get('topic') or '-'} "
-            f"tested={row['tested_articles']} relevant={row['relevant_articles']} "
-            f"avg_score={row.get('avg_score') or '-'} action={row.get('recommended_action') or '-'}"
-        )
-
-
-def cmd_source_candidate_triage(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    rows = repository.source_candidate_triage_report(limit=args.limit)
-    if args.json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
-        return
-    if not rows:
-        print("source-candidate-triage: очередь решений пустая")
-        return
-    print(f"source-candidate-triage: rows={len(rows)}")
-    for row in rows:
-        print(
-            f"{row.get('triage_priority', 0):>5.1f}  #{row['id']}  "
-            f"{row.get('recommended_action') or '-':<12}  {row.get('status'):<18}  "
-            f"rel={row.get('relevant_articles', 0)}/{row.get('tested_articles', 0)} "
-            f"score={row.get('avg_score') or '-'}  {row.get('topic') or 'без темы'}  "
-            f"{row.get('normalized_domain') or row.get('url')}"
-        )
-
-
-def cmd_source_candidate_test(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.agent import test_source_candidate
-
-    result = test_source_candidate(
-        args.candidate_id,
-        article_limit=args.article_limit,
-        offline=not args.ai_recommendation,
-        dry_run=args.dry_run,
-    )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-
-    metrics = result["metrics"]
-    mode = "dry-run" if result["dry_run"] else "saved"
-    print(f"source-candidate-test: id={result['candidate_id']} {mode}")
-    print(f"url={result['url']}")
-    print(
-        "metrics: "
-        f"tested={metrics['tested_articles']} "
-        f"relevant={metrics['relevant_articles']} "
-        f"avg_score={metrics.get('avg_score') or '-'} "
-        f"noise={metrics['noise_count']} "
-        f"duplicates={metrics['duplicate_count']}"
-    )
-    print(f"recommendation: action={result['recommended_action']} next_status={result['next_status']}")
-    print(f"comment: {result['review_comment']}")
-
-
-def cmd_source_candidate_evaluate(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
-
-    result = evaluate_source_candidate(
-        args.candidate_id,
-        article_limit=args.article_limit,
-        offline=args.offline,
-        collect=args.collect,
-        process=args.process,
-    )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-
-    metrics = result["metrics"]
-    print(f"source-candidate-evaluate: id={result['candidate_id']} task_id={result['task_id']}")
-    print(f"url={result['url']}")
-    print(
-        "sandbox: "
-        f"collected={result['collected']['inserted_or_updated']} "
-        f"processed={result['processed']['processed']} "
-        f"relevant={result['processed']['relevant']} "
-        f"rejected={result['processed']['rejected']} "
-        f"errors={result['processed']['errors'] + result['collected']['errors']}"
-    )
-    print(
-        "metrics: "
-        f"tested={metrics['tested_articles']} "
-        f"relevant={metrics['relevant_articles']} "
-        f"avg_score={metrics.get('avg_score') or '-'} "
-        f"noise={metrics['noise_count']} "
-        f"duplicates={metrics['duplicate_count']}"
-    )
-    print(f"recommendation: action={result['recommended_action']} next_status={result['next_status']}")
-    print(f"comment: {result['review_comment']}")
-
-
-def cmd_source_candidate_approve(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    source_id = repository.approve_source_candidate(
-        args.candidate_id,
-        name=args.name,
-        source_type=args.source_type,
-        parse_strategy=args.parse_strategy,
-        enabled=args.enabled,
-        category=args.category,
-        priority=args.priority,
-        network_region=args.network_region,
-    )
-    repository.record_agent_action(
-        None,
-        "approve_source_candidate",
-        input_payload={
-            "candidate_id": args.candidate_id,
-            "name": args.name,
-            "source_type": args.source_type,
-            "parse_strategy": args.parse_strategy,
-            "enabled": args.enabled,
-            "category": args.category,
-            "priority": args.priority,
-            "network_region": args.network_region,
-        },
-        output_payload={"source_id": source_id},
-    )
-    print(
-        f"source-candidate-approve: candidate_id={args.candidate_id} "
-        f"source_id={source_id} enabled={args.enabled}"
-    )
-
-
 def cmd_seed_signal_topics(args: argparse.Namespace) -> None:
     from oiltech_digest.signal_discovery import seed_default_radar_topics
 
@@ -2009,7 +1814,7 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     try:
-        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        # Модель поиска GPT и прочие его настройки (#138): решение ядра, едут в задаче.
         research = signal_discovery.research_settings(offline=args.offline, days=args.days)
     except signal_discovery.SearchSetupError as exc:
         raise SystemExit(f"enqueue-signal-discovery: {exc}") from exc
@@ -2053,8 +1858,8 @@ def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
-    """Шаг планировщика «заполнить карточки» (#96): новые сигналы без карточки — в задачи агента
-    «Карточка сигнала» по полосе ежедневной обработки. За флагом SIGNAL_CARD_ENABLED. С --ids —
+    """Шаг планировщика «заполнить карточки» (#96): новые сигналы без карточки: в задачи агента
+    «Карточка сигнала» по полосе ежедневной обработки. За флагом SIGNAL_CARD_ENABLED. С --ids:
     пересчёт названных сигналов по полосе пересчётов (без флага: это решение оператора)."""
     from oiltech_digest import signal_card
 
@@ -2077,7 +1882,7 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
 def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
     """Шаг планировщика «Отбор» (#130, #131): новые статьи, находки поиска и материалы коллег, которые решает агент
     «Отбор», ставит в его задачи по полосе ежедневной обработки. С --ids (статьи) и
-    --signal-ids (находки и материалы) — названные публикации «Отбора» по полосе пересчётов: повтор после разбора
+    --signal-ids (находки и материалы), названные публикации «Отбора» по полосе пересчётов: повтор после разбора
     сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
     from oiltech_digest import otbor
     from oiltech_digest.db import otbor_store
@@ -2113,7 +1918,7 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
 
 def cmd_otbor_materials(args: argparse.Namespace) -> None:
     """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
-    один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
+    один раз. По умолчанию сухой прогон, сколько материалов и оценка цены «Отбора», ничего не пишет; --apply:
     сигналы материалов и задачи «Отбора» по полосе пересчётов; с --silent итог авторам
     бот не сообщает (решение владельца 04.11 для присланных до включения)."""
     from oiltech_digest import material_signals, otbor
@@ -2165,7 +1970,7 @@ def cmd_otbor_shadow(args: argparse.Namespace) -> None:
 
 def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
     """Отчёт по проверке «Отбора» на реальных данных (#134), только чтение: разделы отказа, категории, технологии из
-    сбора на радар, гейт против «Отбора» с примерами, повод публикации. --json — всё как есть."""
+    сбора на радар, гейт против «Отбора» с примерами, повод публикации. --json: всё как есть."""
     from oiltech_digest import otbor_shadow
 
     report = otbor_shadow.report(date.fromisoformat(args.since), examples=args.examples)
@@ -2198,7 +2003,7 @@ def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
 
 def cmd_otbor_switch(args: argparse.Namespace) -> None:
     """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных в сигналы, принятые идут дальше по
-    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json — то же с
+    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json: то же с
     номерами статей (поимённый список для дампа и согласования). --apply только при включённой «Карточке», когда задачи
     проверки дошли и у всех статей окна, решённых гейтом, есть решение проверки."""
     from oiltech_digest import otbor, otbor_shadow
@@ -2256,7 +2061,7 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
-    """Шаг планировщика «баллы» — второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
+    """Шаг планировщика «баллы», второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
     баллами, которые «пересчитываются» после «не тот блок», ставит в задачи по полосе ежедневной обработки. Модель:
     SIGNAL_SCORES_MODEL. С --ids: названные сигналы по полосе пересчётов."""
     from oiltech_digest import signal_scores
@@ -2278,7 +2083,7 @@ def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
-    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. --since
+    «Отбора»: только принятое им): по полосе пересчётов, сначала текущее окно ленты, радар и материалы. --since
     ставит одну границу всей истории. По умолчанию сухой прогон: число сигналов и цена."""
     from oiltech_digest import signal_card, signal_card_history
 
@@ -2444,8 +2249,8 @@ def cmd_radar_recall(args: argparse.Namespace) -> None:
 
 
 def cmd_radar_search_trial(args: argparse.Namespace) -> None:
-    """Пробный прогон широкого поиска (#138): сухой прогон по умолчанию — темы, вызовы и цена, ничего не пишет; --run —
-    один прогон, находки пройдут «Отбор», в витрины не попадёт ничего; --report N — отчёт по задаче N."""
+    """Пробный прогон широкого поиска (#138): сухой прогон по умолчанию, темы, вызовы и цена, ничего не пишет; --run:
+    один прогон, находки пройдут «Отбор», в витрины не попадёт ничего; --report N: отчёт по задаче N."""
     from oiltech_digest import config, signal_reference, signal_search_trial
 
     try:
@@ -2523,7 +2328,7 @@ def _print_search_trial_report(result: dict) -> None:
 
 
 def _iso_date(value: str) -> str:
-    """День ГГГГ-ММ-ДД из командной строки: опечатка — ошибка разбора, а не трассировка базы."""
+    """День ГГГГ-ММ-ДД из командной строки: опечатка: ошибка разбора, а не трассировка базы."""
     try:
         return date.fromisoformat(value).isoformat()
     except ValueError as exc:
@@ -2605,8 +2410,8 @@ def cmd_signal_card_exam(args: argparse.Namespace) -> None:
 
 
 def cmd_signal_card_exam_judge(args: argparse.Namespace) -> None:
-    """Значения судьи радара у радарных строк манифеста (#98) — JSON в stdout: экзамен идёт там, где есть
-    модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Значения судьи радара у радарных строк манифеста (#98), JSON в stdout: экзамен идёт там, где есть
+    модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import signal_card_exam
 
     try:
@@ -2645,7 +2450,7 @@ def cmd_otbor_expert_pack(args: argparse.Namespace) -> None:
 
 
 def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
-    """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения — код выхода не 0."""
+    """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения: код выхода не 0."""
     from oiltech_digest import otbor_markup
     from oiltech_digest.otbor_pack_format import PackError
 
@@ -2717,8 +2522,8 @@ def cmd_otbor_exam(args: argparse.Namespace) -> None:
 
 
 def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
-    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133) —
-    JSON в stdout: экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133):
+    JSON в stdout: экзамен идёт там, где есть модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import otbor_exam
 
     try:
@@ -2787,8 +2592,8 @@ def _print_scores_plan(plan: dict) -> None:
 
 
 def cmd_card_scores_exam_control(args: argparse.Namespace) -> None:
-    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета» — JSON в stdout:
-    экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета», JSON в stdout:
+    экзамен идёт там, где есть модель, а база: на ядре. Манифест: путь или «-» (stdin)."""
     from oiltech_digest import card_scores_exam_control
 
     try:
@@ -2822,7 +2627,7 @@ def cmd_archive_signals(args: argparse.Namespace) -> None:
 
 
 def cmd_sync_feed_signals(args: argparse.Namespace) -> None:
-    """Сигналы ленты для принятых статей по дате сбора (#95) — без ИИ, повторный запуск
+    """Сигналы ленты для принятых статей по дате сбора (#95): без ИИ, повторный запуск
     дублей не создаёт. По умолчанию сухой прогон: те же числа, запись откатывается."""
     from oiltech_digest.db import feed_signals
 
@@ -2926,267 +2731,12 @@ def cmd_source_quality(args: argparse.Namespace) -> None:
         )
 
 
-def cmd_agent_query_memory(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    status = None if args.status == "all" else args.status
-    rows = repository.query_memory_report(status=status, limit=args.limit)
-    if args.json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
-        return
-    if not rows:
-        print("agent-query-memory: записей нет")
-        return
-    print(f"agent-query-memory: status={args.status} rows={len(rows)}")
-    for row in rows:
-        label = "пустой" if row.get("empty_result") else "рабочий"
-        print(
-            f"{row.get('score', 0):>5.1f}  {row.get('status'):<6}  {label:<7}  "
-            f"{row.get('found_candidates', 0)} канд.  {row.get('relevance_rate', 0):.0%} релев.  "
-            f"{row.get('topic') or 'без темы'} :: {row.get('query')}"
-        )
-
-
-def cmd_agent_readiness(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.readiness import source_discovery_readiness
-
-    report = source_discovery_readiness()
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
-        return
-    print(f"agent-readiness: status={report['status']} ok={report['ok']}")
-    for name, check in report["checks"].items():
-        print(f"  {name}: ok={check['ok']}")
-    if report["issues"]:
-        print("Проблемы:")
-        for issue in report["issues"]:
-            print(f"  - [{issue['severity']}] {issue['code']}: {issue['message']}")
-    if report["recommendations"]:
-        print("Что сделать:")
-        for item in report["recommendations"]:
-            print(f"  - {item}")
-
-
-def cmd_discover_sources(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources
-
-    result = discover_sources(DiscoveryConfig(
-        topic=args.topic,
-        limit=args.limit,
-        seed_urls=tuple(args.seed_url or []),
-        offline=args.offline,
-        dry_run=args.dry_run,
-        fetch_inspection=args.fetch_inspection,
-        test_parse=args.test_parse,
-    ))
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-
-    mode = "dry-run" if result["dry_run"] else f"task_id={result.get('task_id')}"
-    print(f"discover-sources: topic={result['topic']} {mode}")
-    print("\nПоисковые запросы:")
-    for query in result["queries"]:
-        print(f"  - {query}")
-    print("\nПоиск:")
-    search = result["search"]
-    reason = f" reason={search['reason']}" if search.get("reason") else ""
-    print(
-        f"  status={search.get('status')} provider={search.get('provider') or '-'} "
-        f"results={len(search.get('results') or [])}{reason}"
-    )
-    if result["topic_gaps"]:
-        print("\nТемы с дефицитом:")
-        for gap in result["topic_gaps"][:5]:
-            print(f"  - {gap['topic']}: signals={gap['signals']}/{gap['target_signals']} gap={gap['gap']}")
-    if result["candidates"]:
-        print("\nКандидаты:")
-        for item in result["candidates"]:
-            print(
-                f"  - {item.get('id', 'dry')} {item['url']} "
-                f"type={item.get('candidate_type')} action={item.get('recommended_action')} "
-                f"tested={item.get('tested_articles', 0)} relevant={item.get('relevant_articles', 0)} "
-                f"comment={item.get('review_comment')}"
-            )
-    else:
-        print("\nКандидатов пока нет. Для MVP передайте --seed-url или подключите поисковый провайдер.")
-
-
-def cmd_agent_plan(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan, enqueue_plan_actions
-
-    from oiltech_digest.db import repository
-
-    run_id = None
-    if args.enqueue:
-        run_id = repository.create_agent_run(
-            "source_discovery_cycle",
-            trigger="cli",
-            payload={
-                "days": args.days,
-                "target_per_topic": args.target_per_topic,
-                "topic_limit": args.topic_limit,
-                "candidate_limit": args.candidate_limit,
-                "max_actions": args.max_actions,
-                "offline": args.offline,
-                "evaluate": args.evaluate,
-            },
-        )
-    plan = build_plan(PlannerConfig(
-        days=args.days,
-        target_per_topic=args.target_per_topic,
-        topic_limit=args.topic_limit,
-        candidate_limit=args.candidate_limit,
-        max_actions=args.max_actions,
-        persist_memory=not args.no_memory,
-        run_id=run_id,
-    ))
-    queued = {"queued": 0, "jobs": []}
-    if args.enqueue:
-        queued = enqueue_plan_actions(plan, offline=args.offline, evaluate=args.evaluate, run_id=run_id)
-        repository.finish_agent_run(run_id, status="ok", result={**plan, "run_id": run_id, "queued": queued})
-    if args.json:
-        print(json.dumps({**plan, "run_id": run_id, "queued": queued}, ensure_ascii=False, indent=2, default=str))
-        return
-
-    print(
-        "agent-plan: "
-        f"run_id={run_id or '-'} actions={len(plan['actions'])} memory_updates={len(plan['memory_updates'])} "
-        f"queued={queued['queued']}"
-    )
-    for index, action in enumerate(plan["actions"], start=1):
-        label = action["action_type"]
-        target = action.get("topic") or action.get("source_name") or action.get("url") or action.get("candidate_id")
-        print(f"{index}. [{action['priority']}] {label}: {target}")
-        print(f"   reason: {action['reason']}")
-    for job in queued["jobs"]:
-        print(f"queued job={job['job_id']} topic={job['topic']} priority={job['priority']}")
-
-
-def cmd_enqueue_agent_plan(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    payload = {
-        "days": int(args.days),
-        "target_per_topic": int(args.target_per_topic),
-        "topic_limit": int(args.topic_limit),
-        "candidate_limit": int(args.candidate_limit),
-        "max_actions": int(args.max_actions),
-        "persist_memory": not args.no_memory,
-        "offline": bool(args.offline),
-        "evaluate": bool(args.evaluate),
-    }
-    job = repository.create_background_job(
-        "source_discovery_plan",
-        payload,
-        queue_name="default",
-        execution_region="ru",
-        capability="source-discovery",
-        max_attempts=1,
-    )
-    print(
-        f"enqueue-agent-plan: job id={job['id']} "
-        f"topics={args.topic_limit} max_actions={args.max_actions}"
-    )
-
-
-def _agent_loop_payload(args: argparse.Namespace) -> dict:
-    return {
-        "goal": str(args.goal),
-        "days": int(args.days),
-        "target_per_topic": int(args.target_per_topic),
-        "topic_limit": int(args.topic_limit),
-        "candidate_limit": int(args.candidate_limit),
-        "max_actions": int(args.max_actions),
-        "max_iterations": int(args.max_iterations),
-        "offline": bool(args.offline),
-        "fetch_inspection": bool(args.fetch_inspection),
-        "test_parse": bool(getattr(args, "test_parse", True)),
-        "dry_run": bool(args.dry_run),
-        "auto_evaluate": bool(args.evaluate),
-        "article_limit": int(args.article_limit),
-        "persist_memory": not bool(args.no_memory),
-        "max_daily_loop_runs": int(args.max_daily_loop_runs),
-        "max_daily_candidates": int(args.max_daily_candidates),
-        "max_daily_evaluations": int(args.max_daily_evaluations),
-    }
-
-
-def cmd_agent_loop(args: argparse.Namespace) -> None:
-    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
-
-    payload = _agent_loop_payload(args)
-    result = run_agent_loop(AgentLoopConfig(**payload))
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-    print(
-        f"agent-loop: run_id={result['run_id']} iterations={len(result['iterations'])} "
-        f"candidates={result['total_candidates']} reason={result['terminal_reason']}"
-    )
-    for item in result["iterations"]:
-        print(
-            f"  iter={item['iteration']} actions={item['action_count']} "
-            f"auto={item['auto_action_count']} review={item['human_review_count']}"
-        )
-        for observation in item["observations"]:
-            print(
-                f"    - {observation['topic']}: candidates={observation['candidate_count']} "
-                f"strategy={observation.get('query_strategy') or '-'} search={observation['search_status']}"
-            )
-
-
-def cmd_enqueue_agent_loop(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import repository
-
-    if not bool(getattr(args, "allow_parallel", False)):
-        counts = repository.background_job_status_counts(kind_prefix="source_discovery_loop")
-        active_count = sum(int(counts.get(status) or 0) for status in ("queued", "running", "finalizing"))
-        if active_count:
-            print(f"enqueue-agent-loop: skipped active_jobs={active_count}")
-            return
-
-    payload = _agent_loop_payload(args)
-    job = repository.create_background_job(
-        "source_discovery_loop",
-        payload,
-        queue_name="default",
-        execution_region="ru",
-        capability="source-discovery",
-        max_attempts=1,
-    )
-    print(
-        f"enqueue-agent-loop: job id={job['id']} "
-        f"iterations={args.max_iterations} max_actions={args.max_actions}"
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PRESETS, SCORING_PROFILES
 
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (DEBUG; адреса запросов urllib3 не пишутся)")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    def add_agent_loop_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--goal", default="Найти новые полезные источники сигналов")
-        p.add_argument("--days", type=int, default=30, help="период анализа базы")
-        p.add_argument("--target-per-topic", type=int, default=10)
-        p.add_argument("--topic-limit", type=int, default=5)
-        p.add_argument("--candidate-limit", type=int, default=10)
-        p.add_argument("--max-actions", type=int, default=5)
-        p.add_argument("--max-iterations", type=int, default=3)
-        p.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
-        p.add_argument("--fetch-inspection", action="store_true")
-        p.add_argument("--test-parse", action=argparse.BooleanOptionalAction, default=True)
-        p.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
-        p.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True)
-        p.add_argument("--article-limit", type=int, default=5)
-        p.add_argument("--no-memory", action="store_true")
-        p.add_argument("--allow-parallel", action="store_true", help="разрешить несколько одновременных agent-loop задач")
-        p.add_argument("--max-daily-loop-runs", type=int, default=4, help="суточный лимит agent-loop запусков; 0 = без лимита")
-        p.add_argument("--max-daily-candidates", type=int, default=100, help="суточный лимит новых кандидатов; 0 = без лимита")
-        p.add_argument("--max-daily-evaluations", type=int, default=100, help="суточный лимит AI-оценок кандидатов; 0 = без лимита")
 
     sub.add_parser("init-db", help="создать схему БД").set_defaults(func=cmd_init_db)
     sub.add_parser("schema-check", help="проверить наличие обязательных таблиц").set_defaults(func=cmd_schema_check)
@@ -3366,59 +2916,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
     p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
 
-    p_enqueue_source_discovery = sub.add_parser(
-        "enqueue-source-discovery",
-        help="поставить автоматический поиск кандидатов источников в очередь",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--topic",
-        action="append",
-        default=None,
-        help="тема разведки; можно указать несколько раз",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--topic-limit",
-        type=int,
-        default=3,
-        help="сколько слабых тем взять автоматически, если --topic не задан",
-    )
-    p_enqueue_source_discovery.add_argument("--limit", type=int, default=10, help="кандидатов на тему")
-    p_enqueue_source_discovery.add_argument(
-        "--seed-url",
-        action="append",
-        default=None,
-        help="URL-кандидат для проверки; можно указать несколько раз",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--offline",
-        action="store_true",
-        help="не вызывать OpenAI для генерации поисковых запросов",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--fetch-inspection",
-        action="store_true",
-        help="проверять найденные/seed URL HTTP-запросом",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--test-parse",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="проверять, что из кандидата реально извлекаются статьи",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--evaluate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="сразу прогонять найденных кандидатов через песочницу",
-    )
-    p_enqueue_source_discovery.add_argument(
-        "--article-limit",
-        type=int,
-        default=5,
-        help="сколько материалов кандидата брать для песочницы",
-    )
-    p_enqueue_source_discovery.set_defaults(func=cmd_enqueue_source_discovery)
-
     p_repr_list = sub.add_parser("reprints", help="показать помеченные перепечатки или снять пометку")
     p_repr_list.add_argument("--limit", type=int, default=20)
     p_repr_list.add_argument("--unmark", type=int, default=None,
@@ -3517,73 +3014,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_sources.add_argument("--search", default=None)
     p_sources.add_argument("--limit", type=int, default=50)
     p_sources.set_defaults(func=cmd_sources)
-
-    p_source_candidate_add = sub.add_parser("source-candidate-add", help="добавить кандидата источника для разведки")
-    p_source_candidate_add.add_argument("url")
-    p_source_candidate_add.add_argument("--name", default=None)
-    p_source_candidate_add.add_argument("--type", default="unknown", help="newsroom/media/company/rss/blog/unknown")
-    p_source_candidate_add.add_argument("--topic", default=None)
-    p_source_candidate_add.add_argument("--reason", default=None)
-    p_source_candidate_add.add_argument("--confidence", type=float, default=None)
-    p_source_candidate_add.add_argument("--status", default="new")
-    p_source_candidate_add.add_argument("--expected-tag", action="append", default=None)
-    p_source_candidate_add.add_argument("--comment", default=None)
-    p_source_candidate_add.set_defaults(func=cmd_source_candidate_add)
-
-    p_source_candidates = sub.add_parser("source-candidates", help="список кандидатов источников")
-    p_source_candidates.add_argument("--status", default=None)
-    p_source_candidates.add_argument("--topic", default=None)
-    p_source_candidates.add_argument("--limit", type=int, default=50)
-    p_source_candidates.add_argument("--json", action="store_true")
-    p_source_candidates.set_defaults(func=cmd_source_candidates)
-
-    p_source_candidate_triage = sub.add_parser("source-candidate-triage", help="очередь решений по кандидатам источников")
-    p_source_candidate_triage.add_argument("--limit", type=int, default=20)
-    p_source_candidate_triage.add_argument("--json", action="store_true")
-    p_source_candidate_triage.set_defaults(func=cmd_source_candidate_triage)
-
-    p_source_candidate_test = sub.add_parser(
-        "source-candidate-test",
-        help="проверить кандидата источника пробным read-only парсингом",
-    )
-    p_source_candidate_test.add_argument("candidate_id", type=int)
-    p_source_candidate_test.add_argument("--article-limit", type=int, default=5)
-    p_source_candidate_test.add_argument("--ai-recommendation", action="store_true",
-                                         help="попросить OpenAI уточнить рекомендацию; по умолчанию не вызывается")
-    p_source_candidate_test.add_argument("--dry-run", action="store_true",
-                                         help="не обновлять кандидата в БД")
-    p_source_candidate_test.add_argument("--json", action="store_true")
-    p_source_candidate_test.set_defaults(func=cmd_source_candidate_test)
-
-    p_source_candidate_evaluate = sub.add_parser(
-        "source-candidate-evaluate",
-        help="собрать тестовые материалы кандидата в песочницу и прогнать AI pipeline",
-    )
-    p_source_candidate_evaluate.add_argument("candidate_id", type=int)
-    p_source_candidate_evaluate.add_argument("--article-limit", type=int, default=5)
-    p_source_candidate_evaluate.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
-                                             help="offline AI по умолчанию; --no-offline вызовет OpenAI")
-    p_source_candidate_evaluate.add_argument("--collect", action=argparse.BooleanOptionalAction, default=True,
-                                             help="собирать материалы кандидата в песочницу")
-    p_source_candidate_evaluate.add_argument("--process", action=argparse.BooleanOptionalAction, default=True,
-                                             help="прогонять материалы песочницы через pipeline")
-    p_source_candidate_evaluate.add_argument("--json", action="store_true")
-    p_source_candidate_evaluate.set_defaults(func=cmd_source_candidate_evaluate)
-
-    p_source_candidate_approve = sub.add_parser(
-        "source-candidate-approve",
-        help="одобрить кандидата и создать/обновить настоящий источник",
-    )
-    p_source_candidate_approve.add_argument("candidate_id", type=int)
-    p_source_candidate_approve.add_argument("--name", default=None)
-    p_source_candidate_approve.add_argument("--source-type", default="Discovered")
-    p_source_candidate_approve.add_argument("--parse-strategy", choices=["rss", "request", "playwright"], default=None)
-    p_source_candidate_approve.add_argument("--enabled", action=argparse.BooleanOptionalAction, default=False,
-                                            help="по умолчанию источник создается выключенным")
-    p_source_candidate_approve.add_argument("--category", default=None)
-    p_source_candidate_approve.add_argument("--priority", type=float, default=1.0)
-    p_source_candidate_approve.add_argument("--network-region", choices=["auto", "ru", "external"], default="auto")
-    p_source_candidate_approve.set_defaults(func=cmd_source_candidate_approve)
 
     sub.add_parser("seed-signal-topics", help="создать дефолтные темы радара сигналов").set_defaults(func=cmd_seed_signal_topics)
 
@@ -4045,69 +3475,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_quality.add_argument("--json", action="store_true")
     p_source_quality.set_defaults(func=cmd_source_quality)
 
-    p_agent_query_memory = sub.add_parser("agent-query-memory", help="показать память поисковых формулировок агента")
-    p_agent_query_memory.add_argument("--status", choices=["active", "muted", "all"], default="active")
-    p_agent_query_memory.add_argument("--limit", type=int, default=20)
-    p_agent_query_memory.add_argument("--json", action="store_true")
-    p_agent_query_memory.set_defaults(func=cmd_agent_query_memory)
-
-    p_agent_readiness = sub.add_parser("agent-readiness", help="проверить готовность агента разведки источников")
-    p_agent_readiness.add_argument("--json", action="store_true")
-    p_agent_readiness.set_defaults(func=cmd_agent_readiness)
-
-    p_discover_sources = sub.add_parser("discover-sources", help="MVP агента разведки источников по теме")
-    p_discover_sources.add_argument("--topic", required=True, help="тема разведки, например 'роботизация бурения'")
-    p_discover_sources.add_argument("--limit", type=int, default=20)
-    p_discover_sources.add_argument("--seed-url", action="append", default=None,
-                                    help="URL кандидата для проверки; можно указать несколько раз")
-    p_discover_sources.add_argument("--offline", action="store_true",
-                                    help="не вызывать OpenAI, сгенерировать детерминированные запросы")
-    p_discover_sources.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
-                                    help="не писать кандидатов/действия в БД (по умолчанию включено)")
-    p_discover_sources.add_argument("--fetch-inspection", action="store_true",
-                                    help="попробовать HTTP-проверку seed-url")
-    p_discover_sources.add_argument("--test-parse", action="store_true",
-                                    help="read-only пробный парсинг кандидатов без записи в articles")
-    p_discover_sources.add_argument("--json", action="store_true")
-    p_discover_sources.set_defaults(func=cmd_discover_sources)
-
-    p_agent_plan = sub.add_parser("agent-plan", help="построить план действий агента разведки источников")
-    p_agent_plan.add_argument("--days", type=int, default=30, help="период анализа базы")
-    p_agent_plan.add_argument("--target-per-topic", type=int, default=10, help="целевое число релевантных сигналов на тему")
-    p_agent_plan.add_argument("--topic-limit", type=int, default=5, help="сколько тем рассмотреть")
-    p_agent_plan.add_argument("--candidate-limit", type=int, default=10, help="кандидатов на тему в discovery-задаче")
-    p_agent_plan.add_argument("--max-actions", type=int, default=5, help="максимум действий в плане")
-    p_agent_plan.add_argument("--no-memory", action="store_true", help="не сохранять обновления памяти агента")
-    p_agent_plan.add_argument("--enqueue", action="store_true", help="поставить discover-задачи из плана в очередь")
-    p_agent_plan.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
-                              help="offline-режим для discovery-задач")
-    p_agent_plan.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True,
-                              help="оценивать найденных кандидатов")
-    p_agent_plan.add_argument("--json", action="store_true")
-    p_agent_plan.set_defaults(func=cmd_agent_plan)
-
-    p_enqueue_agent_plan = sub.add_parser("enqueue-agent-plan", help="поставить планирование агента в очередь")
-    p_enqueue_agent_plan.add_argument("--days", type=int, default=30, help="период анализа базы")
-    p_enqueue_agent_plan.add_argument("--target-per-topic", type=int, default=10, help="целевое число релевантных сигналов на тему")
-    p_enqueue_agent_plan.add_argument("--topic-limit", type=int, default=5, help="сколько тем рассмотреть")
-    p_enqueue_agent_plan.add_argument("--candidate-limit", type=int, default=10, help="кандидатов на тему в discovery-задаче")
-    p_enqueue_agent_plan.add_argument("--max-actions", type=int, default=5, help="максимум действий в плане")
-    p_enqueue_agent_plan.add_argument("--no-memory", action="store_true", help="не сохранять обновления памяти агента")
-    p_enqueue_agent_plan.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
-                                      help="offline-режим для discovery-задач")
-    p_enqueue_agent_plan.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True,
-                                      help="оценивать найденных кандидатов")
-    p_enqueue_agent_plan.set_defaults(func=cmd_enqueue_agent_plan)
-
-    p_agent_loop = sub.add_parser("agent-loop", help="запустить итеративный agent loop разведки источников")
-    add_agent_loop_args(p_agent_loop)
-    p_agent_loop.add_argument("--json", action="store_true")
-    p_agent_loop.set_defaults(func=cmd_agent_loop)
-
-    p_enqueue_agent_loop = sub.add_parser("enqueue-agent-loop", help="поставить agent loop разведки источников в очередь")
-    add_agent_loop_args(p_enqueue_agent_loop)
-    p_enqueue_agent_loop.set_defaults(func=cmd_enqueue_agent_loop)
-
     p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled/archived")
     p_source_health.add_argument(
         "--stale-days", type=int, default=None, help="порог stale, сут.; по умолчанию config.SOURCE_STALE_DAYS",
@@ -4162,7 +3529,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
     p_digest.add_argument("--html-output", default=None, help="дополнительно собрать email-ready HTML")
-    # Умолчания — как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
+    # Умолчания, как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
     # собирает тот же выпуск, что экран (#111).
     p_digest.add_argument("--limit", type=int, default=500)
     p_digest.add_argument("--min-score", type=float, default=0)
@@ -4298,31 +3665,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_pp.add_argument("--offline", action="store_true")
     p_pp.set_defaults(func=cmd_parse_process)
 
-    # Признак команды запуска агента источников: имя подкоманды в `args.command` ненадёжно (у scheduler-lock свой
-    # аргумент command перекрывает его списком), поэтому подкоманды агента помечаются отдельным полем.
-    for name in SOURCE_AGENT_COMMANDS:
-        sub.choices[name].set_defaults(source_agent_command=name)
-
     return parser
 
 
-# Команды запуска агента источников: пока он выключен в коде (config.SOURCE_AGENT_DISABLED), отказывают. Чтение
-# истории (source-candidates, agent-readiness, agent-query-memory) работает.
-SOURCE_AGENT_COMMANDS = frozenset({
-    "discover-sources", "enqueue-source-discovery", "agent-plan", "enqueue-agent-plan", "agent-loop",
-    "enqueue-agent-loop", "source-candidate-test", "source-candidate-evaluate", "source-candidate-approve",
-})
-
-
 def main(argv: list[str] | None = None) -> None:
-    from oiltech_digest import config
-
     parser = build_parser()
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
-    agent_command = getattr(args, "source_agent_command", None)
-    if agent_command and config.SOURCE_AGENT_DISABLED:
-        raise SystemExit(f"{agent_command}: {config.SOURCE_AGENT_DISABLED_MESSAGE}")
     args.func(args)
 
 

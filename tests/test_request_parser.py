@@ -248,7 +248,7 @@ def test_parse_source_not_frozen_when_listing_hash_unchanged(monkeypatch):
     monkeypatch.setattr(request_parser.repository, "touch_last_parsed", lambda source_id: None)
     monkeypatch.setattr(request_parser.repository, "update_source_request_state", lambda source_id, **kwargs: None)
 
-    # last_listing_hash намеренно совпадает с текущим листингом — старый код
+    # last_listing_hash намеренно совпадает с текущим листингом: старый код
     # коротил бы на 0; новый обязан добавить незнакомую статью.
     source = {
         "id": 9,
@@ -277,10 +277,10 @@ SLASH_HOME_HTML = """
 
 
 def test_extract_candidate_links_keeps_trailing_slash():
-    """Финальный слэш в адресе статьи сохраняется — иначе сайт отдаёт 404.
+    """Финальный слэш в адресе статьи сохраняется: иначе сайт отдаёт 404.
 
     Баг (найден на проде 20.07): путь резался через parts.path.rstrip('/'), и парсер шёл
-    за статьёй по адресу БЕЗ слэша. Сургутнефтегаз на такой адрес отвечает 404 —
+    за статьёй по адресу БЕЗ слэша. Сургутнефтегаз на такой адрес отвечает 404:
     листинг читался, кандидаты извлекались, а статей добавлялось 0 (источник выглядел
     «замолчавшим»). Срез слэша нужен был только чтобы отсеять главную, поэтому он
     остаётся в ПРОВЕРКЕ, но не в самом URL.
@@ -317,12 +317,12 @@ def test_listing_selector_isolates_the_listing_from_a_sidebar_feed():
     """При заданном listing_selector кандидаты берутся ТОЛЬКО из него.
 
     Форма страницы взята с прода (#61, РБК 24.08): у федеральных СМИ на странице раздела
-    живут ДВА блока ссылок — сама выдача (`div.search-item__wrap`) и сквозной сайдбар общей
+    живут ДВА блока ссылок: сама выдача (`div.search-item__wrap`) и сквозной сайдбар общей
     ленты (`div.js-news-feed-list`). Без селектора кандидаты собираются из обоих, и сайдбар
     выигрывает по очкам: замер на проде дал 8 кандидатов из сайдбара и ноль из выдачи, то
     есть источник выглядел бы починенным, а тащил бы прежний мусор.
 
-    Здесь фиксируется механизм, а не вёрстка РБК: селектор задан — сайдбара в кандидатах нет.
+    Здесь фиксируется механизм, а не вёрстка РБК: селектор задан: сайдбара в кандидатах нет.
     """
     source = {"listing_selector": ".search-item__wrap"}
     candidates = request_parser.extract_candidate_links(
@@ -335,7 +335,7 @@ def test_listing_selector_isolates_the_listing_from_a_sidebar_feed():
     assert "https://www.rbc.ru/business/27/04/2026/69ef5b0c" in urls
     assert "https://www.rbc.ru/quote/04/08/2026/6a71d91d" in urls
 
-    # Без селектора сайдбар попадает в кандидаты — то самое поведение, от которого спасаемся.
+    # Без селектора сайдбар попадает в кандидаты: то самое поведение, от которого спасаемся.
     without_selector = request_parser.extract_candidate_links(
         {}, "https://www.rbc.ru/tags/?tag=нефть", TWO_BLOCK_LISTING, limit=12
     )
@@ -366,7 +366,7 @@ JPT_LISTING_HTML = b"""
 def test_parse_datetime_reads_date_embedded_in_a_by_line():
     """Дата в карточке издания приходит вместе с автором и названием журнала.
 
-    Строгий разбор на такой строке падает, и источник получает published_at=None —
+    Строгий разбор на такой строке падает, и источник получает published_at=None:
     именно так JPT годами шёл с пустым last_seen_published_at."""
     parsed = request_parser._parse_datetime(
         "August 25, 2026 • JPT Staff • Journal of Petroleum Technology"
@@ -408,7 +408,7 @@ def test_parse_article_page_does_not_glue_headline_with_lead():
     """#55 / жалобы заказчика 22.08 «текст сливается» и 08.09 «потеряли Ва».
 
     У Neftegaz.ru лид лежит ВНУТРИ того же <h1>, а XPath string() склеивает текст
-    соседних узлов вплотную — получалось «технологии ГРПНа Южно-Приобском».
+    соседних узлов вплотную: получалось «технологии ГРПНа Южно-Приобском».
     Здесь проверяем именно разделитель, а не весь заголовок целиком.
     """
     markup = (
@@ -449,7 +449,7 @@ NEWSROOM_HTML = b"""
 
 def test_candidates_go_newest_first_not_oldest_or_alphabetical():
     """Прежняя сортировка отдавала под лимит самые СТАРЫЕ из датированных, а при
-    равенстве — первые по алфавиту адреса. Закреплённое предупреждение (2025) и
+    равенстве: первые по алфавиту адреса. Закреплённое предупреждение (2025) и
     «alpha» по алфавиту вытесняли свежий контракт."""
     candidates = request_parser.extract_candidate_links("https://example.com/news", NEWSROOM_HTML, limit=2)
     assert [c.url.rsplit("/", 1)[-1] for c in candidates] == ["beta-fresh-contract", "alpha-middle-news"]
@@ -467,7 +467,7 @@ def test_selector_keeps_page_order_when_items_have_no_dates():
 
 
 def test_image_only_link_takes_title_from_its_card():
-    """Белоруснефть: ссылка обёрнута вокруг картинки, заголовок — в h3 карточки.
+    """Белоруснефть: ссылка обёрнута вокруг картинки, заголовок: в h3 карточки.
     Раньше такая ссылка отбрасывалась (текст < 18), и лента не давала ни одной статьи."""
     html = """<html><body><ul>
       <li class="tile"><a href="/ru/detail-pages/event/-2026.09.17-00001/"><img src="x.jpg" alt=""></a>
@@ -476,7 +476,7 @@ def test_image_only_link_takes_title_from_its_card():
         <h3>Белоруснефть подписала соглашение о сотрудничестве</h3><span>15 сентября 2026</span></li>
     </ul></body></html>""".encode()
     # Как источник и настроен: селектор под плитки ленты. Без него ссылки с «event» в
-    # адресе режет общий фильтр календарей мероприятий — селектор человека главнее.
+    # адресе режет общий фильтр календарей мероприятий: селектор человека главнее.
     source = {"article_link_selector": "li.tile a[href*='/detail-pages/']"}
     candidates = request_parser.extract_candidate_links(
         source, "https://www.belorusneft.by/ru/mediacenter/news/", html, limit=5)
@@ -488,7 +488,7 @@ def test_image_only_link_takes_title_from_its_card():
 
 
 def test_generic_link_text_is_not_used_as_title():
-    """Weatherford: «View Press Release» — ровно 18 знаков, прежний порог его пропускал
+    """Weatherford: «View Press Release»: ровно 18 знаков, прежний порог его пропускал
     заголовком статьи."""
     html = b"""<html><body><table><tr>
       <td>03 Sep 2026</td><td><h4>Weatherford Shareholders Approve Redomestication to Delaware</h4></td>
@@ -501,7 +501,7 @@ def test_generic_link_text_is_not_used_as_title():
 
 
 def test_subdomain_links_belong_to_the_source_but_lookalike_domains_do_not():
-    """ТПУ: новости на news.tpu.ru, источник заведён на tpu.ru — строгое равенство
+    """ТПУ: новости на news.tpu.ru, источник заведён на tpu.ru: строгое равенство
     хостов отсекало их все. Похожий домен mytpu.ru своим не становится."""
     html = b"""<html><body>
       <a href="https://news.tpu.ru/news/v-tpu-nashli-metod-ochistki-vody">V TPU nashli metod ochistki vody iz othodov</a>
@@ -512,7 +512,7 @@ def test_subdomain_links_belong_to_the_source_but_lookalike_domains_do_not():
 
 
 def test_list_dates_in_real_formats_are_recognised():
-    """Формы дат из обхода 18.09 — прежний разбор знал только 2026-09-17."""
+    """Формы дат из обхода 18.09: прежний разбор знал только 2026-09-17."""
     from oiltech_digest.ingestion import dates
 
     cases = {
@@ -540,9 +540,9 @@ def test_page_without_declared_charset_is_not_turned_into_mojibake():
 def test_html5_meta_charset_page_is_decoded_right():
     """Тот самый случай с прода: кодировка ОБЪЯВЛЕНА (<meta charset="utf-8">), но
     libxml2 при разборе байтов её не учитывает. Прошлый тест (страница вовсе без
-    объявления) этого не ловил — и правка ушла на прод с кракозябрами у Сколтеха."""
+    объявления) этого не ловил: и правка ушла на прод с кракозябрами у Сколтеха."""
     # Как рендерит Nuxt (Сколтех): <title> с кириллицей стоит ДО <meta charset>.
-    # Именно это ломает libxml2 — позиция объявления сама по себе ни при чём.
+    # Именно это ломает libxml2: позиция объявления сама по себе ни при чём.
     body = ('<!doctype html><html><head><title>Новости | Сколтех</title>'
             '<meta data-n-head="ssr" charset="utf-8"></head><body>'
             '<a href="/news/novye-dannye-o-gidratah">Новые данные о газопроницаемости гидратов</a>'
@@ -552,9 +552,9 @@ def test_html5_meta_charset_page_is_decoded_right():
 
 
 def test_learn_more_card_takes_title_from_first_meaningful_fragment():
-    """Mubadala: у свежих новостей ссылка «Learn more», заголовок — обычный блок, а
+    """Mubadala: у свежих новостей ссылка «Learn more», заголовок: обычный блок, а
     вся карточка с анонсом длиннее 300 знаков. Раньше такие ссылки отбрасывались,
-    и под лимит шли только старые (2022–2023) с текстовыми ссылками."""
+    и под лимит шли только старые (2022-2023) с текстовыми ссылками."""
     teaser = "Abu Dhabi, UAE – Mubadala Energy today published its report. " * 6
     html = f"""<html><body><div class="grid">
       <div class="card"><span>1 Sep</span><div class="h">Mubadala Energy Publishes 2025 Sustainability Report</div>
@@ -571,7 +571,7 @@ def test_learn_more_card_takes_title_from_first_meaningful_fragment():
 
 
 def test_fallback_text_does_not_swallow_scripts():
-    """ТеДо: основной текст не выделился, и запасной путь брал text_content() —
+    """ТеДо: основной текст не выделился, и запасной путь брал text_content():
     вместе со <script>. В базе 36 статей длиннее 50 тыс. знаков со скриптами."""
     body = ("<html><head><title>ТеДо: объём рынка</title>"
             "<script>window.__NEXT_DATA__ = {\"props\": \"" + "x" * 100000 + "\"}</script>"
@@ -585,7 +585,7 @@ def test_fallback_text_does_not_swallow_scripts():
 
 def test_relative_links_resolve_from_base_href_after_redirect():
     """CNOOC: лента /zxzx/gsxw/ уходит на /zxzx/gsxw/gsxw/, ссылки там относительные
-    («./202609/t….html»). Парсер склеивал их от адреса из настройки — все 404.
+    («./202609/t….html»). Парсер склеивал их от адреса из настройки: все 404.
     Браузер парсера вписывает <base> с конечным адресом, разбор его учитывает."""
     from oiltech_digest.ingestion.playwright_parser import with_base_href
 
@@ -607,7 +607,7 @@ def test_existing_base_href_is_not_overwritten():
 
 
 def test_card_title_beats_section_title_when_page_has_no_headline_markup():
-    # CNOOC: ни og:title, ни <h1>, а <title> — название раздела, одинаковое у всех новостей.
+    # CNOOC: ни og:title, ни <h1>, а <title>: название раздела, одинаковое у всех новостей.
     page = """<html><head><title>中国海洋石油集团有限公司 公司新闻</title></head><body>
       <div class="title">我国承建的乌干达首个商业油田开发项目核心工程完工</div>
       <div class="content"><p>""" + "正文内容。" * 60 + """</p></div></body></html>"""
@@ -627,9 +627,9 @@ def test_short_card_caption_does_not_replace_page_title():
 
 def test_article_redirected_to_the_home_page_is_not_an_article(monkeypatch):
     """Сколково Energy (25.09): energy.skolkovo.ru переадресует ЛЮБОЙ адрес (301) на главную
-    www.skolkovo.ru. Лента — это главная школы, ссылки с неё парсер собирает от старого
+    www.skolkovo.ru. Лента это главная школы, ссылки с неё парсер собирает от старого
     хоста, и каждая «статья» оказывается той же главной: общий заголовок сайта и описание
-    кампуса. Её резал предфильтр по слову «ресторан» — но это случайность: любое другое
+    кампуса. Её резал предфильтр по слову «ресторан», но это случайность: любое другое
     описание на главной легло бы в ленту новостью. Страница, куда сайт увёл со статьи на
     главную, статьёй не является."""
     home = ("<html><head><meta property='og:title' content='Школа управления СКОЛКОВО - "
@@ -646,7 +646,7 @@ def test_article_redirected_to_the_home_page_is_not_an_article(monkeypatch):
 
 
 def test_ordinary_redirects_keep_the_article(monkeypatch):
-    # Хвостовой слэш, https, www, красивый адрес вместо ?p= — обычные переадресации статьи.
+    # Хвостовой слэш, https, www, красивый адрес вместо ?p=: обычные переадресации статьи.
     monkeypatch.setattr(request_parser, "fetch", lambda url: ARTICLE_HTML)
     cases = [
         ("https://example.com/news/field-automation", "https://example.com/news/field-automation/"),
@@ -661,7 +661,7 @@ def test_ordinary_redirects_keep_the_article(monkeypatch):
 
 
 # --- Свежая карточка без даты первой на странице (Petronas, 25.09) --------------------
-# Лента релизов Petronas открывается «Featured News» — свежайшим релизом без даты, дальше
+# Лента релизов Petronas открывается «Featured News»: свежайшим релизом без даты, дальше
 # сетка датированных карточек. `ordered()` ставит недатированные после ВСЕХ датированных,
 # и при 12 датированных на странице свежайший релиз уходил за лимит 12 навсегда.
 # Общее правило не трогаем (смена порядка 18.09 дала массовый пересбор старья):
@@ -686,7 +686,7 @@ PETRONAS_SELECTOR = 'div[role="article"] a[href*="/media/media-releases/"]'
 
 
 def test_undated_featured_card_falls_behind_dated_ones_by_default():
-    # Для всех остальных источников порядок прежний — это и есть симптом Petronas.
+    # Для всех остальных источников порядок прежний: это и есть симптом Petronas.
     source = {"article_link_selector": PETRONAS_SELECTOR}
     candidates = request_parser.extract_candidate_links(
         source, "https://www.petronas.com/media/media-releases", PETRONAS_LIKE_HTML, limit=3)

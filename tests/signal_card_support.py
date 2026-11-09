@@ -1,7 +1,7 @@
 """Общее для тестов агента «Карточка сигнала» (#96): подставная модель, сигналы ленты и находки
-радара на изолированной базе, настоящий клиент воркера NL против тестового ядра. Сами тесты —
+радара на изолированной базе, настоящий клиент воркера NL против тестового ядра. Сами тесты:
 test_signal_card.py (шов 1: применение и API) и test_signal_card_worker.py (шов 2: воркер, контракт,
-полосы). Пакет эксперту во временной папке и подставная модель экзамена (#98) — для test_signal_card_exam.py и
+полосы). Пакет эксперту во временной папке и подставная модель экзамена (#98): для test_signal_card_exam.py и
 test_signal_card_exam_rescore.py (шов 4).
 """
 
@@ -25,7 +25,7 @@ CARD_KEYS = ("event_date", "participants", "event_type", "region", "event_countr
 
 
 class FakeModel:
-    """Подставная модель: ответ — заготовка по заголовку публикации; вызовы запоминает."""
+    """Подставная модель: ответ: заготовка по заголовку публикации; вызовы запоминает."""
 
     def __init__(self, answers):
         self.answers = answers
@@ -44,7 +44,7 @@ class FakeModel:
 
 def answer(**overrides):
     """Ответ основного вызова «Карточки» по схеме (#132: тема вместо связи с нефтесервисом; #137: страны события и
-    страна участника — пустая строка, если тест её не задал)."""
+    страна участника: пустая строка, если тест её не задал)."""
     found = {
         "event_date": "2026-09-24", "event_date_source": "из текста",
         "companies": [{"name": "SLB", "quote": "SLB подписала контракт"}], "event_countries": [],
@@ -68,7 +68,7 @@ def admin(isolated_db):
 
 @pytest.fixture()
 def contour(monkeypatch):
-    """Прод-маршрут: ИИ — на внешнем воркере, агент включён флагом, модель задана."""
+    """Прод-маршрут: ИИ: на внешнем воркере, агент включён флагом, модель задана."""
     monkeypatch.setattr(api.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(api.config, "AI_EXECUTION_REGION", "external")
     monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", True)
@@ -158,8 +158,8 @@ class _Core(TestClient):
 
 
 def radar_finding(key, title, text, *, publisher="Offshore Weekly", **judge):
-    """Находка поиска радара — как её пишет ядро после судьи (upsert_signal), со страницей издателя.
-    Статьи корпуса у неё нет — и типа издателя тоже."""
+    """Находка поиска радара: как её пишет ядро после судьи (upsert_signal), со страницей издателя.
+    Статьи корпуса у неё нет: и типа издателя тоже."""
     signal_id = repository.upsert_signal({"signal_key": key, "title": title, "title_ru": title, "theme": DRILLING,
                                           "maturity": "shortlist", "score": 70, "signal_category": "technology",
                                           **judge})
@@ -173,8 +173,8 @@ def radar_finding(key, title, text, *, publisher="Offshore Weekly", **judge):
 
 
 def worker(queue, *, contract_number=None):
-    """Воркер NL: настоящий клиент, ядро — тестовое приложение. contract_number — номер контракта
-    другой сборки; по умолчанию — текущей."""
+    """Воркер NL: настоящий клиент, ядро: тестовое приложение. contract_number: номер контракта
+    другой сборки; по умолчанию: текущей."""
     client = external_worker.ExternalWorkerClient(core_api_url="http://testserver", token="secret",
                                                   worker_id="nl-ai-1", queues=[queue], capabilities=["openai"])
     session = _Core(api.app)
@@ -227,7 +227,7 @@ MARKUP_NAME = "signal_card_markup_completed.xlsx"
 
 
 def label(**overrides):
-    """Разметка эксперта одной строки — колонки таблицы пакета (signal_card_pack.MARKUP_COLUMNS)."""
+    """Разметка эксперта одной строки: колонки таблицы пакета (signal_card_pack.MARKUP_COLUMNS)."""
     return {
         "Дата события": date(2026, 9, 24), "Источник даты события": "из текста", "Компании-участники": "SLB",
         "Тип события": "контракт", "Регион": "Ближний Восток", "Класс технологии": "неприменимо",
@@ -253,7 +253,7 @@ def row(number, stratum, *, title=None, text=TEXT, published="2026-09-25", publi
 
 
 def pack_rows(**by_stratum):
-    """50 строк набора; by_stratum — поправки разметки целой доли (её строки на экзамене — по долям)."""
+    """50 строк набора; by_stratum: поправки разметки целой доли (её строки на экзамене: по долям)."""
     rows, number = [], 0
     for stratum, count in STRATA.items():
         for _ in range(count):
@@ -282,7 +282,7 @@ def write_pack(folder, rows):
 
 
 class ExamModel:
-    """Подставная модель экзамена: ответ — по модели и заголовку публикации; вызовы запоминает."""
+    """Подставная модель экзамена: ответ: по модели и заголовку публикации; вызовы запоминает."""
 
     def __init__(self, answers):
         self.answers = answers

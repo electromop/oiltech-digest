@@ -1,5 +1,5 @@
 import type { ArchiveMonth } from "../../api/types";
-import { monthLabel } from "../articles/feedWindow";
+import { monthLabel } from "../shared/feedWindow";
 
 type Props = {
   months: ArchiveMonth[];
@@ -11,7 +11,7 @@ type Props = {
 };
 
 // Архив выпусков (решение владельца 23.10): итоговые выпуски прошлых месяцев. Месяц закрывается по окну отметок
-// (прошлый месяц открыт по 10-е включительно); закрытый выпуск только смотрят и выгружают — менять его нельзя.
+// (прошлый месяц открыт по 10-е включительно); закрытый выпуск только смотрят и выгружают: менять его нельзя.
 export function DigestArchive({ months, rolloverDay, busy, onOpen, onDownload }: Props) {
   const issues = months.filter((item) => item.digest > 0).sort((a, b) => (a.month < b.month ? 1 : -1));
   if (!issues.length) {

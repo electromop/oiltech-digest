@@ -336,15 +336,15 @@ class SignalDiscoveryConfig:
     # Записать прогон в signal_generation_runs: его читают правило «раз в N суток» и здоровье поиска. Имя прежнее: до
     # 08.11 к прогону писались ещё и обучающие примеры судьи.
     persist_training_examples: bool = True
-    # Поиск GPT (#138): модель, уровень рассуждения, потолок материалов на тему и период — решение ядра при постановке
+    # Поиск GPT (#138): модель, уровень рассуждения, потолок материалов на тему и период: решение ядра при постановке
     # (research_settings), едут в задаче: своих строк поиска NL не читает. Модель без умолчания и без отката.
-    # period_end — ГГГГ-ММ-ДД, пусто — сегодня; research_days — дней до него (пробный прогон берёт месяц целиком).
+    # period_end: ГГГГ-ММ-ДД, пусто: сегодня; research_days: дней до него (пробный прогон берёт месяц целиком).
     research_model: str = ""
     research_reasoning: str = ""
     research_limit: int = 0
     research_days: int = 0
     period_end: str = ""
-    # Пробный прогон широкого поиска (#138, signal_search_trial): находки ядро пишет отдельно от радара — метка пути
+    # Пробный прогон широкого поиска (#138, signal_search_trial): находки ядро пишет отдельно от радара: метка пути
     # пробного прогона и свой ключ, существующие сигналы прогон не меняет. Воркеру признак не нужен: ищет он так же.
     trial: bool = False
 
@@ -360,9 +360,9 @@ def seed_default_radar_topics() -> int:
 #   3. apply_discovery. Ядро пишет находки, технический отсев поиска и склейки «Дедупа».
 # Раньше всё шло одной функцией с базой внутри, и маршрут «через внешний воркер»
 # (ca23016) упирался в воркер без базы и без этого вида задач: с 13.09 радар не
-# отработал по расписанию ни разу — 134 запуска, все 403 с РФ-адреса.
+# отработал по расписанию ни разу: 134 запуска, все 403 с РФ-адреса.
 
-# Теги для прогона без базы. None — читать из repository, как на ядре.
+# Теги для прогона без базы. None: читать из repository, как на ядре.
 _TAGS_SNAPSHOT: ContextVar[list[dict[str, Any]] | None] = ContextVar("signal_discovery_tags", default=None)
 # Расход ИИ прогона по стадиям (поиск и «Дедуп»): копится на NL, едет ядру в итоге (run.ai_usage), ядро пишет в
 # ai_processing_runs, и экран «Статистика» видит радар отдельно от ленты.
@@ -403,7 +403,7 @@ def _topic_name(topic: dict[str, Any], config: SignalDiscoveryConfig) -> str:
     return str(topic.get("name") or config.topic or "").strip()
 
 
-# Ссылки статей сбора в снимке широкого поиска (#138) — собранные с начала периода поиска и ещё за столько дней до
+# Ссылки статей сбора в снимке широкого поиска (#138): собранные с начала периода поиска и ещё за столько дней до
 # него: материал периода парсер мог взять раньше его даты. Ссылку статьи старше этого ловит запись на ядре
 # (_store_otbor_finding сверяет все статьи сбора).
 COLLECTED_MARGIN_DAYS = 7
@@ -413,14 +413,14 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
     """Всё, что разведке нужно из базы, одним JSON-снимком.
 
     for_external=True добавляет теги и память ОС: у внешнего воркера базы нет, и без
-    снимка эти обогащения молча отваливались бы в except — тот же класс, что тематики
+    снимка эти обогащения молча отваливались бы в except: тот же класс, что тематики
     гейта 17.09 (фича, которая на проде пустая, а в тестах зелёная)."""
     topics = _selected_topics(config.topic)
     if not topics:
         topics = [{"name": config.topic or "HSE technology radar", "query_seeds_json": []}]
     try:
         known_urls = repository.list_reviewed_signal_urls()
-    except Exception:  # noqa: BLE001 - фильтр разобранного — улучшение, а не условие прогона
+    except Exception:  # noqa: BLE001 - фильтр разобранного: улучшение, а не условие прогона
         known_urls = []
     try:
         existing_signals = repository.list_signals_for_dedup()
@@ -428,7 +428,7 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         existing_signals = []
     start, end = _research_window(config)
     # Видимые сигналы ленты окна поиска (блок А5, 04.11): находка того же события садится в них, а не заводит вторую
-    # карточку. Окно — как у ссылок сбора: материал периода сбор мог взять раньше его даты.
+    # карточку. Окно, как у ссылок сбора: материал периода сбор мог взять раньше его даты.
     feed_since = start - timedelta(days=COLLECTED_MARGIN_DAYS)
     try:
         feed_signals = repository.list_feed_signals_for_dedup(since=feed_since)
@@ -442,7 +442,7 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         "existing_signals": existing_signals,
         "feed_signals": feed_signals,
         "dedup_max_pairs": app_config.SIGNAL_DEDUP_MAX_PAIRS,
-        # Широкий поиск (#138): ссылка, которая уже есть в статьях сбора, новой находкой не становится — воркер
+        # Широкий поиск (#138): ссылка, которая уже есть в статьях сбора, новой находкой не становится: воркер
         # отбрасывает её до докачки страницы; сайты, которые парсер собирает целиком, поиск получает как «уже есть».
         "collected_url_keys": repository.collected_url_keys_since(since=feed_since),
         "covered_sites": repository.covered_collection_sites(
@@ -482,7 +482,7 @@ def run_discovery(
 ) -> dict[str, Any]:
     """Средний слой: без базы. Возвращает находки поиска по каждой теме."""
     if not config.offline:
-        signal_dedup.configured_model()  # без модели дедупа — сбой до оплаченного поиска, а не после него
+        signal_dedup.configured_model()  # без модели дедупа: сбой до оплаченного поиска, а не после него
     beat = heartbeat or (lambda: None)
     usage_token = _USAGE.set({})
     try:
@@ -577,7 +577,7 @@ def _dedupe_run(
             "reviewed": bool(row.get("reviewed") or row.get("verdict")),
             "verdict": row.get("verdict"),
             "fresh": bool(row.get("fresh")),
-            # Не на экране (качество, архив); снимок старого ядра поля не знает — видна.
+            # Не на экране (качество, архив); снимок старого ядра поля не знает: видна.
             "hidden": bool(row.get("hidden")),
             "urls": row.get("evidence_urls") or [],
             "signal": row,
@@ -662,7 +662,7 @@ def apply_discovery(
     for topic in run.get("topics") or []:
         topic_name = str(topic.get("topic") or "")
         filtered_stored = 0
-        # Технический отсев пробного прогона (#138) в разделы отклонённого не пишется: в итоге задачи — счётчики.
+        # Технический отсев пробного прогона (#138) в разделы отклонённого не пишется: в итоге задачи: счётчики.
         if not config.dry_run and not config.trial and topic.get("filtered_findings"):
             filtered_stored = _store_filtered_findings(topic_name, topic["filtered_findings"])
         found = []
@@ -674,7 +674,7 @@ def apply_discovery(
             signal = candidate["signal"]
             _reconcile_with_owner(candidate, owners.get(str(signal.get("signal_key") or "")))
             if candidate.get("duplicate_of"):
-                # Главная карточка группы может стоять в другой теме дальше по списку —
+                # Главная карточка группы может стоять в другой теме дальше по списку:
                 # дубли пишем, когда все главные уже сохранены.
                 duplicates.append((topic_name, candidate))
                 topic_duplicates += 1
@@ -804,17 +804,17 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
     return signal_id
 
 
-# Ключ находки пробного прогона (#138) — свой: повтор того же события обычным прогоном радара заводит обычную находку,
+# Ключ находки пробного прогона (#138), свой: повтор того же события обычным прогоном радара заводит обычную находку,
 # а не уходит в невидимую находку пробного прогона.
 TRIAL_KEY_PREFIX = "trial:"
 
 
 def _store_trial_finding(candidate: dict[str, Any], *, run: int | None) -> int | None:
-    """Находка пробного прогона широкого поиска (#138): сигнал с меткой пути пробного прогона и своим ключом — его не
+    """Находка пробного прогона широкого поиска (#138): сигнал с меткой пути пробного прогона и своим ключом: его не
     видят витрины, разделы отклонённого, шаги конвейера и следующий прогон радара (снимок дедупа его не берёт).
     Существующие сигналы прогон не меняет: ссылка, которая уже есть у сигнала радара, ленты или материала, к находке
-    не переходит; все ссылки уже есть — находка найдена снова (found_again_id — у кого ссылка), без отметки. Ссылку
-    находки прошлого пробного прогона новая забирает себе, а ключ у находки свой у каждого прогона (run — задача
+    не переходит; все ссылки уже есть: находка найдена снова (found_again_id: у кого ссылка), без отметки. Ссылку
+    находки прошлого пробного прогона новая забирает себе, а ключ у находки свой у каждого прогона (run: задача
     прогона): каждый пробный прогон меряется целиком, и его решения «Отбора» не смешиваются с прошлыми."""
     signal = candidate["signal"]
     own, held = _trial_own_links(_drop_collected_links(candidate))
@@ -842,8 +842,8 @@ def _trial_own_links(cluster: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
 
 def _merge_trial_duplicate(candidate: dict[str, Any], stored_keys: dict[str, int],
                            found_again_keys: dict[str, int | None]) -> bool:
-    """Дубль в пробном прогоне (#138): его ссылки — в главную находку этого прогона; дубль сигнала платформы или
-    главной, которая сама оказалась сигналом платформы, — найден снова (found_again_id), сигнал прогон не трогает.
+    """Дубль в пробном прогоне (#138): его ссылки: в главную находку этого прогона; дубль сигнала платформы или
+    главной, которая сама оказалась сигналом платформы, найден снова (found_again_id), сигнал прогон не трогает.
     Главная не записана по другой причине (её ссылки собрал сбор, пока шёл прогон): False, и дубль со своей ссылкой
     пишется сам и идёт в «Отбор»."""
     signal = candidate["signal"]
@@ -864,9 +864,9 @@ def _merge_trial_duplicate(candidate: dict[str, Any], stored_keys: dict[str, int
 
 
 def _drop_collected_links(candidate: dict[str, Any]) -> list[dict[str, Any]]:
-    """Ссылки находки без тех, что уже есть в статьях сбора (#138): воркер отбросил известные ему по снимку, здесь —
-    собранные, пока шёл прогон, и старше окна снимка. Отброшенные — в candidate["already_collected"] для итога
-    задачи; все ссылки собраны — находки нет (candidate["collected_whole"])."""
+    """Ссылки находки без тех, что уже есть в статьях сбора (#138): воркер отбросил известные ему по снимку, здесь:
+    собранные, пока шёл прогон, и старше окна снимка. Отброшенные: в candidate["already_collected"] для итога
+    задачи; все ссылки собраны: находки нет (candidate["collected_whole"])."""
     signal = candidate["signal"]
     cluster = list(signal.get("evidence") or [])
     keys = {article_url_key(str(item.get("source_url") or "")): item for item in cluster if item.get("source_url")}
@@ -893,7 +893,7 @@ def _domain_of(url: str) -> str:
 
 
 def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
-    """Какие из ссылок держит другая карточка — на радаре или разобранная человеком.
+    """Какие из ссылок держит другая карточка: на радаре или разобранная человеком.
 
     Отсеянное такую ссылку не пишет: signal_evidence уникальна по адресу, и запись
     перезаписала бы заголовок и суть чужой ссылки, хотя сама ссылка осталась бы у хозяйки."""
@@ -904,7 +904,7 @@ def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
 def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) -> int:
     """Технический отсев поиска пишется карточками «Отсеяно» (разделы «Поиск → …»).
 
-    Ключ — по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
+    Ключ, по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
     найденное снова и прошедшее проверки получит свой ключ находки и пойдёт в «Отбор». Ссылку,
     которую забраковали судья или ревью пачки прежней цепочки, повторный отсев не трогает:
     этапы идут только вперёд."""
@@ -969,7 +969,7 @@ def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any
     """Карточка, которой уже принадлежат ВСЕ ссылки находки, или None.
 
     Своя карточка (тот же ключ) не в счёт: это обычное обновление. Если ссылки у
-    нескольких карточек — берём ту, у которой их больше."""
+    нескольких карточек: берём ту, у которой их больше."""
     urls = [str(item.get("source_url") or "") for item in cluster if item.get("source_url")]
     if not urls:
         return None
@@ -997,7 +997,7 @@ def _merge_duplicate(
     stored_keys: dict[str, int],
     found_again_keys: dict[str, int | None] | None = None,
 ) -> bool:
-    """Ссылки дубля — в главную карточку, новой карточки нет. False — главной не нашлось."""
+    """Ссылки дубля: в главную карточку, новой карточки нет. False: главной не нашлось."""
     signal = candidate["signal"]
     target = candidate.get("duplicate_of") or {}
     if config.dry_run:
@@ -1009,11 +1009,11 @@ def _merge_duplicate(
     if target_id is None:
         return False
     if target.get("signal_id") and not repository.signal_takes_findings(target_id):
-        # Сохранённая главная скрылась, пока шёл прогон (04.11): находка — своей карточкой, её решит «Отбор».
+        # Сохранённая главная скрылась, пока шёл прогон (04.11): находка: своей карточкой, её решит «Отбор».
         return False
     owner_id = candidate.get("key_owner_id")
     if owner_id and owner_id != target_id:
-        # Ключ дубля — у видимой карточки: это тот же материал, она тоже дубль главной.
+        # Ключ дубля, у видимой карточки: это тот же материал, она тоже дубль главной.
         repository.mark_signal_merged(int(owner_id), target_id, str(candidate.get("duplicate_reason") or ""))
     # Ссылка, которую сбор успел собрать, пока шёл прогон (#138), к главной находке не прибавляется.
     _drop_collected_links(candidate)
@@ -1036,7 +1036,7 @@ def _merge_duplicate(
 
 def discover_signals(config: SignalDiscoveryConfig) -> dict[str, Any]:
     """Прогон целиком на ядре (CLI, локальная очередь, тесты). Настройки поиска GPT, которых нет в конфиге разовой
-    команды, — настройки ядра (#138): прогон идёт там же, где они заданы."""
+    команды, настройки ядра (#138): прогон идёт там же, где они заданы."""
     config = replace(
         config,
         research_model=config.research_model or app_config.SIGNAL_RESEARCH_MODEL,
@@ -1070,7 +1070,7 @@ def discover_signals(config: SignalDiscoveryConfig) -> dict[str, Any]:
 
 
 def _payload_number(payload: dict[str, Any], key: str, default: Any, cast: Callable[[Any], Any]) -> Any:
-    """Нет значения — умолчание; явный 0 — это 0.
+    """Нет значения: умолчание; явный 0 это 0.
 
     `int(payload.get(key) or 20)` превращал 0 в 20, и явный ноль в задаче не значил ничего (21.09)."""
     value = payload.get(key)
@@ -1134,7 +1134,7 @@ def research_problem(model: str, reasoning: str) -> str | None:
 
 
 def _research_window(config: SignalDiscoveryConfig) -> tuple[date, date]:
-    """Период поиска GPT: research_days до period_end (по умолчанию — сегодня)."""
+    """Период поиска GPT: research_days до period_end (по умолчанию: сегодня)."""
     end = date.fromisoformat(config.period_end) if config.period_end else None
     return signal_research.research_period(_research_days(config), end)
 
@@ -1203,7 +1203,7 @@ def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool = 
             "signals": len(row.get("signals") or []),
             "duplicates": row.get("duplicates", 0),
             # Широкий поиск (#138): какие находки заведены этим прогоном, сколько найдено снова и какие ссылки уже были
-            # в сборе — для отчёта пробного прогона (radar-search-trial); номера и адреса, не тексты.
+            # в сборе: для отчёта пробного прогона (radar-search-trial); номера и адреса, не тексты.
             "signal_ids": [int(signal["id"]) for signal in row.get("signals") or []
                            if signal.get("id") and not signal.get("found_again")],
             "found_again_ids": [value for signal in row.get("signals") or [] if signal.get("found_again")
@@ -1282,7 +1282,7 @@ def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None
 
 
 def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> None:
-    """Записать прогон в signal_generation_runs — одинаково на пути на месте и через воркер.
+    """Записать прогон в signal_generation_runs: одинаково на пути на месте и через воркер.
 
     Поиск не ответил ни в одной теме: прогон failed с понятной причиной, находок нет ни у одной
     темы. Статус ЗАДАЧИ остаётся ok: его читает правило «ежедневный уже ставили в эти сутки»
@@ -1321,8 +1321,8 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
 def topics_from_tags(tags: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Темы радара = корневые тематики заказчика (13), без служебного приёмника.
 
-    Пункт 12 Виктора: сигналы раскладывать по его тегам. Прежние 21 тема (4 HSE +
-    17 направлений из сида) давали 25 из 38 сигналов с темой «HSE/…» — отсюда
+    Пункт 12 эксперта заказчика: сигналы раскладывать по его тегам. Прежние 21 тема (4 HSE +
+    17 направлений из сида) давали 25 из 38 сигналов с темой «HSE/…»: отсюда
     «меньше в основных, больше в технологических»."""
     topics = []
     for tag in tags:
@@ -1376,11 +1376,11 @@ def _research_days(config: SignalDiscoveryConfig) -> int:
 def _known_titles(snapshot: dict[str, Any], topic_name: str, *, since: date) -> list[str]:
     """Карточки темы, которые поиск может принести снова: радар видел их за период поиска.
 
-    Раньше здесь были только fresh — первое появление за 3 дня (окно дедупа). Разовые прогоны
+    Раньше здесь были только fresh: первое появление за 3 дня (окно дедупа). Разовые прогоны
     идут реже: 14.10 и 17.10 свежих на старте не было ни одной, список пуст во всех темах, и
-    15 и 20 находок оказались уже известными карточками. Порядок — по последней находке, свежие
+    15 и 20 находок оказались уже известными карточками. Порядок: по последней находке, свежие
     первыми: при пределе на тему (signal_feedback.RESEARCH_KNOWN_TITLES) старые уходят первыми.
-    Снимок ядра без last_seen_day — по дню первой находки; без обоих дней — как раньше, fresh."""
+    Снимок ядра без last_seen_day: по дню первой находки; без обоих дней: как раньше, fresh."""
     start = since.isoformat()
     known = []
     for row in snapshot.get("existing_signals") or []:
@@ -1443,8 +1443,8 @@ def _topic_web_evidence(
 
 def _split_collected(events: list[dict[str, Any]], collected: set[str] | frozenset[str],
                      ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Находки поиска, чья ссылка уже есть в статьях сбора (#138), — не новые материалы: (новые, уже собранные).
-    Ключ — тот же, что у статьи сбора (normalize.url_key): другое написание адреса — тот же материал."""
+    """Находки поиска, чья ссылка уже есть в статьях сбора (#138), не новые материалы: (новые, уже собранные).
+    Ключ: тот же, что у статьи сбора (normalize.url_key): другое написание адреса: тот же материал."""
     if not collected:
         return events, []
     fresh, already = [], []
@@ -1458,7 +1458,7 @@ def _split_collected(events: list[dict[str, Any]], collected: set[str] | frozens
 
 
 # Сколько ключей другой тематики должно найтись в карточке, чтобы тема ушла от запроса.
-# Одно совпадение — не повод: «бурение» мелькает в обзоре про дроны мимоходом.
+# Одно совпадение, не повод: «бурение» мелькает в обзоре про дроны мимоходом.
 THEME_SWITCH_MIN_HITS = 2
 
 
@@ -1468,13 +1468,13 @@ def _content_theme(
     search_topic: str,
     topic_names: list[str],
 ) -> tuple[str, dict[str, Any]]:
-    """Тема карточки из 13 тематик заказчика — по содержанию, а не по запросу.
+    """Тема карточки из 13 тематик заказчика: по содержанию, а не по запросу.
 
     Раньше тема была темой поиска: статья про ИИ и дроны, найденная запросом по
     бурению, получала «бурение» (замечание заказчика 22.09). Теперь считаем ключи
     каждой тематики (с подтегами) в заголовке, сути и тезисе карточки и в заголовках
     её статей. Тема поиска остаётся, если её никто не обгоняет хотя бы на
-    THEME_SWITCH_MIN_HITS совпадений; при равенстве — тоже она.
+    THEME_SWITCH_MIN_HITS совпадений; при равенстве: тоже она.
     """
     text = _norm_match_text(" ".join(
         [str(signal.get(field) or "") for field in ("title", "title_ru", "summary", "thesis")]
@@ -1491,7 +1491,7 @@ def _content_theme(
     elif hits.get(search_topic, 0):
         chosen, reason = search_topic, "search_topic_confirmed"
     else:
-        # Ключей не нашлось ни у одной тематики: оставляем тему поиска, но помечаем —
+        # Ключей не нашлось ни у одной тематики: оставляем тему поиска, но помечаем:
         # по таким карточкам видно, где словарь тематик не покрывает находки радара.
         chosen, reason = search_topic, "no_keywords"
     return chosen, {
@@ -1521,7 +1521,7 @@ def _select_topic_tags(topic_name: str, tags: list[dict[str, Any]]) -> list[dict
     if not topic_name or not tags:
         return []
     topic_norm = _norm_match_text(topic_name)
-    # Тема = тематика заказчика по имени — берём её и её подтеги, и только их. Иначе
+    # Тема = тематика заказчика по имени: берём её и её подтеги, и только их. Иначе
     # пересечение по общим словам («оборудование», «промышленных») притягивало соседние
     # тематики, и «Добыча…» искала заодно ключами «Бурения…».
     exact = [tag for tag in tags if _norm_match_text(str(tag.get("name") or "")) == topic_norm]
@@ -1684,7 +1684,7 @@ def _enrich_web_evidence_with_full_text(
             "title": title,
             "title_ru": _enforce_glossary(title, context, topic),
             # Строкой ISO, как все даты снимка: объект datetime ронял отправку итога
-            # воркера ядру (проверка 4712, 21.09) — тот же класс, что сбор 18.09.
+            # воркера ядру (проверка 4712, 21.09): тот же класс, что сбор 18.09.
             "published_at": _iso(fetched.get("published_at")) or item.get("published_at"),
             "evidence_type": _evidence_type(f"{title} {fact}"),
             "extracted_fact": fact,
@@ -1739,7 +1739,7 @@ def _cluster_evidence(evidence: list[dict[str, Any]]) -> list[list[dict[str, Any
 
 
 def _normalize_event_date(value: Any) -> str | None:
-    """ГГГГ-ММ-ДД или None. Дата из будущего (больше суток вперёд) — ошибка модели, не событие."""
+    """ГГГГ-ММ-ДД или None. Дата из будущего (больше суток вперёд): ошибка модели, не событие."""
     text = str(value or "").strip()[:10]
     try:
         parsed = datetime.strptime(text, "%Y-%m-%d").date()

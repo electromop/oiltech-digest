@@ -26,7 +26,7 @@ def _utc(*args: int) -> datetime:
 
 
 # ---------------------------------------------------------------------------
-#  Само правило — без базы
+#  Само правило: без базы
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -36,7 +36,7 @@ def _utc(*args: int) -> datetime:
         (_msk(2026, 10, 3, 12, 0), ["2026-09", "2026-10"]),
         (_msk(2026, 10, 4, 23, 59, 59), ["2026-09", "2026-10"]),
         (_msk(2026, 10, 5, 0, 0), ["2026-10"]),
-        # Тот же момент, пришедший в UTC: 04.10 21:00 UTC — это уже 05.10 00:00 по МСК.
+        # Тот же момент, пришедший в UTC: 04.10 21:00 UTC это уже 05.10 00:00 по МСК.
         (_utc(2026, 10, 4, 21, 0), ["2026-10"]),
         # Переход через год.
         (_msk(2027, 1, 2, 9, 0), ["2026-12", "2027-01"]),
@@ -62,7 +62,7 @@ def test_rollover_day_is_configurable(monkeypatch):
     ],
 )
 def test_owner_rule_0510_previous_month_is_open_through_the_10th(monkeypatch, now, months):
-    # Решение владельца 05.10: сентябрь доступен по 10 октября включительно, октябрь — по 10 ноября.
+    # Решение владельца 05.10: сентябрь доступен по 10 октября включительно, октябрь: по 10 ноября.
     assert config.FEED_ROLLOVER_DAY_DEFAULT == 11
     monkeypatch.setattr(config, "FEED_ROLLOVER_DAY", config.FEED_ROLLOVER_DAY_DEFAULT)
     assert feed_window.current(now=now).open_months == months
@@ -72,7 +72,7 @@ def test_past_month_is_read_only_and_open_month_is_not():
     on_23_09 = _msk(2026, 9, 23, 12, 0)
     assert feed_window.current("2026-08", now=on_23_09).read_only is True
     assert feed_window.current("2026-09", now=on_23_09).read_only is False
-    # Пока идёт зазор, прошлый месяц ещё не архив: выпуск за август собирают 1–4 сентября.
+    # Пока идёт зазор, прошлый месяц ещё не архив: выпуск за август собирают 1-4 сентября.
     assert feed_window.current("2026-08", now=_msk(2026, 9, 3, 12, 0)).read_only is False
 
 
@@ -108,8 +108,8 @@ def test_month_label_is_russian():
     ],
 )
 def test_month_closes_in_sql_exactly_when_the_window_closes_it(isolated_db, monkeypatch, rollover, month, closes):
-    """Момент закрытия месяца в SQL (по нему текст закрытого выпуска перестаёт меняться) — та же
-    граница, что у окна ленты: за миг до неё месяц открыт, в неё — уже архив."""
+    """Момент закрытия месяца в SQL (по нему текст закрытого выпуска перестаёт меняться): та же
+    граница, что у окна ленты: за миг до неё месяц открыт, в неё: уже архив."""
     monkeypatch.setattr(config, "FEED_ROLLOVER_DAY", rollover)
     with connection.get_connection() as conn:
         moment = conn.execute(f"SELECT {feed_window.month_close_sql('%s')}", (month,)).fetchone()[0]
@@ -119,7 +119,7 @@ def test_month_closes_in_sql_exactly_when_the_window_closes_it(isolated_db, monk
 
 
 # ---------------------------------------------------------------------------
-#  Лента, счётчики и архив через API — на настоящей базе
+#  Лента, счётчики и архив через API: на настоящей базе
 # ---------------------------------------------------------------------------
 
 def _freeze(monkeypatch, moment: datetime) -> None:
@@ -164,7 +164,7 @@ def _article(conn, source_id: int, slug: str, *, published: datetime | None,
 def feed(isolated_db):
     """Август, сентябрь и октябрь; по статье без даты публикации в августе и сентябре.
 
-    Даты — середина суток по UTC, чтобы разница UTC/МСК не решала за тест. Граница
+    Даты: середина суток по UTC, чтобы разница UTC/МСК не решала за тест. Граница
     суток проверяется отдельным тестом ниже.
     """
     with connection.get_connection() as conn:
@@ -177,7 +177,7 @@ def feed(isolated_db):
             "aug_nopub": _article(conn, source_id, "aug-nopub", published=None, collected=_utc(2026, 8, 25, 12)),
             "sep": _article(conn, source_id, "sep", published=_utc(2026, 9, 20, 12), collected=_utc(2026, 9, 20, 13)),
             "sep_nopub": _article(conn, source_id, "sep-nopub", published=None, collected=_utc(2026, 9, 15, 12)),
-            # Опубликована в августе, собрана в сентябре: месяц — по публикации.
+            # Опубликована в августе, собрана в сентябре: месяц: по публикации.
             "aug_late": _article(conn, source_id, "aug-late", published=_utc(2026, 8, 30, 12), collected=_utc(2026, 9, 2, 12)),
             "oct": _article(conn, source_id, "oct", published=_utc(2026, 10, 2, 12), collected=_utc(2026, 10, 2, 13)),
         }
@@ -201,9 +201,9 @@ def test_on_23_09_feed_shows_only_september(feed, monkeypatch):
     _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
     ids = feed["ids"]
     visible = _feed_ids(_as(feed["user"], "user"))
-    # «oct» относительно замороженных часов — в будущем. Сверху окно закрыто текущим
+    # «oct» относительно замороженных часов: в будущем. Сверху окно закрыто текущим
     # месяцем: будущих дат сбор не пропускает (замер 23.09), и правило «только текущий
-    # месяц» — буквальное.
+    # месяц»: буквальное.
     assert visible == {ids["sep"], ids["sep_nopub"]}
     assert ids["aug"] not in visible and ids["aug_late"] not in visible
 
@@ -264,7 +264,7 @@ def test_august_archive_is_viewable_but_statuses_cannot_change(feed, monkeypatch
 
 
 def test_previous_month_is_still_editable_during_the_gap(feed, monkeypatch):
-    """Ради зазора и сделано окно: 1–4 числа выпуск за прошлый месяц ещё собирается."""
+    """Ради зазора и сделано окно: 1-4 числа выпуск за прошлый месяц ещё собирается."""
     _freeze(monkeypatch, _msk(2026, 9, 3, 12, 0))
     client = _as(feed["user"], "user")
     assert client.patch(f"/api/articles/{feed['ids']['aug']}", json={"status": "digest"}).status_code == 200
@@ -306,7 +306,7 @@ def test_stats_count_only_the_window(feed, monkeypatch):
 
 
 def test_counters_and_archive_count_equal_what_the_feed_shows(feed, monkeypatch):
-    """23.09 на проде: над лентой из 1 934 статей висело 2 205 «сигналов» — счётчики
+    """23.09 на проде: над лентой из 1 934 статей висело 2 205 «сигналов»: счётчики
     считали перепечатки (144) и статьи архивных источников (131), но не видели свежих
     статей без карточки (4). Теперь у ленты, счётчиков и архива одна выборка."""
     ids = feed["ids"]
@@ -349,7 +349,7 @@ def test_counters_and_archive_count_equal_what_the_feed_shows(feed, monkeypatch)
 
 
 def test_issue_skips_article_pending_deletion(feed):
-    """Лента прячет помеченное на удаление, а сборщик выпуска до 23.09 его брал (на проде —
+    """Лента прячет помеченное на удаление, а сборщик выпуска до 23.09 его брал (на проде:
     одна такая статья среди 22 выбранных «в дайджест»)."""
     aug = feed["ids"]["aug"]
     with connection.get_connection() as conn:
@@ -374,7 +374,7 @@ def test_issue_with_article_without_publication_date_does_not_crash(feed):
     """С 12.09 (3b2a880) сборщик выпуска сортировал общий список через
     `datetime.min.replace(tzinfo=timezone.utc)`, а `timezone` в repository.py не был
     импортирован: статья без даты публикации в выборе «в дайджест» роняла превью и выгрузку
-    NameError'ом. Режим «Все месяцы» — первый, что открывает конструктор; найдено сверкой
+    NameError'ом. Режим «Все месяцы»: первый, что открывает конструктор; найдено сверкой
     на проде 23.09 (в сентябре 815 статей без даты публикации)."""
     ids = feed["ids"]
     with connection.get_connection() as conn:
@@ -389,14 +389,14 @@ def test_issue_with_article_without_publication_date_does_not_crash(feed):
 
 def test_saved_issue_export_follows_the_same_visibility(feed):
     """Решение владельца 23.09 «одно правило везде»: выгрузка сохранённого выпуска = то, что
-    видно в конструкторе. До этого черновик выгружался мимо правил ленты — статья, которую
-    перепроверка потом пометила на удаление, оставалась в PDF (на проде: август — 1 из 7,
-    июль — 2 из 5). То же с перепечаткой."""
+    видно в конструкторе. До этого черновик выгружался мимо правил ленты: статья, которую
+    перепроверка потом пометила на удаление, оставалась в PDF (на проде: август: 1 из 7,
+    июль: 2 из 5). То же с перепечаткой."""
     from oiltech_digest.processing import digest as digest_module
 
     ids = feed["ids"]
     with connection.get_connection() as conn:
-        # Черновик — из отмеченного «в дайджест»: снятую отметку выгрузка не берёт (29.09).
+        # Черновик, из отмеченного «в дайджест»: снятую отметку выгрузка не берёт (29.09).
         for key in ("aug", "aug_late", "aug_nopub"):
             conn.execute(
                 "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
@@ -441,7 +441,7 @@ def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch
 
 
 def test_archive_counts_radar_cards_chosen_for_the_issue(feed, monkeypatch):
-    """Ревью 24.10: в выпуске идут и карточки радара. Август — статья и карточка, июль — одна карточка: июль тоже
+    """Ревью 24.10: в выпуске идут и карточки радара. Август, статья и карточка, июль, одна карточка: июль тоже
     в архиве, иначе его выпуск не открыть (выбора месяца на экране нет). Дубль и сигнал ленты не считаются."""
     def radar_card(key, first_seen, **fields):
         signal_id = repository.upsert_signal({"signal_key": key, "title": key, "title_ru": key, "theme": "Бурение",
@@ -474,7 +474,7 @@ def test_archive_counts_radar_cards_chosen_for_the_issue(feed, monkeypatch):
 
 
 def test_archived_issue_can_be_viewed_but_its_draft_cannot_change(feed, monkeypatch):
-    """Решение владельца 23.09: прошлый выпуск — просмотр и выгрузка, без правки черновика."""
+    """Решение владельца 23.09: прошлый выпуск: просмотр и выгрузка, без правки черновика."""
     with connection.get_connection() as conn:
         conn.execute(
             "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
@@ -505,7 +505,7 @@ def test_archived_issue_can_be_viewed_but_its_draft_cannot_change(feed, monkeypa
 
 def test_archived_article_cannot_enter_an_open_month_issue(feed, monkeypatch):
     """PUT принимает готовый список статей: без проверки «из архива в дайджест» проходило бы
-    запросом в обход ленты — в выпуск сентября вписали бы августовскую статью."""
+    запросом в обход ленты: в выпуск сентября вписали бы августовскую статью."""
     _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
     client = _as(feed["user"], "user")
     body = {"title": "Сентябрь", "status": "draft",
@@ -526,7 +526,7 @@ def test_issue_month_must_be_yyyy_mm(feed, monkeypatch):
 
 def test_publication_month_wins_over_collection_month_in_feed_and_issue(feed, monkeypatch):
     """«aug_late»: опубликована 30.08, собрана 02.09. Лента и сборщик выпуска обязаны
-    отнести её к одному месяцу — августу (COALESCE берёт дату публикации)."""
+    отнести её к одному месяцу: августу (COALESCE берёт дату публикации)."""
     with connection.get_connection() as conn:
         conn.execute(
             "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
@@ -555,7 +555,7 @@ def test_previous_issue_draft_is_still_saved_during_the_gap(feed, monkeypatch):
 
 
 def test_feed_month_matches_the_digest_month_at_the_day_boundary(feed, monkeypatch):
-    """31.08 22:30 UTC — это уже 01.09 по МСК. Сборщик выпуска считает такую статью
+    """31.08 22:30 UTC это уже 01.09 по МСК. Сборщик выпуска считает такую статью
     августовской (месяц в поясе сессии БД), значит и лента обязана: иначе статья видна
     в сентябрьской ленте, а отмеченная «в дайджест» уходит в августовский выпуск.
 

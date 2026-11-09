@@ -3,11 +3,11 @@
 Один вызов модели на сигнал, без инструментов и без выхода в сеть. Ядро собирает пакет при выдаче задачи: публикация,
 поля по договорённости (категория, отрасль, связь и применение, дата события и стадия зрелости из карточки, суть) и
 критерии профиля с линейками; воркер без базы зовёт модель и возвращает ответы как есть; ядро проверяет их кодом
-(score_values) и пишет: ответ воркера — недоверенный ввод. Модель ставит баллы от 0 до 100 по линейкам; «Свежесть»
+(score_values) и пишет: ответ воркера: недоверенный ввод. Модель ставит баллы от 0 до 100 по линейкам; «Свежесть»
 считает код, «Зрелость / доказательность» код держит в ступени стадии карточки, итог по весам экрана «Скоринг»,
-ступень и «Решение платформы» — тоже код (signal_scoring, repository.platform_decision_sql). Весов модель не видит:
-правка весов не должна менять её оценки (ADR 0002, п. 7). Профиль — по категории: бизнес оценивается набором
-business, технология — tech_radar; «другое» не оценивается. Модель — явная настройка SIGNAL_SCORES_MODEL, без отката
+ступень и «Решение платформы»: тоже код (signal_scoring, repository.platform_decision_sql). Весов модель не видит:
+правка весов не должна менять её оценки (ADR 0002, п. 7). Профиль, по категории: бизнес оценивается набором
+business, технология: tech_radar; «другое» не оценивается. Модель: явная настройка SIGNAL_SCORES_MODEL, без отката
 на модель ленты и основного вызова: едет в задаче и попадает в рецепт баллов.
 """
 
@@ -31,7 +31,7 @@ from oiltech_digest.signal_card import EXPERT_RULES
 from oiltech_digest.signal_card_pack import CATEGORY_RU, UNDEFINED, publication_day, publication_text
 
 KIND = signal_scores_store.KIND
-# Версия инструкции — в рецепте баллов: другая инструкция — другие баллы.
+# Версия инструкции, в рецепте баллов: другая инструкция: другие баллы.
 PROMPT_VERSION = "2026-10-25.1"
 # Шаг этапа в «Ходе решения» сигнала.
 STAGE = "«Карточка», баллы"
@@ -58,15 +58,15 @@ def scheduler_step() -> dict[str, Any]:
 
 
 def enqueue_named(signal_ids: list[int]) -> dict[str, Any]:
-    """Названные сигналы (повтор после сбоя модели) — по полосе пересчётов. Неоцениваемые (до «Отбора», отклонённые,
-    «другое», без карточки) — мимо (skipped)."""
+    """Названные сигналы (повтор после сбоя модели): по полосе пересчётов. Неоцениваемые (до «Отбора», отклонённые,
+    «другое», без карточки): мимо (skipped)."""
     scorable = signal_scores_store.scorable_ids(signal_ids)
     return {"signals": len(scorable), "skipped": [one for one in signal_ids if one not in scorable],
             "jobs": enqueue(scorable, trigger="manual", bulk=True)}
 
 
 def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
-    """Задачи этапа пачками по OTBOR_BATCH; bulk — названные сигналы, по полосе пересчётов."""
+    """Задачи этапа пачками по OTBOR_BATCH; bulk: названные сигналы, по полосе пересчётов."""
     from oiltech_digest import network_policy
 
     model = configured_model()
@@ -95,8 +95,8 @@ def configured_model() -> str:
 
 def wrong_block(signal_id: int, author: str | None) -> str | None:
     """«Не тот блок» (спека #128): категория сигнала после «Отбора» меняется сразу, баллы «пересчитываются», и
-    перезапускается только второй вызов — потоком дня, чтобы человек дождался. Новая категория; None — сигнал этот
-    этап не оценивает. Этап выключен — баллы пересчитает его шаг, когда его включат."""
+    перезапускается только второй вызов: потоком дня, чтобы человек дождался. Новая категория; None: сигнал этот
+    этап не оценивает. Этап выключен: баллы пересчитает его шаг, когда его включат."""
     step = {"stage": "Человек", "text": f"«Не тот блок» ({author or 'без имени'}): категория сменилась, баллы "
                                         "считаются по профилю новой категории"}
     changed = signal_scores_store.wrong_block(signal_id, log=[step])
@@ -104,7 +104,7 @@ def wrong_block(signal_id: int, author: str | None) -> str | None:
         return None
     category, card_done = changed
     if card_done:
-        # Карточки ещё нет — баллы поставит шаг дня, когда она будет: на входе второго вызова её поля.
+        # Карточки ещё нет, баллы поставит шаг дня, когда она будет: на входе второго вызова её поля.
         try:
             enqueue([int(signal_id)], trigger="wrong_block")
         except ScoresSetupError:
@@ -117,7 +117,7 @@ def wrong_block(signal_id: int, author: str | None) -> str | None:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации с полями по договорённости и критерии профилей с
-    линейками (без весов). Сумма весов профиля не 100 — задачу не выдаём: итог исказился бы (ADR 0002, п. 3).
+    линейками (без весов). Сумма весов профиля не 100, задачу не выдаём: итог исказился бы (ADR 0002, п. 3).
     Отпечаток критериев так, как их видит модель (criteria_fingerprints), воркер вернёт как есть: по нему ядро при
     записи узнает, что модель оценивала то же, что увидела бы сейчас."""
     rubrics = load_rubrics()
@@ -137,7 +137,7 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 
 def context(row: dict[str, Any]) -> dict[str, Any]:
     """Сигнал так, как его оценивает второй вызов и проверяет ядро (score_values): публикация, как у основного вызова
-    (тот же текст, даты днём по UTC), и поля по договорённости; профиль — по категории."""
+    (тот же текст, даты днём по UTC), и поля по договорённости; профиль: по категории."""
     published, received = publication_day(row.get("published")), publication_day(row.get("received"))
     return {
         "signal_id": int(row["signal_id"]), "publication": row["publication"],
@@ -154,7 +154,7 @@ def context(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def payload_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Сигнал во входе модели (context → пакет воркера): подписи вместо кодов, дата события — только из текста (дата
+    """Сигнал во входе модели (context → пакет воркера): подписи вместо кодов, дата события: только из текста (дата
     публикации вместо неё не подставляется). Той же функцией вход строит экзамен (#133): мерится тот же вход."""
     labels = otbor_dictionaries()
     from_text = item["event_date_source"] == event_dates.FROM_TEXT and item["event_date"] is not None
@@ -172,9 +172,9 @@ def payload_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def model_criteria(criteria: list[dict[str, Any]], rubrics: dict[str, Any], profile: str) -> list[dict[str, Any]]:
-    """Критерии, которые оценивает модель: имя и линейка (без веса). Описание с экрана «Скоринг» — только у критерия
+    """Критерии, которые оценивает модель: имя и линейка (без веса). Описание с экрана «Скоринг»: только у критерия
     без линейки: у набора заказчика оно черновое и может ей противоречить («Достоверность и актуальность» там с
-    «свежестью события», а линейка возраст оценивать запрещает). «Свежести» здесь нет — её считает код; у «Зрелости» —
+    «свежестью события», а линейка возраст оценивать запрещает). «Свежести» здесь нет, её считает код; у «Зрелости»:
     как её ступень задаёт стадия карточки."""
     by_name = {one["name"]: one for one in rubrics["profiles"][profile]}
     found = []
@@ -199,10 +199,10 @@ def _fingerprint(seen: list[dict[str, Any]]) -> str:
 
 
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Сторона воркера: вызов модели на сигнал по критериям его профиля; ответ модели — как есть."""
+    """Сторона воркера: вызов модели на сигнал по критериям его профиля; ответ модели: как есть."""
     model = str(payload.get("model") or "").strip()
     if not model:
-        # Клиент без модели взял бы OPENAI_MODEL ленты — тихий откат, которого быть не должно.
+        # Клиент без модели взял бы OPENAI_MODEL ленты: тихий откат, которого быть не должно.
         raise ValueError("signal_scores: в задаче нет модели (SIGNAL_SCORES_MODEL на ядре), а модель ленты этап "
                          "не берёт")
     profiles = payload.get("profiles") or {}
@@ -216,7 +216,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             try:
                 heartbeat(result)
             except StopRequested:
-                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное — в очередь.
+                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное: в очередь.
                 result["partial"] = True
                 break
         criteria = profiles.get(item.get("profile")) or []
@@ -260,7 +260,7 @@ def instructions(criteria: list[dict[str, Any]]) -> str:
 
 
 def answer_schema(criteria: list[dict[str, Any]]) -> dict[str, Any]:
-    """Схема ответа модели (строгий JSON): балл и «почему» по каждому критерию; при «Зрелости» — назван ли заказчик
+    """Схема ответа модели (строгий JSON): балл и «почему» по каждому критерию; при «Зрелости»: назван ли заказчик
     внедрения. По ней же ядро проверяет ответ (score_values)."""
     properties: dict[str, Any] = {"scores": {"type": "array", "items": {
         "type": "object", "additionalProperties": False, "required": ["criterion", "score", "why"],
@@ -299,8 +299,8 @@ def model_input(item: dict[str, Any]) -> str:
 def apply_result(result: dict[str, Any], *, job_id: int | None = None,
                  signal_ids: list[Any] | None = None) -> dict[str, Any]:
     """Сторона ядра: проверить ответы кодом (score_values) и записать баллы с рецептом. Ответ не по правилам не
-    пишется: ошибка — в итоге задачи, остальные сигналы пачки пишутся. Строка чужого сигнала не пишется; сигнал,
-    который этап больше не оценивает или у которого сменились категория или главная публикация, — тоже: баллы
+    пишется: ошибка: в итоге задачи, остальные сигналы пачки пишутся. Строка чужого сигнала не пишется; сигнал,
+    который этап больше не оценивает или у которого сменились категория или главная публикация, тоже: баллы
     пересчитает следующая задача. Так же с критериями профиля, у которых после выдачи сменилось то, что видит модель
     (имя, состав набора, описание критерия без линейки): модель оценивала прежние. Правка весов, ключевых слов и
     описания критерия с линейкой запись не держит: модель их не видит, итог и ключевой балл ядро считает по нынешним
@@ -360,9 +360,9 @@ def _context_problem(row: dict[str, Any], signal_id: int | None, item: dict[str,
 def score_values(row: dict[str, Any], item: dict[str, Any],
                  criteria: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
     """Строка итога воркера → баллы сигнала или почему их не будет (ошибка модели, ответ не по правилам). Через неё
-    пишет ядро (apply_result) и мерит экзамен (#133): мерится то, что дойдёт до сигнала. item — сигнал (context),
-    criteria — критерии его профиля с весами и ключевыми словами (экран «Скоринг»). Линейки — из файла
-    scoring_rubrics.json; вариант итога и границы ступеней — настройки SIGNAL_SCORES_KEYWORDS и SIGNAL_SCORE_BANDS."""
+    пишет ядро (apply_result) и мерит экзамен (#133): мерится то, что дойдёт до сигнала. item: сигнал (context),
+    criteria: критерии его профиля с весами и ключевыми словами (экран «Скоринг»). Линейки: из файла
+    scoring_rubrics.json; вариант итога и границы ступеней: настройки SIGNAL_SCORES_KEYWORDS и SIGNAL_SCORE_BANDS."""
     if row.get("error"):
         return None, f"модель: {str(row['error'])[:300]}"
     rubrics = load_rubrics()
@@ -386,7 +386,7 @@ def score_values(row: dict[str, Any], item: dict[str, Any],
             entry = given[criterion["name"]]
             score = float(entry["score"])
             keyword, why = keyword_score_for_criterion(article, criterion), " ".join(entry["why"].split())[:_WHY_CHARS]
-        # «Зрелость» — в ступени стадии карточки, и балл модели, и итог с ключевыми словами (signal_scoring.final_score).
+        # «Зрелость»: в ступени стадии карточки, и балл модели, и итог с ключевыми словами (signal_scoring.final_score).
         bounds = (signal_scoring.maturity_range(rubric, scale, item["stage"], answer.get("named_customer"))
                   if signal_scoring.bounded(rubric) else None)
         if bounds is not None:
@@ -404,8 +404,8 @@ def score_values(row: dict[str, Any], item: dict[str, Any],
 
 
 def _answer_problem(answer: Any, asked: list[dict[str, Any]]) -> str | None:
-    """Чем ответ не по правилам; None — по правилам: у каждого критерия ровно один балл (целое от 0 до 100) и
-    «почему»; при «Зрелости» — назван ли заказчик (да или нет)."""
+    """Чем ответ не по правилам; None, по правилам: у каждого критерия ровно один балл (целое от 0 до 100) и
+    «почему»; при «Зрелости»: назван ли заказчик (да или нет)."""
     if not isinstance(answer, dict) or not isinstance(answer.get("scores"), list):
         return "нет списка scores"
     names = [criterion["name"] for criterion in asked]
@@ -454,8 +454,8 @@ def _model_name(row: dict[str, Any]) -> str | None:
 
 
 def _usage(row: dict[str, Any], expected: set[str] | None) -> dict[str, Any] | None:
-    """Оплаченный вызов модели — и с ответом не по правилам: модель за него уже взяла деньги. Цена — по ставкам ядра.
-    Строка чужого сигнала — не расход этой задачи."""
+    """Оплаченный вызов модели, и с ответом не по правилам: модель за него уже взяла деньги. Цена: по ставкам ядра.
+    Строка чужого сигнала: не расход этой задачи."""
     signal_id = _signal_id(row, expected)
     try:
         tokens_in = max(0, int(row.get("input_tokens") or 0))

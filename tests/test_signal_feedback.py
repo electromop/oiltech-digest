@@ -151,6 +151,6 @@ def test_structured_signal_feedback_writes_verdict_and_corrections(monkeypatch):
     assert "signal_verdict" in memory_types
     assert "signal_duplicate" in memory_types
     assert "signal_title_correction" in memory_types
-    # «Дубль #5» от человека прячет карточку сразу — защита разобранных тут не действует.
+    # «Дубль #5» от человека прячет карточку сразу: защита разобранных тут не действует.
     assert calls["merged"] == [((7, 5), {"reason": "обратная связь: дубль #5 — Тот же инфоповод", "respect_review": False})]
     assert result["merged"] is True

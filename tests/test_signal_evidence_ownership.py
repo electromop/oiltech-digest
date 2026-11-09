@@ -50,7 +50,7 @@ def test_link_of_visible_card_does_not_move_to_another_card(isolated_db):
 
 
 def test_link_of_hidden_duplicate_still_moves_to_main_card(isolated_db):
-    # Звезда дедупа: ссылки скрытого дубля собираются в главной — это не ломаем.
+    # Звезда дедупа: ссылки скрытого дубля собираются в главной: это не ломаем.
     main = repository.upsert_signal(_row("main", "SLB: цифровые инструменты"))
     hidden = repository.upsert_signal(_row("hidden", "SLB цифровое обновление"))
     repository.upsert_signal_evidence(hidden, {"source_url": URL, "title": "t"})

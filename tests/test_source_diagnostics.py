@@ -179,7 +179,7 @@ def test_probe_takes_fresh_rss(monkeypatch):
 
 
 def test_probe_skips_dead_rss_and_tries_request(monkeypatch):
-    """PETRONAS: лента отдаёт пункты, но последний — от мая 2025."""
+    """PETRONAS: лента отдаёт пункты, но последний: от мая 2025."""
     result = _probe_with(monkeypatch, feed="https://site.example/rss",
                          rss={"verdict": "ok", "entry_count": 5, "latest_entry": "2025-05-07T00:00:00+00:00"},
                          request=_report(200, [800, 900]))
@@ -194,7 +194,7 @@ def test_probe_falls_to_browser_when_request_gives_no_text(monkeypatch):
 
 
 def test_probe_routes_abroad_when_blocked_from_ru_core(monkeypatch):
-    """QatarEnergy: с российских адресов 403 — сбор должен идти через NL-воркер."""
+    """QatarEnergy: с российских адресов 403: сбор должен идти через NL-воркер."""
     result = _probe_with(monkeypatch, request=_report(403, []), browser=_report("ERR", []))
     assert result["chosen"]["network_region"] == "external"
 

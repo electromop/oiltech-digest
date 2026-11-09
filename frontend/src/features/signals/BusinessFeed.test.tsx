@@ -13,8 +13,8 @@ import {
   resetBusinessFeedApi, serve,
 } from "./businessFeedFixtures";
 
-// Бизнес-лента (#97, спека #93): экран радара в витрине «бизнес» — карточка события, атрибуты таблицей в раскрытой
-// карточке (пересмотр 23.10), клик по компании — «всё про компанию». Фильтры — BusinessFeedFilters.test.tsx. Шов 3: экран на подставном API.
+// Бизнес-лента (#97, спека #93): экран радара в витрине «бизнес»: карточка события, атрибуты таблицей в раскрытой
+// карточке (пересмотр 23.10), клик по компании: «всё про компанию». Фильтры: BusinessFeedFilters.test.tsx. Шов 3: экран на подставном API.
 
 vi.mock("../../api/signals", () => ({
   listSignals: vi.fn(),
@@ -34,8 +34,8 @@ describe("бизнес-лента", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
     expect(lastListQuery()).toMatchObject({ showcase: "business" });
-    // Лента устроена так же, как радар (решение владельца 23.10). Под заголовком — только «о чём»: тема, компании,
-    // дата события; «Решение платформы» и число публикаций — в раскрытой карточке (пересмотр 23.10).
+    // Лента устроена так же, как радар (решение владельца 23.10). Под заголовком, только «о чём»: тема, компании,
+    // дата события; «Решение платформы» и число публикаций: в раскрытой карточке (пересмотр 23.10).
     const line = card.querySelector(".signalCardLine") as HTMLElement;
     expect(line).toHaveTextContent("Бурение");
     expect(line).toHaveTextContent("Дата события: 24.09.2026");
@@ -62,7 +62,7 @@ describe("бизнес-лента", () => {
     ]);
     // Блок ОС оставляет каждый, как на радаре (#130).
     expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
-    // Здоровье поиска — служебное радара, не про ленту; плашки и «Отклонённые» — те же, «Объединено дублей» нет.
+    // Здоровье поиска: служебное радара, не про ленту; плашки и «Отклонённые»: те же, «Объединено дублей» нет.
     expect(getSignalSearchHealth).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Отклонённые: 0" })).toBeInTheDocument();
     expect(screen.queryByText("Объединено дублей")).not.toBeInTheDocument();
@@ -94,7 +94,7 @@ describe("бизнес-лента", () => {
       ["Компании: не определено", true],
       ["Событие: не определено", true],
     ]);
-    // Карточку ещё не заполняли — пробелов нет: «не определено» сказало бы, что агент не смог.
+    // Карточку ещё не заполняли, пробелов нет: «не определено» сказало бы, что агент не смог.
     const unfilled = await cardOf("Новость без карточки");
     expect(chips(unfilled)).toEqual([["Категория: бизнес", false]]);
 
@@ -114,7 +114,7 @@ describe("бизнес-лента", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
 
-    // Блок ОС — оценка, причина, комментарий: правок карточки и «дубля» в ленте нет.
+    // Блок ОС, оценка, причина, комментарий: правок карточки и «дубля» в ленте нет.
     expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
     expect(within(card).queryByLabelText("Рекомендуемый заголовок")).not.toBeInTheDocument();
     const verdicts = within(within(card).getByLabelText("Оценка сигнала")).getAllByRole("option").map((item) => item.textContent);
@@ -201,7 +201,7 @@ describe("бизнес-лента", () => {
     expect(within(feedCard).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
     expect(within(radarCard).queryByText("Почему важно")).not.toBeInTheDocument();
     expect(within(radarCard).getByText("Почему интересно · 88").nextSibling).toHaveTextContent("Сильнее соседей");
-    // Источник даты события — и у даты судьи радара.
+    // Источник даты события: и у даты судьи радара.
     expect(chips(radarCard)).toContainEqual(["Событие: 12.09.2026 · по оценке судьи", false]);
   });
 });
@@ -248,24 +248,24 @@ describe("технологический радар", () => {
       ["Зрелость: пилот/ОПИ", false],
       ["Связь с нефтесервисом: переносимая", false],
       ["Компании: Equinor, SLB", false],
-      // Дату поставил судья радара — так и подписана.
+      // Дату поставил судья радара: так и подписана.
       ["Событие: 01.09.2026 · по оценке судьи", false],
     ]);
-    // «Наблюдать / кандидат / подтверждено» — решение платформы, а не зрелость технологии.
+    // «Наблюдать / кандидат / подтверждено»: решение платформы, а не зрелость технологии.
     const decision = within(card).getByText("Решение платформы").closest(".signalAttribute") as HTMLElement;
     expect(decision.querySelector("dd")).toHaveTextContent("Кандидат");
     expect(within(card).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
     expect(within(card).getByText("Ссылки")).toBeInTheDocument();
-    // Ревью пачки «почему интересно» не дало — пустое поле заполнил агент: это «почему важно».
+    // Ревью пачки «почему интересно» не дало, пустое поле заполнил агент: это «почему важно».
     expect(within(card).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
 
     fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
     expect(screen.getByRole("combobox", { name: "Решение платформы" })).toBeInTheDocument();
     fireEvent.change(await screen.findByRole("combobox", { name: "Зрелость" }), { target: { value: "пилот/ОПИ" } });
     await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ" }));
-    // «Всё про компанию» и на радаре: прочие фильтры снимаются, витрина — технологии.
-    // Компания — кнопкой и в строке под заголовком, и в таблице атрибутов: та и другая ведут к «всё про компанию».
+    // «Всё про компанию» и на радаре: прочие фильтры снимаются, витрина: технологии.
+    // Компания, кнопкой и в строке под заголовком, и в таблице атрибутов: та и другая ведут к «всё про компанию».
     fireEvent.click(within(await cardOf("Робот-бурильщик на платформе Equinor")).getAllByRole("button", { name: "SLB" })[0]);
     await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
     expect([lastListQuery().technologyMaturity, lastListQuery().showcase]).toEqual([undefined, undefined]);

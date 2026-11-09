@@ -36,7 +36,7 @@ _NEIGHBOURS_SQL = """
 
 def repeated_tail(conn, source_id: int | None, title: str, text: str | None, *, article_id: int | None = None,
                   around: datetime | None = None, already_cut: int = 0) -> article_tails.RepeatedTail | None:
-    """Хвост текста, повторяющийся у других статей источника. `around` — от какого момента считать окно."""
+    """Хвост текста, повторяющийся у других статей источника. `around`: от какого момента считать окно."""
     if source_id is None or len(text or "") <= config.MIN_FULL_TEXT_CHARS:
         return None
     neighbours = conn.execute(_NEIGHBOURS_SQL, {

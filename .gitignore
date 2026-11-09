@@ -3,7 +3,7 @@
 .env.local
 *.pem
 *.key
-# Исключение: публичные промежуточные CA для TLS-fallback (НЕ секрет) — нужны в образе
+# Исключение: публичные промежуточные CA для TLS-fallback (НЕ секрет): нужны в образе
 !oiltech_digest/ingestion/extra_ca.pem
 
 # Python
@@ -45,6 +45,16 @@ scripts/digest-*/edits_*.py
 # Tooling / caches
 .pytest_cache/
 .claude-flow/
+
+# Служебные файлы среды разработки: правила и настройки живут вне репозитория
+/CLAUDE.md
+/.claude/
+
+# Шрифт бренда живёт на сервере (том брендинга), в репозитории его нет
+*.ttf
+*.otf
+*.woff
+*.woff2
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo

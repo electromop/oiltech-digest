@@ -140,7 +140,7 @@ def test_digest_screen_shows_the_same_score_of_a_publication_as_the_business_fee
               if card["id"] == signal_id]
     assert (rows[otbor]["tag"], rows[otbor]["score"], rows[otbor]["rating"]) == (DRILLING, 91.0, "Сильный")
     assert (card["theme"], card["score"], card["score_label"]) == (DRILLING, 91.0, "Сильный")
-    preset = SCORING_PRESETS["viktor"]["business"]
+    preset = SCORING_PRESETS["customer"]["business"]
     assert [(item["name"], item["weight"], item["final_score"]) for item in rows[otbor]["score_items"]] == [
         (preset[0]["name"], float(preset[0]["weight"]), 95.0), (preset[2]["name"], float(preset[2]["weight"]), 80.0),
     ]

@@ -1,6 +1,6 @@
-"""Единое хранилище сигналов (#95, ADR 0003): статья, принятая отбором, — сигнал «бизнес»
-происхождения «лента»; перепечатка — публикация сигнала главной статьи; радар при этом
-выдаёт ровно то же, что раньше. Шов — API списка сигналов на изолированной базе.
+"""Единое хранилище сигналов (#95, ADR 0003): статья, принятая отбором, сигнал «бизнес»
+происхождения «лента»; перепечатка: публикация сигнала главной статьи; радар при этом
+выдаёт ровно то же, что раньше. Шов: API списка сигналов на изолированной базе.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -192,12 +192,12 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
     feed = {card["origin_article_id"]: card["id"] for card in _business(user) if card["origin"] == "feed"}
     assert sorted(feed) == sorted(articles.values())
     with repository.get_connection() as conn:
-        # Отзывы о сигналах ленты (их даст сервис ОС) — не отзывы радара, в том числе о сигнале с
+        # Отзывы о сигналах ленты (их даст сервис ОС): не отзывы радара, в том числе о сигнале с
         # общей публикацией: «Обратная связь: N» на карточке радара считает отзывы и по адресу.
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict, source_url) "
                      "VALUES (%s, 'verdict', 'approved', 'https://feed.example/7'), (%s, 'verdict', 'reject', NULL)",
                      (feed[articles[7]], feed[articles[5]]))
-        # Сервис ОС сменит категорию сигнала ленты — витрина технологий всё равно «как сейчас»:
+        # Сервис ОС сменит категорию сигнала ленты, витрина технологий всё равно «как сейчас»:
         # только находки радара.
         conn.execute("UPDATE signals SET signal_category = 'technology' WHERE id = %s", (feed[articles[6]],))
         conn.commit()
@@ -248,7 +248,7 @@ def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, ad
     assert _rows(_get("/api/signals/summary", admin, showcase="business"))["rejected"] == 1
     assert summary["themes"] == [{"theme": DRILLING, "count": 2}]
     assert _rows(_get("/api/signals/summary", user, showcase="business", min_score=60))["matching"] == 1
-    # Прежний просмотр «скрытое правилами радара» (hidden=true) — разбор работы радара: у бизнес-витрины его нет.
+    # Прежний просмотр «скрытое правилами радара» (hidden=true), разбор работы радара: у бизнес-витрины его нет.
     assert _get("/api/signals", user, showcase="business", hidden=True).status_code == 422
 
 
@@ -283,7 +283,7 @@ def test_feed_signal_leaves_the_showcase_with_its_article(user):
 
 
 def test_feed_signal_is_shown_by_its_article_not_by_radar_quality_rules(user):
-    # Смешанные ссылки, «не про нефтесервис», срок события — правила находок поиска. Статью,
+    # Смешанные ссылки, «не про нефтесервис», срок события: правила находок поиска. Статью,
     # которую принял отбор, они не прячут (поля заполнит агент карточки, #96).
     article = _article(1)
     _process(article)
@@ -329,7 +329,7 @@ def test_reprint_is_a_publication_of_the_main_article_signal(user):
         ).fetchone()[0]
     assert merged == card["id"]
 
-    # Пометку сняли — копия снова свой сигнал со своей публикацией.
+    # Пометку сняли: копия снова свой сигнал со своей публикацией.
     repository.unmark_article_reprint(copy)
     cards = {card["origin_article_id"]: card for card in _business(user)}
     assert set(cards) == {main, copy}
@@ -351,7 +351,7 @@ def test_reprint_marked_before_the_main_article_was_accepted_joins_it_later(user
 
 
 class _SameEventJudge:
-    """Судья дедупа: любые две карточки — одно событие."""
+    """Судья дедупа: любые две карточки: одно событие."""
 
     def complete_json(self, instructions, prompt, schema, **kwargs):
         from oiltech_digest.processing.openai_client import AIResponse
@@ -446,7 +446,7 @@ def test_feed_signal_follows_the_telegram_title_repair(user):
 
 
 def test_feed_signals_stay_out_of_the_issue_and_the_radar_context_bundle(user):
-    # Выпуск собирается как раньше: статьи — своей выборкой, сигнал ленты был бы их второй копией.
+    # Выпуск собирается как раньше: статьи: своей выборкой, сигнал ленты был бы их второй копией.
     from oiltech_digest import signal_training
 
     radar = _radar_card("tech", "Роботизированная буровая", score=70)
@@ -502,14 +502,14 @@ def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_se
 
     rows = {row["id"]: row for row in repository.list_feed_signals_for_dedup(since=date.today() - timedelta(days=10))}
 
-    # Видимый сигнал окна и разобранный человеком (его повтор не вернётся); скрытый неразобранный и старый — нет.
+    # Видимый сигнал окна и разобранный человеком (его повтор не вернётся); скрытый неразобранный и старый: нет.
     assert set(rows) == {_feed_signal_id(visible), _feed_signal_id(reviewed)}
     row = rows[_feed_signal_id(visible)]
     assert (row["origin"], row["companies"], row["hidden"], row["reviewed"], row["fresh"]) == (
         "feed", ["Halliburton", "Keystone AS"], False, False, True)
     assert row["evidence_urls"] == ["https://feed.example/61"]
     assert (rows[_feed_signal_id(reviewed)]["hidden"], rows[_feed_signal_id(reviewed)]["verdict"]) == (True, "reject")
-    # Снимок радара ленту не берёт; участники «Карточки» — его компании, если судья их не писал (после «Отбора»).
+    # Снимок радара ленту не берёт; участники «Карточки»: его компании, если судья их не писал (после «Отбора»).
     radar = _radar_card("radar-keystone", "Halliburton купила Keystone", category="business")
     _participants(radar, "Halliburton")
     [radar_row] = repository.list_signals_for_dedup()
@@ -517,8 +517,8 @@ def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_se
 
 
 def test_reprint_candidates_pair_an_english_article_with_its_russian_retelling(user):
-    # Прод 03.11: World Oil и Drilling Contractor об одной сделке — две видимые карточки бизнес-ленты: исходные
-    # заголовки сходятся на 0,2 при пороге 0,35, русские заголовки карточек — на 0,33 (основы как у «Дедупа»).
+    # Прод 03.11: World Oil и Drilling Contractor об одной сделке, две видимые карточки бизнес-ленты: исходные
+    # заголовки сходятся на 0,2 при пороге 0,35, русские заголовки карточек: на 0,33 (основы как у «Дедупа»).
     world_oil = _article(71, title="Halliburton acquires Norway’s Keystone AS to expand digital well construction "
                                    "software", source="World Oil")
     contractor = _article(72, title="Halliburton buys Keystone to link well planning with rig execution",
@@ -544,12 +544,12 @@ def test_reprint_keeps_on_screen_the_copy_people_gave_feedback_on(user):
 
     repository.mark_article_reprint(article_id=copy, primary_id=main, similarity=0.4, reason="одно событие")
 
-    # Как с выбранной «в дайджест»: копия с блоком ОС — главная, прежняя главная спрятана вместе с группой.
+    # Как с выбранной «в дайджест»: копия с блоком ОС: главная, прежняя главная спрятана вместе с группой.
     assert sorted(card["origin_article_id"] for card in _business(user)) == [copy, third]
     with repository.get_connection() as conn:
         assert conn.execute("SELECT primary_id, reason FROM article_reprints WHERE article_id = %s",
                             (main,)).fetchone() == (copy, "главная — с обратной связью человека; судья: одно событие")
-    # Блок ОС у обеих — не прячем ни одну.
+    # Блок ОС у обеих: не прячем ни одну.
     _feedback(_feed_signal_id(third))
     with pytest.raises(ValueError, match="с обратной связью людей"):
         repository.mark_article_reprint(article_id=third, primary_id=copy, similarity=0.4, reason="одно событие")
@@ -561,14 +561,14 @@ def test_reprint_of_an_article_whose_signal_the_dedup_merged_joins_the_root_card
     main, copy = _article(91), _article(92)
     _process(main)
     _process(copy)
-    # «Дедуп» склеил сигнал главной статьи с более ранней карточкой радара, а с сигналом копии — карточку радара.
+    # «Дедуп» склеил сигнал главной статьи с более ранней карточкой радара, а с сигналом копии: карточку радара.
     child = _radar_card("radar-child", "Keystone: сделка", category="business")
     assert repository.mark_signal_merged(_feed_signal_id(main), radar, "то же событие")
     assert repository.mark_signal_merged(child, _feed_signal_id(copy), "то же событие")
 
     repository.mark_article_reprint(article_id=copy, primary_id=main, similarity=0.9, reason="одно событие")
 
-    # Группа в один шаг: сигнал перепечатки и склеенная с ним карточка — у корня, их ссылки видны в его карточке.
+    # Группа в один шаг: сигнал перепечатки и склеенная с ним карточка: у корня, их ссылки видны в его карточке.
     with repository.get_connection() as conn:
         merged = dict(conn.execute("SELECT id, merged_into_signal_id FROM signals WHERE id = ANY(%s)",
                                    ([_feed_signal_id(copy), child],)).fetchall())

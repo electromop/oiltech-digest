@@ -2,11 +2,11 @@
 итоговой редакции эксперта, без расширенных статей. Тот же PDF и для предпросмотра на экране «Дайджест», и для
 выгрузки; письмо и DOCX собираются по-прежнему (processing.digest).
 
-Вид — макет, согласованный владельцем 02.11 (вне репозитория). Набор как у образца эксперта: шрифт выпуска GPN Din
-обычный, жирный и узкий жирный, его кегли, текст по ширине, без переносов слов и без кернинга. Колонтитул со второго
+Вид: макет, согласованный владельцем 02.11 (вне репозитория). Набор как у образца эксперта: шрифт бренда (файлы с
+сервера, brand_fonts) обычный, жирный и узкий жирный, его кегли, текст по ширине, без переносов слов и без кернинга. Колонтитул со второго
 листа и номер «N / M» на каждом дают поля листа (@page): колонтитул Chromium на первом листе не скрыть. Обложка
 фиксированной высоты, ровно в лист: если она хоть немного выше листа, Chromium ужимает весь первый лист, и баннер
-перестаёт доходить до края (на макете 198 мм вместо 210). Не влезает текст — обрезается вступление, а «Главное» и
+перестаёт доходить до края (на макете 198 мм вместо 210). Не влезает текст: обрезается вступление, а «Главное» и
 блок платформы остаются целиком. Переходов внутри PDF, «Стр. N», содержания, служебных строк и серого фона нет.
 Закладки на два раздела Chromium строит по заголовкам h1; название и тему документа пишет pypdf.
 """
@@ -20,17 +20,13 @@ from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
+from oiltech_digest import brand_fonts
 from oiltech_digest.db.issue_edits_store import PICTURE_PLACEHOLDER
 from oiltech_digest.processing.digest_materials import MAX_IMAGE_RATIO, MIN_IMAGE_WIDTH, THEMES
 
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
-# Шрифт выпуска: обычный, жирный и узкий жирный (заголовки карточек и разделов).
-FONT_FILES = {
-    "GPN Din": [("GPN_DIN-Regular.ttf", 400), ("GPN_DIN-Bold.ttf", 700)],
-    "GPN Din Condensed": [("GPN_DIN_Condensed-Bold.ttf", 700)],
-}
 # Заглушки картинки карточки: по одной на каждую из 13 тем (тема равна корневому тегу), рисунки собственные.
 PLACEHOLDERS_DIR = ASSETS_DIR / "placeholders"
 # Подпись картинки карточки в размеченном PDF: своя или рисунок темы (тема строчными, как в «Главном»).
@@ -42,7 +38,7 @@ _BRANDING_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "im
 
 # Сколько PDF ждёт картинки карточек. Их Chromium грузит сам, с сайтов-источников; хост, который принял соединение и
 # молчит, держал печать до потолка Playwright в 30 с, и выгрузка падала на каждой попытке (замер 29.09). Не дождались,
-# сайт отказал (403/404) или картинка негодна (уже 400 px или вытянута сильнее 3:1: логотип, полоска) — заглушка темы
+# сайт отказал (403/404) или картинка негодна (уже 400 px или вытянута сильнее 3:1: логотип, полоска): заглушка темы
 # карточки. Возвращает, сколько картинок заменено.
 IMAGES_WAIT_MS = 15_000
 _SWAP_IMAGES_JS = """
@@ -65,7 +61,7 @@ async ([minWidth, maxRatio]) => {
 
 
 def render(content: dict, *, files_dir: Path | None) -> bytes:
-    """PDF выпуска из содержания сборщика (processing.digest.build_digest_content). `files_dir` — каталог брендинга на
+    """PDF выпуска из содержания сборщика (processing.digest.build_digest_content). `files_dir`: каталог брендинга на
     сервере: там лежат файлы баннера, логотипа и QR, которые называет брендинг."""
     document = content.get("document") or {}
     pdf = _print(html(content, files_dir=files_dir))
@@ -85,25 +81,26 @@ def html(content: dict, *, files_dir: Path | None) -> str:
 
 
 def font_faces() -> str:
-    """@font-face шрифта выпуска в base64: рендер не зависит от шрифтов ОС."""
+    """@font-face шрифта бренда в base64: рендер не зависит от шрифтов ОС. Файлы с сервера (brand_fonts); нет файла,
+    нет и правила, и печать берёт запасной шрифт из списка семейства в _CSS."""
     faces = []
-    for family, files in FONT_FILES.items():
-        for name, weight in files:
-            path = ASSETS_DIR / name
-            if path.exists():
-                faces.append(
-                    f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
-                    f"src:url({_data_uri(path.read_bytes(), 'font/ttf')}) format('truetype');}}"
-                )
+    for name in brand_fonts.PRINT:
+        family, weight = brand_fonts.FILES[name]
+        path = brand_fonts.font_path(name)
+        if path is not None:
+            faces.append(
+                f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
+                f"src:url({_data_uri(path.read_bytes(), 'font/ttf')}) format('truetype');}}"
+            )
     return "".join(faces)
 
 
 # --- обложка --------------------------------------------------------------------------------------------------------
 
 def _cover_html(content: dict, files_dir: Path | None) -> str:
-    """Обложка из брендинга на сервере. Баннер — файл в каталоге брендинга, как логотип и QR: в репозитории только
+    """Обложка из брендинга на сервере. Баннер, файл в каталоге брендинга, как логотип и QR: в репозитории только
     баннер письма, у него вкладка «НОВОСТИ» нарисована на самой картинке, а при пустом брендинге вкладки быть не
-    должно. Нет файла — нет баннера."""
+    должно. Нет файла: нет баннера."""
     branding = (content.get("branding") or {}).get("cover") or {}
     cover = content.get("cover") or {}
     banner = _branding_image(files_dir, branding.get("banner_file"))
@@ -122,7 +119,7 @@ def _cover_html(content: dict, files_dir: Path | None) -> str:
 
 
 def _masthead_html(branding: dict, files_dir: Path | None) -> str:
-    """Полоса над баннером: логотип слева, подпись справа. Нет ни того, ни другого — полосы нет."""
+    """Полоса над баннером: логотип слева, подпись справа. Нет ни того, ни другого: полосы нет."""
     logo = _branding_image(files_dir, branding.get("logo_file"))
     caption = _text(branding.get("masthead_caption"))
     if not logo and not caption:
@@ -149,7 +146,7 @@ def _highlights_html(cover: dict) -> str:
 
 
 def _platform_html(branding: dict, files_dir: Path | None) -> str:
-    """Блок платформы: ссылка, Telegram с QR, адрес для обратной связи. Пустое поле — нет и строки; пусто всё — нет
+    """Блок платформы: ссылка, Telegram с QR, адрес для обратной связи. Пустое поле: нет и строки; пусто всё: нет
     блока."""
     rows = []
     platform = _safe_href(branding.get("platform_url"))
@@ -228,7 +225,7 @@ def _picture_html(material: dict) -> str:
 
 
 def _criteria_html(material: dict, section_names: list[str]) -> str:
-    """Таблица под карточкой: баллы по критериям и «Связь с нефтесервисом». Без разбивки — «нет оценки по критериям»
+    """Таблица под карточкой: баллы по критериям и «Связь с нефтесервисом». Без разбивки: «нет оценки по критериям»
     под именами критериев профиля раздела."""
     criteria = material.get("criteria") or []
     names = [row["name"] for row in criteria] or section_names
@@ -246,7 +243,7 @@ def _criteria_html(material: dict, section_names: list[str]) -> str:
 # --- печать ---------------------------------------------------------------------------------------------------------
 
 def _print(html_text: str) -> bytes:
-    """PDF из HTML в headless Chromium. Playwright с Chromium — серверная зависимость (тяжёлая, тестам и письму не
+    """PDF из HTML в headless Chromium. Playwright с Chromium: серверная зависимость (тяжёлая, тестам и письму не
     нужна), поэтому импорт ленивый, а без него понятная ошибка."""
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -331,7 +328,7 @@ def _placeholder_uri(key: object) -> str:
 
 def _branding_image(files_dir: Path | None, name: object) -> str:
     """Картинка брендинга с сервера по имени файла в каталоге брендинга. Только имя файла (не путь) и только картинка:
-    брендинг правит админ, но читать файлы вне своего каталога выпуску незачем. Нет файла — нет и элемента."""
+    брендинг правит админ, но читать файлы вне своего каталога выпуску незачем. Нет файла: нет и элемента."""
     file_name = _text(name)
     if not file_name or files_dir is None:
         return ""
@@ -347,9 +344,9 @@ def _branding_image(files_dir: Path | None, name: object) -> str:
 
 
 def _css_string(value: object) -> str:
-    """Значение для content: в CSS — строка в кавычках. Название выпуска правит админ брендинга, а строка стоит внутри
+    """Значение для content: в CSS: строка в кавычках. Название выпуска правит админ брендинга, а строка стоит внутри
     <style>: «<» идёт CSS-экраном (иначе «</style>» закрыл бы стиль, и разметка после него исполнилась бы в
-    Chromium сервера), кавычка и обратная косая экранируются, переводы строк — пробелы."""
+    Chromium сервера), кавычка и обратная косая экранируются, переводы строк: пробелы."""
     text = str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("<", "\\3c ")
     for control in "\r\n\f":
         text = text.replace(control, " ")
@@ -359,68 +356,69 @@ def _css_string(value: object) -> str:
 def _css(document: dict) -> str:
     name = _css_string((document.get("name") or "").upper())
     month = _css_string(document.get("month_label") or "")
-    # Месяц первым: название (его правит админ) может содержать «%MONTH%», месяц (его пишет код) — нет.
-    return _CSS.replace("%MONTH%", month).replace("%NAME%", name)
+    # Месяц первым: название (его правит админ) может содержать «%MONTH%», месяц (его пишет код): нет.
+    css = _CSS.replace("%SANS%", brand_fonts.SANS_STACK).replace("%CONDENSED%", brand_fonts.CONDENSED_STACK)
+    return css.replace("%MONTH%", month).replace("%NAME%", name)
 
 
 _CSS = """
 @page{size:A4;margin:21mm 16.6mm 15mm 16.6mm;
-  @top-left{content:%NAME%;font:700 8.2pt 'GPN Din';letter-spacing:.05em;color:#00469d;
+  @top-left{content:%NAME%;font:700 8.2pt %SANS%;letter-spacing:.05em;color:#00469d;
     vertical-align:bottom;padding-bottom:2.2mm;margin-bottom:4mm;border-bottom:.6pt solid #d5dfeb;}
-  @top-right{content:%MONTH%;font:400 8.2pt 'GPN Din';color:#56677e;text-align:right;
+  @top-right{content:%MONTH%;font:400 8.2pt %SANS%;color:#56677e;text-align:right;
     vertical-align:bottom;padding-bottom:2.2mm;margin-bottom:4mm;border-bottom:.6pt solid #d5dfeb;}
-  @bottom-right{content:counter(page) " / " counter(pages);font:700 8.2pt 'GPN Din';color:#00469d;}
+  @bottom-right{content:counter(page) " / " counter(pages);font:700 8.2pt %SANS%;color:#00469d;}
 }
 @page :first{margin:0 0 15mm 0;@top-left{content:none;border:none;}@top-right{content:none;border:none;}
   @bottom-right{padding-right:16.6mm;color:#56677e;font-weight:400;}}
-html{font-family:'GPN Din',Arial,sans-serif;color:#1b2432;-webkit-print-color-adjust:exact;
+html{font-family:%SANS%;color:#1b2432;-webkit-print-color-adjust:exact;
   font-kerning:none;font-variant-ligatures:none;hyphens:manual;}
 body{margin:0;}
 a{color:inherit;text-decoration:none;}
 .cover{height:282mm;display:flex;flex-direction:column;overflow:hidden;}
 .masthead{flex:0 0 17mm;display:flex;justify-content:space-between;align-items:center;padding:0 12mm;background:#fff;}
 .logo{display:block;flex:0 0 auto;height:11.6mm;width:auto;max-width:90mm;}
-.unit{font:700 12pt 'GPN Din';letter-spacing:.03em;text-transform:uppercase;color:#003da6;}
+.unit{font:700 12pt %SANS%;letter-spacing:.03em;text-transform:uppercase;color:#003da6;}
 .hero{position:relative;flex:0 0 auto;}
 .banner{display:block;width:210mm;height:auto;max-height:120mm;object-fit:cover;}
 .tab{position:absolute;left:12mm;top:0;min-width:41mm;height:12.6mm;padding:0 4mm;box-sizing:border-box;
   background:#ff5600;border-radius:0 0 3mm 3mm;display:flex;align-items:center;justify-content:center;
-  font:700 14pt 'GPN Din';letter-spacing:.04em;text-transform:uppercase;color:#fff;}
+  font:700 14pt %SANS%;letter-spacing:.04em;text-transform:uppercase;color:#fff;}
 .cover-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:space-between;
   padding:5mm 16.6mm 3mm 16.6mm;}
 .intro{font-size:11.8pt;line-height:1.38;text-align:justify;margin:0;min-height:0;overflow:hidden;}
-.hl-title{font:700 12.5pt 'GPN Din';letter-spacing:.03em;text-transform:uppercase;color:#00469d;margin:0 0 1.5mm;}
+.hl-title{font:700 12.5pt %SANS%;letter-spacing:.03em;text-transform:uppercase;color:#00469d;margin:0 0 1.5mm;}
 .hl{display:flex;gap:6mm;padding:2.2mm 0;border-bottom:.8pt solid #d5dfeb;}
-.hl-label{flex:0 0 42mm;font:700 13.5pt/1.3 'GPN Din';color:#00469d;}
+.hl-label{flex:0 0 42mm;font:700 13.5pt/1.3 %SANS%;color:#00469d;}
 .hl-text{flex:1;font-size:12.5pt;line-height:1.38;text-align:justify;}
 .radar{display:flex;gap:6mm;align-items:center;padding:3.6mm 5.5mm 2.4mm;border:.8pt solid #dce2ea;border-radius:9px;}
 .radar-body{flex:1;}
-.radar-title{font:700 12pt 'GPN Din';color:#00469d;margin:0 0 2.4mm;}
+.radar-title{font:700 12pt %SANS%;color:#00469d;margin:0 0 2.4mm;}
 .rr{display:flex;gap:4mm;font-size:10.8pt;line-height:1.32;margin:0 0 1.6mm;}
 .rr b{flex:0 0 29mm;}
 .rr a{color:#00469d;font-weight:700;white-space:nowrap;}
 .qr{flex:0 0 auto;text-align:center;font-size:10pt;color:#1b2432;}
 .qr img{display:block;width:31mm;margin:0 auto 1.6mm;}
 .list{break-before:page;}
-.sec-num{font:700 8.5pt 'GPN Din';color:#ff5600;margin:0 0 1mm;}
-h1{font:700 29pt/1.1 'GPN Din Condensed';color:#00469d;margin:0 0 4mm;}
+.sec-num{font:700 8.5pt %SANS%;color:#ff5600;margin:0 0 1mm;}
+h1{font:700 29pt/1.1 %CONDENSED%;color:#00469d;margin:0 0 4mm;}
 .card{border:.8pt solid #c5d7ec;border-radius:7px;padding:2.6mm 4mm 2mm;margin:0 0 2.4mm;break-inside:avoid;}
 .top{display:flex;gap:4mm;align-items:flex-start;margin:0 0 1.4mm;}
 .side{flex:0 0 44mm;}
 .side .read{display:block;margin:1.6mm 0 0;}
 .pic{width:44mm;height:33mm;object-fit:cover;border-radius:4px;display:block;}
 .txt{flex:1;min-width:0;}
-.rub{font:700 8.5pt 'GPN Din';color:#ff5600;margin:0 0 1.2mm;}
-.title{display:block;font:700 16pt/1.1 'GPN Din Condensed';color:#00469d;margin:0 0 1.3mm;}
+.rub{font:700 8.5pt %SANS%;color:#ff5600;margin:0 0 1.2mm;}
+.title{display:block;font:700 16pt/1.1 %CONDENSED%;color:#00469d;margin:0 0 1.3mm;}
 .sum{font-size:10.5pt;line-height:1.29;text-align:justify;margin:0;}
 .hyp{margin:0 0 1.6mm;}
-.hyp-label{font:700 8.5pt 'GPN Din';color:#00469d;margin:0 0 .5mm;}
-.hyp-text{font:700 10.5pt/1.29 'GPN Din';color:#00469d;margin:0;}
-.read{font:700 8.3pt 'GPN Din';color:#ff5600;}
+.hyp-label{font:700 8.5pt %SANS%;color:#00469d;margin:0 0 .5mm;}
+.hyp-text{font:700 10.5pt/1.29 %SANS%;color:#00469d;margin:0;}
+.read{font:700 8.3pt %SANS%;color:#ff5600;}
 .crit{width:100%;border-collapse:collapse;table-layout:fixed;margin:1.4mm 0 0;}
-.crit th{font:400 6.4pt/1.12 'GPN Din';color:#56677e;text-align:left;vertical-align:bottom;padding:1mm 1.6mm .5mm;
+.crit th{font:400 6.4pt/1.12 %SANS%;color:#56677e;text-align:left;vertical-align:bottom;padding:1mm 1.6mm .5mm;
   border-top:.6pt solid #d5dfeb;border-left:.6pt solid #d5dfeb;}
-.crit td{font:700 9.6pt 'GPN Din';color:#1b2432;padding:.2mm 1.6mm .2mm;border-left:.6pt solid #d5dfeb;}
+.crit td{font:700 9.6pt %SANS%;color:#1b2432;padding:.2mm 1.6mm .2mm;border-left:.6pt solid #d5dfeb;}
 .crit th:first-child,.crit td:first-child{border-left:none;padding-left:0;}
 .crit td.muted{font-weight:400;font-size:8.5pt;color:#56677e;}
 .crit td.rel{color:#00469d;}

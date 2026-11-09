@@ -290,7 +290,7 @@ def test_failed_daily_radar_is_not_requeued_the_same_day(isolated_db, monkeypatc
 
 def test_yesterday_evening_daily_radar_does_not_block_this_morning(isolated_db, monkeypatch):
     """18.09: ежедневный радар запущен в 17:15 МСК, и утренний крон 19.09 решил, что
-    «уже было» — окно было «24 часа», а не «те же сутки»."""
+    «уже было»: окно было «24 часа», а не «те же сутки»."""
     monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
     enqueued: list = []
     monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: enqueued.append(args) or {"id": 1})
@@ -306,11 +306,11 @@ def test_yesterday_evening_daily_radar_does_not_block_this_morning(isolated_db, 
             )
             conn.commit()
 
-    # Вчера в 23:59 по Москве — меньше 24 часов назад, но это прошлые сутки.
+    # Вчера в 23:59 по Москве: меньше 24 часов назад, но это прошлые сутки.
     daily_job_at("(date_trunc('day', now() AT TIME ZONE 'Europe/Moscow') - interval '1 minute') AT TIME ZONE 'Europe/Moscow'")
     assert background_jobs.enqueue_daily_signal_discovery()["enqueued"] is True
 
-    # Сегодняшняя — блокирует, как и раньше.
+    # Сегодняшняя: блокирует, как и раньше.
     daily_job_at("now() - interval '1 second'")
     assert background_jobs.enqueue_daily_signal_discovery()["reason"] == "already_scheduled"
     assert len(enqueued) == 1

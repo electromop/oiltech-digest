@@ -4,8 +4,8 @@ export type SourceState = SourceHealth["verdict"];
 
 type StateTone = "ok" | "warn" | "bad" | "muted";
 
-// Состояния источника — названия из документа заказчика «Главная страница» (19.09).
-// Порядок — порядок плиток и сортировки: сначала то, с чем нужно что-то делать.
+// Состояния источника: названия из документа заказчика «Главная страница» (19.09).
+// Порядок, порядок плиток и сортировки: сначала то, с чем нужно что-то делать.
 export const SOURCE_STATES: ReadonlyArray<{ state: SourceState; label: string; tile: string; tone: StateTone }> = [
   { state: "no_articles", label: "Без материалов", tile: "Без материалов", tone: "bad" },
   { state: "stale", label: "Требует внимания", tile: "Требуют внимания", tone: "warn" },
@@ -16,7 +16,7 @@ export const SOURCE_STATES: ReadonlyArray<{ state: SourceState; label: string; t
 
 const STATE_BY_KEY = new Map(SOURCE_STATES.map((item) => [item.state, item]));
 
-/** Состояние считает сервер (source_health_report); без его строки — только то, что
+/** Состояние считает сервер (source_health_report); без его строки: только то, что
  *  известно из самого источника. «Без материалов» по догадке не ставим: это неправда. */
 export function sourceState(source: Source, health?: SourceHealth): SourceState | null {
   if (health?.verdict) return health.verdict;
@@ -35,9 +35,9 @@ export function sourceStateTone(state: SourceState | null): StateTone {
 
 export type SourceStateCounts = Record<SourceState, number> & { total: number };
 
-/** Плитки считаются по ТОМУ ЖЕ списку, что показывает таблица, — в этом и была ошибка:
- *  плитки шли по отчёту здоровья вместе с архивом (173), а список и счётчик в шапке —
- *  без архива (133). «Всего источников» — каталог без архива; архив — своя плитка. */
+/** Плитки считаются по ТОМУ ЖЕ списку, что показывает таблица, в этом и была ошибка:
+ *  плитки шли по отчёту здоровья вместе с архивом (173), а список и счётчик в шапке:
+ *  без архива (133). «Всего источников»: каталог без архива; архив: своя плитка. */
 export function countSourceStates(sources: Source[], healthById: Map<number, SourceHealth>): SourceStateCounts {
   const counts: SourceStateCounts = { total: 0, no_articles: 0, stale: 0, ok: 0, disabled: 0, archived: 0 };
   sources.forEach((source) => {
@@ -50,7 +50,7 @@ export function countSourceStates(sources: Source[], healthById: Map<number, Sou
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Дату и дни «Последней загрузки» считаем по Москве, как сервер — вердикт stale
+// Дату и дни «Последней загрузки» считаем по Москве, как сервер: вердикт stale
 // (source_health_report): «7 дн. назад» здесь ⇔ «Требует внимания» там. Пояс браузера не
 // берём: у зрителя не из Москвы день сменяется в другой час, и число разошлось бы с состоянием.
 const MSK_TIME_ZONE = "Europe/Moscow";
@@ -67,13 +67,13 @@ function mskDayNumber(date: Date) {
   return Date.UTC(part.year, part.month - 1, part.day) / DAY_MS;
 }
 
-/** Сколько календарных дней назад — по календарю Москвы, как и сама дата, а не полными
+/** Сколько календарных дней назад: по календарю Москвы, как и сама дата, а не полными
  *  сутками: иначе вчерашние 13:00 в 11:00 давали «24.09 · сегодня». */
 function calendarDaysAgo(value: string, now: Date) {
   return Math.max(0, mskDayNumber(now) - mskDayNumber(new Date(value)));
 }
 
-/** «Последняя загрузка» — когда от источника пришёл последний материал. */
+/** «Последняя загрузка»: когда от источника пришёл последний материал. */
 export function lastLoadLabel(value: string | null | undefined, now: Date = new Date()) {
   if (!value || Number.isNaN(new Date(value).getTime())) return null;
   const date = new Date(value).toLocaleDateString("ru-RU", {
@@ -87,7 +87,7 @@ export function lastLoadLabel(value: string | null | undefined, now: Date = new 
   return { date, ago };
 }
 
-/** Колонка «Проблема» — короткая подпись к разбору getSourceTriage (одна цепочка
+/** Колонка «Проблема»: короткая подпись к разбору getSourceTriage (одна цепочка
  *  проверок на экран): результат диагностики важнее вердикта. */
 export function sourceProblem(
   source: Source,
@@ -113,15 +113,15 @@ export function sourceProblem(
   }
 }
 
-/** Подпись состояния строчными — для пилюли разбора в раскрытой строке. */
+/** Подпись состояния строчными: для пилюли разбора в раскрытой строке. */
 function stateLabelLower(state: SourceState) {
   return sourceStateLabel(state).toLowerCase();
 }
 
-// Вид источника — ЧЕМ его читаем. Берём parse_strategy, а не source_type: в
+// Вид источника: ЧЕМ его читаем. Берём parse_strategy, а не source_type: в
 // source_type лежит свободный текст из xlsx заказчика (33 разных значения: Company,
 // Journal, "Company / NOC", "University / R&D"…), и он ВРЁТ на всём, что добавлено
-// через форму — там срабатывает дефолт "RSS" независимо от выбранной стратегии.
+// через форму: там срабатывает дефолт "RSS" независимо от выбранной стратегии.
 // Из-за этого на карточке печаталось самопротиворечивое «request · RSS».
 export function strategyLabel(strategy?: string | null) {
   return (
@@ -169,8 +169,8 @@ export function diagnosticVerdictLabel(verdict?: string) {
   return diagnosticVerdictLabels[verdict] || verdict;
 }
 
-// Тон пилюли диагностики по серьёзности вердикта: жёсткие сбои доступа/конфига —
-// красный (bad), «нашли, но не извлекли» — оранжевый (warn), ok — зелёный.
+// Тон пилюли диагностики по серьёзности вердикта: жёсткие сбои доступа/конфига:
+// красный (bad), «нашли, но не извлекли»: оранжевый (warn), ok: зелёный.
 const DIAGNOSTIC_BAD_VERDICTS = new Set([
   "missing_listing_url",
   "listing_fetch_failed",
@@ -355,7 +355,7 @@ export function getSourceTriage(
 }
 
 // Только виды проблем из диагностики: состояние (без материалов, требуют внимания,
-// штатно, отключены) выбирается плитками над таблицей — второй его список здесь был лишним.
+// штатно, отключены) выбирается плитками над таблицей: второй его список здесь был лишним.
 export const TRIAGE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Все проблемы" },
   { value: "access", label: "Нет доступа" },

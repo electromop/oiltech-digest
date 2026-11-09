@@ -1,10 +1,10 @@
 """Хранилище «Суть и перевод» сигналов (#131): что этапу читать у находок и материалов, принятых «Отбором», и как
 писать суть и русский заголовок.
 
-Публикация — та же, что видел «Отбор» (otbor_inputs.signal_inputs); поля «Отбора» — категория, связь и применение
-сигнала. Пишется только пустое: суть материала — описание автора, правку человека этап не трогает.
+Публикация: та же, что видел «Отбор» (otbor_inputs.signal_inputs); поля «Отбора»: категория, связь и применение
+сигнала. Пишется только пустое: суть материала: описание автора, правку человека этап не трогает.
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в signal_card_store):
 изоляция тестов держится на подмене этого атрибута.
 """
 
@@ -21,14 +21,14 @@ from oiltech_digest.db.signal_card_store import PIPELINE_SINCE_SQL
 from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_SELECTOR_OTBOR
 from oiltech_digest.feed_window import OTBOR_ACCEPT
 
-# Вид задачи этапа; расход — в ai_processing_runs под стадиями сути и перевода, как у статей ленты.
+# Вид задачи этапа; расход: в ai_processing_runs под стадиями сути и перевода, как у статей ленты.
 KIND = "signal_summary"
 STAGES = ("summary", "translation")
-# Сколько задач шаг ставит одному сигналу: вторая — на случай сбоя модели; дальше — повтор командой.
+# Сколько задач шаг ставит одному сигналу: вторая: на случай сбоя модели; дальше: повтор командой.
 DAILY_ATTEMPTS = 2
 # Поле этапа → колонка сигнала.
 COLUMNS = {"summary": "summary", "translation": "title_ru"}
-# Дальше «Отбора» идут только принятые им находки и материалы — и шагом дня, и по названным номерам, и в пакете.
+# Дальше «Отбора» идут только принятые им находки и материалы: и шагом дня, и по названным номерам, и в пакете.
 _ACCEPTED_SQL = (f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
                  f" AND s.otbor_decision = '{OTBOR_ACCEPT}'")
 
@@ -92,7 +92,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
 
 
 def accepted_ids(signal_ids: Sequence[int]) -> list[int]:
-    """Из названных сигналов — принятые «Отбором» находки и материалы, в порядке названия."""
+    """Из названных сигналов: принятые «Отбором» находки и материалы, в порядке названия."""
     with connection.get_connection() as conn:
         found = {int(row[0]) for row in conn.execute(
             f"SELECT s.id FROM signals s WHERE s.id = ANY(%s) AND {_ACCEPTED_SQL}", ([int(one) for one in signal_ids],),
@@ -101,8 +101,8 @@ def accepted_ids(signal_ids: Sequence[int]) -> list[int]:
 
 
 def write_summary(signal_id: int, values: dict[str, str], *, log: list[dict[str, str]]) -> list[str]:
-    """Записать суть и русский заголовок (values: колонка → текст) — только в пустое поле, которое не ставил
-    человек; кто поставил — этап (card_set_by). Шаг — в «Ход решения». Записанные колонки; [] — нечего или сигнала
+    """Записать суть и русский заголовок (values: колонка → текст): только в пустое поле, которое не ставил
+    человек; кто поставил: этап (card_set_by). Шаг: в «Ход решения». Записанные колонки; []: нечего или сигнала
     нет."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -126,7 +126,7 @@ def write_summary(signal_id: int, values: dict[str, str], *, log: list[dict[str,
 
 
 def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
-    """Расход этапа — в ai_processing_runs строкой на (задача, сигнал, стадия): повторное применение итога той же
+    """Расход этапа, в ai_processing_runs строкой на (задача, сигнал, стадия): повторное применение итога той же
     задачи счёт не удваивает (частичный уникальный индекс по signal_id)."""
     if not rows:
         return

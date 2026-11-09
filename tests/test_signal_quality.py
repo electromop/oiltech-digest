@@ -1,6 +1,6 @@
-"""Качество радара: замечания Виктора 29.09 и правила показа.
+"""Качество радара: замечания эксперта заказчика 29.09 и правила показа.
 
-«75% — это бизнес-сигналы», «оценки завышены», «в одной карточке могут быть разные темы»,
+«75% это бизнес-сигналы», «оценки завышены», «в одной карточке могут быть разные темы»,
 «нашёл очень старый сигнал». До 08.11 категорию, дату события, смешанные события и связь с
 нефтесервисом ставил судья прежней цепочки; его поля в базе остались, и правила показа их читают
 (история). Отсеянное лежит карточкой «Отсеяно»: технический отсев поиска и брак судьи прежней цепочки.
@@ -89,7 +89,7 @@ def test_judge_fields_are_stored_and_kept_when_an_old_worker_refinds_the_card(is
     signal_id = _store("card", signal_category="technology", event_date="2026-09-10", mixed_events=False,
                        score_profile="tech_radar", score_items=[{"criterion_id": 101, "final_score": 80}],
                        criteria_snapshot=[{"id": 101, "weight": 30}])
-    # Старая сборка NL: полей судьи нет — прежние не стираются.
+    # Старая сборка NL: полей судьи нет: прежние не стираются.
     repository.upsert_signal({"signal_key": "card", "title": "card", "theme": DRILLING, "score": 50})
 
     with repository.get_connection() as conn:
@@ -137,7 +137,7 @@ def test_output_budget_grows_with_reasoning(effort, expected):
 
 
 def test_gpt5_has_its_own_price():
-    # Без строки gpt-5 считался бы по ставке nano — в ~25 раз дешевле.
+    # Без строки gpt-5 считался бы по ставке nano: в ~25 раз дешевле.
     assert config.price_for_model("gpt-5-2025-08-07") == (1.25, 10.0)
     assert config.price_for_model("gpt-5-mini-2025-08-07") == (0.25, 2.0)
 
@@ -168,7 +168,7 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
 
 
 def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
-    # Решение владельца 05.10: просмотр отсеянного и скрытого — только админу (заказчик — админ).
+    # Решение владельца 05.10: просмотр отсеянного и скрытого: только админу (заказчик: админ).
     from fastapi.testclient import TestClient
 
     from oiltech_digest import api
@@ -185,7 +185,7 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
         api.app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "u@example.com", "role": "user"}
         assert client.get("/api/signals?hidden=true").status_code == 403
         assert client.get("/api/signals/summary?hidden=true").status_code == 403
-        # Обычному пользователю и число отсеянных не показываем — ни над списком, ни в итогах недели.
+        # Обычному пользователю и число отсеянных не показываем: ни над списком, ни в итогах недели.
         assert "rejected" not in client.get("/api/signals/summary").json()
         weekly = client.get("/api/signals/weekly").json()
         assert "filtered" not in weekly and "filtered_reasons" not in weekly
@@ -200,7 +200,7 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
         api.app.dependency_overrides.pop(api.require_user, None)
 
 
-# --- Релевантность нефтесервису («релевантности мало», Виктор 29.09) --------------------------
+# --- Релевантность нефтесервису («релевантности мало», эксперт заказчика, 29.09) --------------------------
 
 
 def test_radar_hides_cards_without_oilfield_relevance(isolated_db):
@@ -225,7 +225,7 @@ def test_relevance_is_kept_when_an_old_worker_refinds_the_card(isolated_db):
     assert row == ("direct", "ГРП на кустах")
 
 
-# --- Ревью #89 (02.10): одобренную карточку решение судьи не прячет, выбранную «в дайджест» — ничто
+# --- Ревью #89 (02.10): одобренную карточку решение судьи не прячет, выбранную «в дайджест»: ничто
 
 
 def _choose_for_digest(signal_id):
@@ -236,7 +236,7 @@ def _choose_for_digest(signal_id):
 def test_card_in_digest_stays_on_radar_when_refound_with_a_hiding_verdict(isolated_db):
     chosen = _store("chosen", signal_category="technology")
     _choose_for_digest(chosen)
-    # Повторная находка: судья передумал по всем правилам сразу — карточка в выпуске всё равно видна,
+    # Повторная находка: судья передумал по всем правилам сразу: карточка в выпуске всё равно видна,
     # иначе её не снять с выпуска (отметку снимают только с экрана радара).
     old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
     repository.upsert_signal({"signal_key": "chosen", "title": "chosen", "theme": DRILLING, "score": 60,
@@ -246,7 +246,7 @@ def test_card_in_digest_stays_on_radar_when_refound_with_a_hiding_verdict(isolat
     assert chosen in _visible_ids()
     assert chosen not in {int(row["id"]) for row in repository.list_signals(limit=50, hidden=True)}
     assert repository.signal_radar_summary()["total"] == 1
-    # Экран подписывает «Скрыта: …» любую карточку с причиной — у видимой её нет.
+    # Экран подписывает «Скрыта: …» любую карточку с причиной: у видимой её нет.
     assert {row["hidden_reason"] for row in repository.list_signals(limit=50)} == {None}
 
 
@@ -288,7 +288,7 @@ def test_judge_does_not_hide_an_approved_card_but_archive_and_age_do(isolated_db
 
     assert _visible_ids() == {approved}
     hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
-    # Причина — только то, что прячет на самом деле: у одобренной решение судьи не в счёт.
+    # Причина, только то, что прячет на самом деле: у одобренной решение судьи не в счёт.
     assert hidden == {
         archived: "в архиве",
         stale: f"событие старше {config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS} дней",
@@ -297,7 +297,7 @@ def test_judge_does_not_hide_an_approved_card_but_archive_and_age_do(isolated_db
 
 
 @pytest.mark.parametrize("event_type, verdict", [
-    ("comment_added", "wrong_block"),  # «Не тот блок — бизнес-сигнал»: админ учит агента на «Скрытых»
+    ("comment_added", "wrong_block"),  # «Не тот блок, бизнес-сигнал»: админ учит агента на «Скрытых»
     ("comment_added", "reject"),
     ("comment_added", None),           # комментарий без вердикта
 ])
@@ -324,7 +324,7 @@ def test_positive_verdicts_match_the_dedup_ones():
     assert set(repository.SIGNAL_POSITIVE_VERDICTS) == signal_dedup._POSITIVE_VERDICTS
 
 
-# --- Отсеянное — карточкой «Отсеяно», чтобы заказчик просмотрел всё (02.10) ---------------------
+# --- Отсеянное: карточкой «Отсеяно», чтобы заказчик просмотрел всё (02.10) ---------------------
 
 
 def _apply_run(topics):
@@ -369,7 +369,7 @@ def test_search_drops_are_kept_with_reason(isolated_db):
 
     reasons = sorted(_filtered().values())
     assert reasons == [
-        "отсеяно (поиск): нет ссылки или заголовка",  # без ссылки — тоже видна в разборе
+        "отсеяно (поиск): нет ссылки или заголовка",  # без ссылки: тоже видна в разборе
         "отсеяно (поиск): страница не открылась, текста издателя нет",
     ]
 
@@ -444,7 +444,7 @@ def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db
     _feedback(card, "verdict", "reject")
 
     assert _filtered() == {card: "отсеяно (судья): обзор без события"}
-    # Отклонённая — главная в своей группе (signal_dedup._rank): повтор события не вернётся.
+    # Отклонённая: главная в своей группе (signal_dedup._rank): повтор события не вернётся.
     assert [(row["id"], row["hidden"]) for row in repository.list_signals_for_dedup()] == [(card, True)]
 
 
@@ -478,7 +478,7 @@ def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_du
     _apply_run([_search_drop("Рано отсеяно", url)])
     (filtered,) = _filtered()
 
-    # Найдено снова и принято — ссылка у принятой, а пустая копия не висит в «Отсеянных».
+    # Найдено снова и принято: ссылка у принятой, а пустая копия не висит в «Отсеянных».
     accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
                                          "signal_category": "technology"})
     repository.upsert_signal_evidence(accepted, {"source_url": url, "title": "x"})
@@ -509,7 +509,7 @@ def test_link_rejected_by_the_old_chain_then_dropped_by_the_search_stays_with_th
 
 
 def _owner_stages():
-    """Чья ссылка: стадия отсева несклеенной хозяйки, «accepted» — у принятой."""
+    """Чья ссылка: стадия отсева несклеенной хозяйки, «accepted»: у принятой."""
     with repository.get_connection() as conn:
         return dict(conn.execute("SELECT e.source_url, COALESCE(s.filter_stage, 'accepted') FROM signal_evidence e"
                                  " JOIN signals s ON s.id = e.signal_id WHERE s.merged_into_signal_id IS NULL"))
@@ -577,7 +577,7 @@ def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
 def test_overrated_counts_as_approval(isolated_db):
     from oiltech_digest import signal_dedup
 
-    # «Оценка завышена — сигнал годный, балл слишком высокий»: решение судьи такую не прячет.
+    # «Оценка завышена, сигнал годный, балл слишком высокий»: решение судьи такую не прячет.
     assert "overrated" in repository.SIGNAL_POSITIVE_VERDICTS
     assert "overrated" in signal_dedup._POSITIVE_VERDICTS
     card = _store("card", signal_category="business")

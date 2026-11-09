@@ -1,6 +1,6 @@
-// Графики экрана «Статистика» — простой SVG без библиотек. Правила (скилл dataviz):
+// Графики экрана «Статистика»: простой SVG без библиотек. Правила (скилл dataviz):
 // столбец ≤24px с закруглённым верхом и прямым основанием, 2px зазор цвета фона между
-// сегментами стопки, линии 2px, точки r=4 с кольцом фона, сетка — сплошной волосок,
+// сегментами стопки, линии 2px, точки r=4 с кольцом фона, сетка: сплошной волосок,
 // легенда при 2+ сериях, подписи выборочно, подсказка по наведению и таблица-двойник.
 import { useState } from "react";
 import type { ReactNode } from "react";
@@ -60,7 +60,7 @@ function ChartTable({ categories, series, format }: { categories: Category[]; se
 }
 
 function Tooltip({ x, title, rows }: { x: number; title: string; rows: { label: string; value: string; color: string }[] }) {
-  // Подсказка — дополнение, а не единственный путь к числу: всё есть в таблице-двойнике.
+  // Подсказка, дополнение, а не единственный путь к числу: всё есть в таблице-двойнике.
   const left = `${Math.min(78, Math.max(4, (x / W) * 100 - 10))}%`;
   return (
     <div className={styles.tooltip} style={{ left }} role="status">
@@ -92,7 +92,7 @@ function Reference({ value, label, y }: { value: number; label: string; y: (v: n
   return (
     <g>
       <line x1={M.left} x2={W - M.right} y1={y(value)} y2={y(value)} className={styles.reference} />
-      {/* Подпись — слева: справа, у последнего месяца, её перекрывают концы линий и столбцы. */}
+      {/* Подпись, слева: справа, у последнего месяца, её перекрывают концы линий и столбцы. */}
       <text x={M.left + 4} y={y(value) - 5} textAnchor="start" className={styles.referenceLabel}>{label}</text>
     </g>
   );
@@ -108,7 +108,7 @@ type ChartProps = {
   footnote?: ReactNode;
 };
 
-/** Столбцы, при нескольких сериях — стопкой (часть целого за месяц). */
+/** Столбцы, при нескольких сериях: стопкой (часть целого за месяц). */
 export function ColumnChart({ title, categories, series, format, axisFormat, reference, footnote }: ChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const totals = categories.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] ?? 0), 0));
@@ -174,7 +174,7 @@ export function ColumnChart({ title, categories, series, format, axisFormat, ref
   );
 }
 
-/** Линии — динамика нескольких однородных мер на одной оси. */
+/** Линии: динамика нескольких однородных мер на одной оси. */
 export function LineChart({ title, categories, series, format, axisFormat, reference, footnote }: ChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const values = series.flatMap((s) => s.values.filter((v): v is number => v != null));
@@ -230,7 +230,7 @@ export function LineChart({ title, categories, series, format, axisFormat, refer
 
 export type BarRow = { key: string; label: string; value: number; note?: ReactNode };
 
-/** Горизонтальные полосы: воронка, темы, источники. Одна серия — один цвет. */
+/** Горизонтальные полосы: воронка, темы, источники. Одна серия: один цвет. */
 export function BarList({ rows, color, format, max }: { rows: BarRow[]; color: string; format: Format; max?: number }) {
   const top = max ?? Math.max(...rows.map((r) => r.value), 1);
   return (
@@ -264,7 +264,7 @@ export function SplitBar({ parts, format }: { parts: { label: string; value: num
   );
 }
 
-/** Тренд за полные месяцы: приглушённая линия, последняя точка — акцентом. */
+/** Тренд за полные месяцы: приглушённая линия, последняя точка: акцентом. */
 export function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return null;
   const w = 96;
@@ -299,7 +299,7 @@ export function StatTile({ label, value, sub, change, base, spark }: {
       {sub && <span className={styles.tileSub}>{sub}</span>}
       {(change !== undefined || spark) && (
         <span className={styles.tileFoot}>
-          {/* База сравнения названа строкой над плитками; здесь — в подсказке и для чтеца. */}
+          {/* База сравнения названа строкой над плитками; здесь: в подсказке и для чтеца. */}
           {change ? (
             <span className={styles[`delta_${change.tone}`]} title={base ? `Сравнение ${base}` : undefined}>
               <span aria-hidden="true">{change.arrow}</span> {change.text}

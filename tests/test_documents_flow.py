@@ -174,7 +174,7 @@ def test_full_parse_pipeline_offline_produces_card_and_verifies_facts(isolated_d
         assert card["card"]["essence"]
         # Главное: числа, которые модель «взяла со страницы», сверены с текстом якоря.
         assert applied["facts"] >= 1, "ни один факт не дошёл до применения"
-        # Офлайн-заглушка берёт первое число фрагмента и приписывает его первому якорю —
+        # Офлайн-заглушка берёт первое число фрагмента и приписывает его первому якорю:
         # привязать его правильно она не может. Поэтому здесь проверяется, что факты
         # ПРОШЛИ сверку как процесс; корректность самой сверки доказывает
         # test_invented_number_is_marked_unverified на подставных данных.
@@ -235,7 +235,7 @@ def test_card_reports_anchors_without_text(isolated_db, client):
             data={"attested": "true"},
         ).json()["document"]["id"]
 
-        # Дописываем пустые якоря — так выглядит наполовину распознанный документ.
+        # Дописываем пустые якоря: так выглядит наполовину распознанный документ.
         from oiltech_digest.db import connection
 
         with connection.get_connection() as conn:
@@ -277,7 +277,7 @@ def test_filename_reaches_card_stage_for_date(isolated_db, client):
     На проде 13.09 два документа из четырёх получили «дата: не указано», хотя месяц и
     год стояли в имени («Атон_Нефтегазовый_сектор_август_2026.pdf»). Причина не в модели:
     инструкция намеренно запрещает выводить дату из годов в тексте, а имя файла ей просто
-    НЕ передавалось — увидеть его было неоткуда.
+    НЕ передавалось: увидеть его было неоткуда.
     """
     admin_id = _make_user(isolated_db, "a7@example.com", "admin")
     api.app.dependency_overrides[api.require_admin] = _as("admin", admin_id)

@@ -36,7 +36,7 @@ def _prefilter_tag_keywords() -> dict[str, list[str]]:
 
 def process_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     keywords = payload.get("prefilter_tag_keywords")
-    if keywords is None:  # ядро старее воркера — работаем как раньше
+    if keywords is None:  # ядро старее воркера: работаем как раньше
         return _process_source(payload, heartbeat=heartbeat)
     with relevance_filter.use_tag_keywords(keywords.get("positive") or [], keywords.get("negative") or []):
         return _process_source(payload, heartbeat=heartbeat)
@@ -45,8 +45,8 @@ def process_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
 def _process_source(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     source = payload["source"]
     strategy = source.get("parse_strategy")
-    # heartbeat — всем стратегиям, а не только RSS. До 18.09 request и playwright шли
-    # без него при lease в 600 с: браузерная статья — до 30 с на загрузку плюс
+    # heartbeat: всем стратегиям, а не только RSS. До 18.09 request и playwright шли
+    # без него при lease в 600 с: браузерная статья: до 30 с на загрузку плюс
     # ожидание, и пакет из десятка статей упирался в lease так же, как задача 3908.
     if strategy == "playwright":
         return _process_playwright(source, payload, heartbeat=heartbeat)
@@ -129,7 +129,7 @@ def _process_rss(source: dict[str, Any], payload: dict[str, Any], heartbeat=None
             "failed_fetch": 0,
         },
         "articles": articles,
-        # RSS дедупится по article_exists (articles.url уникален) — listing-hash и
+        # RSS дедупится по article_exists (articles.url уникален): listing-hash и
         # last_seen для лент не нужны (нет проблемы дедуп-заморозки request-парсера).
         "last_seen_article_url": articles[0]["url"] if articles else None,
         "last_seen_published_at": articles[0].get("published_at") if articles else None,
@@ -143,7 +143,7 @@ def _process_playwright(source: dict[str, Any], payload: dict[str, Any], heartbe
 
     listing_url = source.get("listing_url") or source.get("url")
     limit = int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)
-    # Та же пара попыток, что у ядра, — общей функцией, а не копией.
+    # Та же пара попыток, что у ядра, общей функцией, а не копией.
     candidates = render_listing_candidates(source, listing_url, limit=limit) if listing_url else []
     result = _articles_from_candidates(source, candidates, payload, rendered_article, _listing_hash,
                                        heartbeat=heartbeat)
@@ -176,7 +176,7 @@ def _articles_from_candidates(source: dict[str, Any], candidates: list, payload:
     cutoff = verdicts.old_cutoff(source, payload.get("max_age_days"))
     # Базы у воркера нет, и раньше он качал КАЖДУЮ статью листинга на каждом цикле:
     # ядро отбрасывало знакомые только при вставке. Список известных адресов даёт
-    # ядро в payload — данные параметром, а не чтение базы (правило §11.4).
+    # ядро в payload: данные параметром, а не чтение базы (правило §11.4).
     known = set(payload.get("known_urls") or [])
     stats = {"attempted": 0, "skipped_old": 0, "skipped_irrelevant": 0, "failed_fetch": 0, "skipped_known": 0}
     articles: list[dict[str, Any]] = []
@@ -220,7 +220,7 @@ def _articles_from_candidates(source: dict[str, Any], candidates: list, payload:
         "articles": articles,
         "last_seen_article_url": newest_seen_url,
         # Строкой, а не datetime: результат уходит ядру JSON-ом. Пока у кандидатов
-        # не было дат, здесь стоял None и дыра молчала; правка дат 18.09 её вскрыла —
+        # не было дат, здесь стоял None и дыра молчала; правка дат 18.09 её вскрыла:
         # задачи падали «Object of type datetime is not JSON serializable».
         "last_seen_published_at": _jsonable(newest_seen_published),
         "last_listing_hash": listing_hash_fn(candidates),
@@ -245,9 +245,9 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]],
                              heartbeat=None) -> list[dict[str, Any]]:
     """Дотянуть полный текст статей ленты со страницы издания.
 
-    Работает только там, где вызвано, — на воркере зарубежного контура. Берём
+    Работает только там, где вызвано, на воркере зарубежного контура. Берём
     страницу лишь когда анонс короче порога: у лент с полным текстом ходить
-    незачем. Неудача не отбрасывает запись — остаётся анонс, как было раньше.
+    незачем. Неудача не отбрасывает запись: остаётся анонс, как было раньше.
     """
     from oiltech_digest.ingestion import normalize
     from oiltech_digest.ingestion.article_fetcher import extract_main_text
@@ -269,7 +269,7 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]],
         except Exception:  # noqa: BLE001 - одна статья не валит прогон источника
             body = ""
         # Страж принадлежности (№24) здесь раньше не стоял вовсе: тело бралось, если
-        # оно просто длиннее анонса. Чужой текст хуже короткого своего — оставляем анонс.
+        # оно просто длиннее анонса. Чужой текст хуже короткого своего: оставляем анонс.
         if body and len(body) > len(text) and normalize.title_matches_body(title, body):
             rec = {**rec, "raw_text": body, "text_truncated": normalize.is_truncated(body)}
         filled.append(rec)
@@ -281,10 +281,10 @@ def build_refetch_text_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     Локальная дозагрузка эти статьи не берёт (repository.get_articles_needing_full_text
     пропускает network_region='external'): с РФ-адреса они отдают 403, а попытка там
-    ОДНА — статья получила бы failed навсегда. Тело есть кому добрать только на
+    ОДНА: статья получила бы failed навсегда. Тело есть кому добрать только на
     воркере, которому сайт отвечает.
 
-    Шлём минимум — id, адрес и заголовок: заголовок нужен воркеру не для отображения,
+    Шлём минимум, id, адрес и заголовок: заголовок нужен воркеру не для отображения,
     а чтобы отбить подменённый текст до того, как он поедет обратно.
     """
     ids = [int(x) for x in (payload.get("article_ids") or [])]
@@ -305,8 +305,8 @@ def process_refetch_text_payload(payload: dict[str, Any], heartbeat=None) -> dic
     """Сторона воркера: скачать страницы и вернуть тела. В базу не ходит.
 
     Биение на каждую статью обязательно: один недоступный хост стоит до 63 с
-    (3 попытки по 20 с), lease внешней задачи — 600 с. Без биения пакет из 25
-    статей не доживал до конца — его забирал реапер протухших lease на девятой,
+    (3 попытки по 20 с), lease внешней задачи: 600 с. Без биения пакет из 25
+    статей не доживал до конца: его забирал реапер протухших lease на девятой,
     задача уходила в ретрай и на третьей попытке умирала вместе со всем пакетом.
     Ровно этот урок уже был получен на ИИ-обработчиках (T2/24.07), но загрузочные
     написаны позже и его не унаследовали.
@@ -353,7 +353,7 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
     проверки мы бы аккуратно разложили чужой текст по статьям.
 
     Тело не лучше сохранённого не пишется (_refetch_improves): повторная дозагрузка не
-    затирает полное тело обрывком, а анонс — обрывком короче его.
+    затирает полное тело обрывком, а анонс: обрывком короче его.
 
     Суть, тег и балл статьи к этому моменту часто уже посчитаны по анонсу: пакет ИИ
     ставится в том же цикле раньше. Записанное тело с приростом отправляет их в
@@ -388,8 +388,8 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
             continue
         stored = str(article.get("raw_text") or "")
         if not _refetch_improves(stored, text, status):
-            # Тело на месте; попытку отмечаем — от неё считаются сутки до следующей
-            # (external_refetch_candidates). Та же страница, что уже лежит, — прежний статус.
+            # Тело на месте; попытку отмечаем: от неё считаются сутки до следующей
+            # (external_refetch_candidates). Та же страница, что уже лежит, прежний статус.
             same = text == stored
             repository.update_article_full_text(
                 article_id, None, bool(article.get("text_truncated")),
@@ -401,17 +401,17 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
             article_id, text, normalize.is_truncated(text), status, "external")
         applied += 1
         # too_short тоже в счёт: промежуточное тело иначе становилось точкой отсчёта, и полное
-        # после него пересчёта не давало (ревью PR #87: 167 → 440 → 440 → 850 — ноль пересчётов).
+        # после него пересчёта не давало (ревью PR #87: 167 → 440 → 440 → 850: ноль пересчётов).
         replaced.append((article_id, stored, written or text))
     return {"applied": applied, "skipped": skipped, "mismatched": mismatched, "no_gain": no_gain,
             "recompute": fulltext_recompute.after_bodies(replaced)}
 
 
 def _refetch_improves(stored: str, text: str, status: str) -> bool:
-    """Тело с NL лучше сохранённого — короче сохранённого не пишем никогда.
+    """Тело с NL лучше сохранённого: короче сохранённого не пишем никогда.
 
-    ok — по правилу локальной дозагрузки (article_fetcher._is_better_text): сохранённое короче
-    порога — любое полное лучше, полное — только вдвое длиннее. too_short — если длиннее
+    ok: по правилу локальной дозагрузки (article_fetcher._is_better_text): сохранённое короче
+    порога: любое полное лучше, полное: только вдвое длиннее. too_short: если длиннее
     сохранённого: промежуточное тело всё же лучше анонса."""
     from oiltech_digest.ingestion.article_fetcher import _is_better_text
 

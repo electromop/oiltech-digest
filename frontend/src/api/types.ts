@@ -28,13 +28,13 @@ export type Source = {
   last_seen_article_url: string | null;
   last_seen_published_at: string | null;
   // Архив источника: не опрашивается И его статьи не показываются в ленте.
-  // NULL = активен. Отдельно от enabled — выключение ленту не чистило.
+  // NULL = активен. Отдельно от enabled: выключение ленту не чистило.
   archived_at: string | null;
 };
 
 export type SourceHealth = {
   id: number;
-  // archived — источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // archived: источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
   // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
   verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;
@@ -42,165 +42,6 @@ export type SourceHealth = {
   articles_30d?: number | null;
   last_article_at: string | null;
 };
-
-export type SourceCandidate = {
-  id: number;
-  url: string;
-  normalized_domain: string;
-  name: string | null;
-  candidate_type: string | null;
-  status: "new" | "researching" | "test_parsing" | "needs_human_review" | "approved" | "rejected" | "paused";
-  discovered_by: string;
-  discovery_reason: string | null;
-  topic: string | null;
-  expected_tags_json?: string[];
-  confidence: number | null;
-  tested_articles: number;
-  relevant_articles: number;
-  avg_score: number | null;
-  duplicate_count: number;
-  noise_count: number;
-  recommended_action: "add" | "test_more" | "reject" | "human_review" | null;
-  review_comment: string | null;
-  approved_source_id: number | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-export type SourceCandidateTriageRow = SourceCandidate & {
-  triage_priority: number;
-  triage_reason: string;
-};
-
-export type SourceCandidateArticle = {
-  id: number;
-  candidate_id: number;
-  title: string;
-  url: string;
-  published_at: string | null;
-  raw_text?: string | null;
-  language: string | null;
-  text_chars: number;
-  prefilter_keep: boolean | null;
-  prefilter_reason: string | null;
-  relevant: boolean | null;
-  relevance_reason: string | null;
-  relevance_model: string | null;
-  summary: string | null;
-  tag_id: number | null;
-  tag_confidence: number | null;
-  tag_rationale: string | null;
-  total_score: number | null;
-  score_label: string | null;
-  processing_status: "new" | "ok" | "rejected" | "error";
-  error_message: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-export type SourceCandidateEvaluationResult = {
-  candidate_id: number;
-  task_id: number;
-  url: string;
-  collected: {
-    inserted_or_updated: number;
-    errors: number;
-  };
-  processed: {
-    processed: number;
-    relevant: number;
-    rejected: number;
-    errors: number;
-  };
-  metrics: {
-    tested_articles: number;
-    relevant_articles: number;
-    avg_score: number | null;
-    duplicate_count: number;
-    noise_count: number;
-  };
-  recommended_action: SourceCandidate["recommended_action"];
-  next_status: SourceCandidate["status"];
-  review_comment: string;
-  duration_ms: number;
-};
-
-export type SourceCandidateApprovePayload = {
-  name?: string | null;
-  source_type?: string;
-  parse_strategy?: "rss" | "request" | "playwright" | null;
-  enabled?: boolean;
-  category?: string | null;
-  priority?: number;
-  network_region?: "auto" | "ru" | "external";
-  scrape_after_approve?: boolean;
-};
-
-export type SourceCandidatePatchPayload = {
-  status?: SourceCandidate["status"];
-  recommended_action?: SourceCandidate["recommended_action"];
-  review_comment?: string | null;
-};
-
-export type AgentPlanAction = {
-  action_type: "discover_sources" | "review_source_candidate" | "recheck_source" | "tune_source_frequency" | "audit_existing_source";
-  priority: number;
-  topic?: string | null;
-  limit?: number;
-  query_hints?: string[];
-  memory_explanation?: {
-    query_hints?: string[];
-    promoted_combos?: Array<{
-      query: string;
-      domain: string;
-      score: number;
-      status: string;
-      reason?: string | null;
-    }>;
-    muted_combos?: Array<{
-      query: string;
-      domain: string;
-      score: number;
-      status: string;
-      reason?: string | null;
-    }>;
-    feedback?: Record<string, number>;
-  };
-  reason: string;
-  policy_decision?: "auto" | "human_review" | "blocked";
-  policy_reason?: string;
-  requires_human_approval?: boolean;
-  operator_label?: string | null;
-  operator_url?: string | null;
-  candidate_id?: number;
-  url?: string | null;
-  source_id?: number;
-  source_name?: string | null;
-  direction?: "increase" | "decrease" | string;
-  recommended_frequency?: string | null;
-  audit_status?: string;
-  audit_problem_type?: string;
-  audit_severity?: string;
-  audit_confidence?: string;
-  audit_recommendation?: string;
-  audit_recommendation_label?: string;
-  audit_reasons?: string[];
-  audit_decision_log?: Record<string, unknown>;
-};
-
-export type AgentMemory = {
-  id: number;
-  memory_key: string;
-  memory_type: "topic" | "domain" | "source" | "query" | "plan" | "rule" | string;
-  subject: string;
-  status: "active" | "muted" | "rejected" | string;
-  score: number;
-  facts_json: Record<string, unknown>;
-  last_seen_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
 export type SignalEvidence = {
   id: number;
   signal_id: number;
@@ -232,7 +73,7 @@ export type Signal = {
   maturity: "reject" | "watch" | "shortlist" | "proven" | string | null;
   confidence: number;
   score: number;
-  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов. У оценённого вторым
+  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label): как у бизнес-сигналов. У оценённого вторым
   // вызовом «Карточки» это подпись ступени, без баллов подписи нет (#132).
   score_label?: string | null;
   why_now: string | null;
@@ -246,67 +87,67 @@ export type Signal = {
   updated_at: string | null;
   user_status?: "watch" | "digest" | "archive" | "noise" | "duplicate" | string;
   selected_for_digest?: boolean;
-  // Месяц выпуска карточки (ГГГГ-ММ) — месяц поступления на радар по Москве, и закрыт ли он
+  // Месяц выпуска карточки (ГГГГ-ММ): месяц поступления на радар по Москве, и закрыт ли он
   // (окно месяца, решение владельца 29.09): в закрытом месяце «В дайджест» и «Убрать» не
-  // работают, сервер отвечает 409. Считает сервер — своей формулы у экрана нет.
+  // работают, сервер отвечает 409. Считает сервер: своей формулы у экрана нет.
   digest_month?: string;
   digest_locked?: boolean;
   user_comment?: string | null;
   user_status_updated_at?: string | null;
   feedback_count?: number;
   merged_count?: number;
-  // Тема — одна из 13 тематик заказчика; false — свободный текст первой партии радара (13.09).
+  // Тема: одна из 13 тематик заказчика; false: свободный текст первой партии радара (13.09).
   theme_is_topic?: boolean;
-  // Правки людей из ОС поверх текста модели: исходные — для справки.
+  // Правки людей из ОС поверх текста модели: исходные: для справки.
   original_title_ru?: string | null;
   original_summary?: string | null;
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
-  // Поля судьи (замечания Виктора 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
-  // поступления на радар; null — у карточки до правки или судья даты не нашёл.
+  // Поля судьи (замечания эксперта заказчика 29.09). event_date: дата самого события (ГГГГ-ММ-ДД), а не
+  // поступления на радар; null: у карточки до правки или судья даты не нашёл.
   event_date?: string | null;
   signal_category?: "technology" | "business" | "other" | string | null;
   mixed_events?: boolean | null;
   mixed_events_reason?: string | null;
-  // Применимость для нефтесервиса (судья): direct — событие в нефтегазе, transferable — перенос из
-  // другой отрасли, none — связи нет (на радар не выходит). oilfield_application — где применить.
+  // Применимость для нефтесервиса (судья): direct: событие в нефтегазе, transferable: перенос из
+  // другой отрасли, none: связи нет (на радар не выходит). oilfield_application: где применить.
   oilfield_relevance?: "direct" | "transferable" | "none" | string | null;
   oilfield_application?: string | null;
   // Балл по профилю «Технологический радар»: подпункты ссылаются на критерии снимка (имя и вес
-  // на момент оценки). Нет профиля — балл общий, судьи.
+  // на момент оценки). Нет профиля: балл общий, судьи.
   score_profile?: string | null;
   score_items_json?: SignalScoreItem[] | null;
   criteria_snapshot?: Array<{ id: number; name: string; weight: number }> | null;
-  // Почему карточка не на радаре — в выборке «Отсеянные и скрытые».
+  // Почему карточка не на радаре: в выборке «Отсеянные и скрытые».
   hidden_reason?: string | null;
   // Почему такое решение (судья) и ход решения по шагам: судья, ревью пачки, тематика, отсев.
   verdict_reason?: string | null;
   decision_log?: Array<{ stage: string; text: string }> | null;
-  // Происхождение (#95): radar — находка поиска, feed — статья ленты, принятая отбором.
+  // Происхождение (#95): radar: находка поиска, feed: статья ленты, принятая отбором.
   origin?: "radar" | "feed" | string;
   origin_article_id?: number | null;
   // Карточка сигнала (#96, агент «Карточка сигнала»): значения справочников или «не определено»;
-  // null — агент поле ещё не заполнял. technology_maturity — зрелость технологии, а maturity выше —
+  // null: агент поле ещё не заполнял. technology_maturity, зрелость технологии, а maturity выше:
   // решение радара (наблюдать / кандидат / подтверждено).
   event_type?: string | null;
   region?: string | null;
   technology_class?: string | null;
   technology_maturity?: string | null;
-  // Компании-участники — только с цитатой из текста публикации (проверено кодом); страна участника (#137) — имя
-  // справочника стран, null — агент её не знает (у карточек до #137 поля нет).
+  // Компании-участники: только с цитатой из текста публикации (проверено кодом); страна участника (#137): имя
+  // справочника стран, null: агент её не знает (у карточек до #137 поля нет).
   participants_json?: Array<{ name: string; quote: string; verified?: boolean; country?: string | null }> | null;
-  // Страны события (#137): до трёх имён справочника стран; null — агент поле ещё не заполнял.
+  // Страны события (#137): до трёх имён справочника стран; null: агент поле ещё не заполнял.
   event_countries?: string[] | null;
-  // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null — дата судьи радара.
+  // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null: дата судьи радара.
   event_date_source?: string | null;
-  // Точность даты события (#132): day, month или year; у месяца и года event_date — первый день периода, и как
+  // Точность даты события (#132): day, month или year; у месяца и года event_date: первый день периода, и как
   // день он не показывается.
   event_date_precision?: "day" | "month" | "year" | string | null;
   // Кто поставил значение поля карточки: agent, radar_judge или human.
   card_set_by?: Record<string, string> | null;
   card_recipe?: Record<string, unknown> | null;
-  // Агент «Отбор» (#130): отрасль, решение и код причины отказа; «спорное» — почему; сбой без решения.
+  // Агент «Отбор» (#130): отрасль, решение и код причины отказа; «спорное»: почему; сбой без решения.
   industry?: "oilfield_services" | "oil_gas" | "other_industry" | string | null;
   otbor_decision?: "accept" | "reject" | string | null;
   reject_reason?: string | null;
@@ -315,7 +156,7 @@ export type Signal = {
   otbor_failure_reason?: string | null;
   // Короткая причина публикации в разделе отклонённого «кто убрал → причина» (только админу).
   section_reason?: string | null;
-  // Второй вызов «Карточки» (#132): ступень балла (её подпись — score_label), баллы «пересчитываются» после
+  // Второй вызов «Карточки» (#132): ступень балла (её подпись: score_label), баллы «пересчитываются» после
   // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
   score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
   scores_pending?: boolean;
@@ -355,7 +196,7 @@ export type SignalFeedbackBlock = {
 
 export type SignalScoreItem = {
   criterion_id: number;
-  // У «Свежести» без даты события в тексте балла нет: в итог она не входит (excluded — почему).
+  // У «Свежести» без даты события в тексте балла нет: в итог она не входит (excluded: почему).
   final_score: number | null;
   ai_score?: number | null;
   rationale?: string;
@@ -386,7 +227,7 @@ export type SignalFeedbackPayload = {
     | "merge_duplicate"
     // «Не тот блок»: бизнес-сигнал в технологическом радаре (встреча с заказчиком 21.09).
     | "wrong_block"
-    // «Оценка завышена» (03.10): находка годная, балл выше, чем она стоит — учит судью.
+    // «Оценка завышена» (03.10): находка годная, балл выше, чем она стоит: учит судью.
     | "overrated"
     // Прежняя шкала: с экрана убрана, но в старых записях встречается.
     | "needs_better_source"
@@ -398,287 +239,6 @@ export type SignalFeedbackPayload = {
   corrected_thesis?: string | null;
   duplicate_of_signal_id?: number | null;
 };
-
-export type AgentAction = {
-  id: number;
-  task_id: number | null;
-  action_type: string;
-  input_json: Record<string, unknown>;
-  output_json: Record<string, unknown>;
-  cost_usd: number;
-  duration_ms: number | null;
-  created_at: string | null;
-  task_kind: string | null;
-  task_status: string | null;
-  task_topic: string | null;
-  decision_title?: string;
-  decision_summary?: string;
-  decision_tone?: "neutral" | "good" | "warning" | "bad" | string;
-};
-
-export type AgentRun = {
-  id: number;
-  kind: string;
-  status: "running" | "ok" | "failed" | string;
-  trigger: string | null;
-  payload_json: Record<string, unknown>;
-  result_json: Record<string, unknown>;
-  error_message: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  created_at: string | null;
-  action_count: number;
-  job_count: number;
-  ok_job_count: number;
-  failed_job_count: number;
-};
-
-export type SourceDiscoveryQualityRow = {
-  subject: string;
-  candidates: number;
-  approved: number;
-  rejected: number;
-  paused: number;
-  needs_human_review: number;
-  test_more: number;
-  tested_articles: number;
-  relevant_articles: number;
-  noise_count: number;
-  avg_score: number | null;
-  approval_rate: number;
-  relevance_rate: number;
-};
-
-export type QueryMemoryRow = {
-  query: string;
-  topic: string | null;
-  score: number;
-  status: string;
-  found_candidates: number;
-  tested_articles: number;
-  relevant_articles: number;
-  avg_score: number | null;
-  empty_result: boolean;
-  relevance_rate: number;
-  last_seen_at: string | null;
-  updated_at: string | null;
-};
-
-export type SourceDiscoveryEvaluation = {
-  summary: {
-    candidates: number;
-    candidate_decisions: number;
-    candidate_agreement_rate: number;
-    source_memories: number;
-    sources_under_watch: number;
-    high_confidence_sources: number;
-    weak_rules: number;
-    recent_actions: number;
-  };
-  candidate_recommendations: {
-    total: number;
-    decided: number;
-    agreed: number;
-    disagreed: number;
-    agreement_rate: number;
-    by_recommendation: Array<{
-      recommendation: string;
-      total: number;
-      decided: number;
-      agreed: number;
-      disagreed: number;
-      agreement_rate: number;
-    }>;
-    disagreements: Array<Record<string, unknown>>;
-  };
-  source_audit: {
-    total: number;
-    under_watch: number;
-    confidence: Record<string, number>;
-    severity: Record<string, number>;
-    problems: Array<{ problem_type: string; count: number; avg_source_score: number }>;
-    recommendations: Array<{ recommendation: string; label: string; count: number; avg_source_score: number }>;
-    rules: Array<{
-      rule: string;
-      triggered: number;
-      suppressed: number;
-      confidence_low: number;
-      avg_source_score: number;
-      suppression_rate: number;
-    }>;
-    examples: Array<Record<string, unknown>>;
-  };
-  weak_rules: Array<{
-    rule: string;
-    triggered: number;
-    suppressed: number;
-    confidence_low: number;
-    avg_source_score: number;
-    suppression_rate: number;
-  }>;
-  recent_actions: {
-    total: number;
-    learning_events: number;
-    by_type: Array<{ action_type: string; count: number }>;
-  };
-};
-
-export type SourceDiscoveryReadinessIssue = {
-  severity: "info" | "warning" | "blocker" | string;
-  code: string;
-  message: string;
-};
-
-export type SourceDiscoveryReadiness = {
-  ok: boolean;
-  status: "ready" | "degraded" | "blocked" | string;
-  checks: Record<string, {
-    ok: boolean;
-    issues?: SourceDiscoveryReadinessIssue[];
-    recommendations?: string[];
-    [key: string]: unknown;
-  }>;
-  issues: SourceDiscoveryReadinessIssue[];
-  recommendations: string[];
-};
-
-export type AgentPlan = {
-  kind: "source_discovery_plan";
-  period: {
-    from: string;
-    to: string;
-    days: number;
-  };
-  inputs: {
-    topic_gaps: Array<Record<string, unknown>>;
-    source_quality_count: number;
-    candidate_count: number;
-    memory_count: number;
-    query_memory_count?: number;
-  };
-  policy?: {
-    auto: number;
-    human_review: number;
-    blocked: number;
-  };
-  learning?: {
-    candidates: number;
-    approved: number;
-    rejected: number;
-    paused: number;
-    needs_human_review: number;
-    test_more: number;
-    approval_rate: number;
-    rejection_rate: number;
-  };
-  actions: AgentPlanAction[];
-  memory_updates: Array<Record<string, unknown>>;
-  duration_ms: number;
-};
-
-export type SourceDiscoveryPlanPayload = {
-  days?: number;
-  target_per_topic?: number;
-  topic_limit?: number;
-  candidate_limit?: number;
-  max_actions?: number;
-  persist_memory?: boolean;
-  offline?: boolean;
-  evaluate?: boolean;
-};
-
-export type SourceDiscoveryDiscoverPayload = {
-  topic: string;
-  seed_url: string;
-  limit?: number;
-  offline?: boolean;
-  fetch_inspection?: boolean;
-  test_parse?: boolean;
-};
-
-export type SourceDiscoverySkippedCandidate = {
-  url: string;
-  domain: string;
-  reason: string;
-  source_id?: number;
-  source_name?: string;
-  verdict?: string | null;
-  retry_after?: string;
-  failure_count?: number;
-  last_reason?: string;
-};
-
-export type SourceDiscoveryDiscoverResult = {
-  candidates: SourceCandidate[];
-  existing_sources_skipped?: SourceDiscoverySkippedCandidate[];
-  cooldown_sources_skipped?: SourceDiscoverySkippedCandidate[];
-  quality_gate_sources_skipped?: SourceDiscoverySkippedCandidate[];
-  unavailable_sources_skipped?: SourceDiscoverySkippedCandidate[];
-  parse_failed_sources_skipped?: SourceDiscoverySkippedCandidate[];
-  duration_ms: number;
-};
-
-export type SourceDiscoveryLoopPayload = SourceDiscoveryPlanPayload & {
-  goal?: string;
-  max_iterations?: number;
-  fetch_inspection?: boolean;
-  test_parse?: boolean;
-  dry_run?: boolean;
-  auto_evaluate?: boolean;
-  article_limit?: number;
-  max_daily_loop_runs?: number;
-  max_daily_candidates?: number;
-  max_daily_evaluations?: number;
-};
-
-export type SourceDiscoveryLoopObservation = {
-  action_type?: string;
-  topic?: string | null;
-  priority?: number | null;
-  query_strategy?: string | null;
-  search_status?: string | null;
-  query_count?: number;
-  candidate_count?: number;
-  evaluated_count?: number;
-  evaluation_jobs?: number;
-  evaluation_errors?: number;
-  relevant_articles?: number;
-  avg_score?: number | null;
-  task_id?: number | null;
-};
-
-export type SourceDiscoveryLoopIteration = {
-  iteration: number;
-  policy?: Record<string, unknown> | null;
-  learning?: Record<string, unknown> | null;
-  action_count: number;
-  auto_action_count: number;
-  human_review_count: number;
-  observations: SourceDiscoveryLoopObservation[];
-};
-
-export type SourceDiscoveryLoopReflection = {
-  worked_topics: Array<Record<string, unknown>>;
-  empty_topics: Array<Record<string, unknown>>;
-  strong_strategies: Array<Record<string, unknown>>;
-  weak_strategies: Array<Record<string, unknown>>;
-  next_hints: Array<Record<string, unknown>>;
-  summary: Record<string, unknown>;
-};
-
-export type SourceDiscoveryLoopResult = {
-  run_id: number | null;
-  goal: string;
-  iterations: SourceDiscoveryLoopIteration[];
-  total_candidates: number;
-  empty_iterations: number;
-  terminal_reason: string;
-  reflection?: SourceDiscoveryLoopReflection;
-  budget?: Record<string, unknown>;
-  dry_run?: boolean;
-  duration_ms: number;
-};
-
 export type SourceDiagnostics = {
   verdict?: string;
   candidate_count?: number;
@@ -758,27 +318,8 @@ export type ScoreItem = {
   final_score: number;
   rationale?: string | null;
 };
-
-export type DashboardStats = {
-  total_articles: number;
-  // Весь объём базы (все статьи, включая отсев и вычищенные) — только под плитку «Всего».
-  all_articles?: number;
-  with_summary: number;
-  processed_articles: number;
-  // Почищено — статьи, убранные из выдачи перепроверкой релевантности (pending_deletion).
-  // Даёт сходимость: всего = почищено + остаётся в работе.
-  cleaned_articles?: number;
-  selected_for_digest: number;
-  avg_score: number;
-  sources: number;
-  // Счётчики по статусам — по ВСЕЙ базе (а не по загруженной странице), пер-юзерно.
-  status_counts?: Record<Article["status"], number>;
-  // Окно месяца, по которому посчитаны счётчики (и отдана лента).
-  window?: FeedWindowInfo;
-};
-
-// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month — запрошенный
-// месяц; read_only — это архив прошлого месяца, только просмотр.
+// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month: запрошенный
+// месяц; read_only это архив прошлого месяца, только просмотр.
 export type FeedWindowInfo = {
   months: string[];
   month: string | null;
@@ -800,37 +341,6 @@ export type FeedWindowPayload = FeedWindowInfo & {
   // дня экран «Дайджест» его соберёт (LOW-5 ревью PR #155).
   next_issue?: { month: string; materials: number; opens_on: string } | null;
 };
-
-export type BacklogTaskStatus = "new" | "in_progress" | "done" | "paused" | "rejected";
-
-export type BacklogTask = {
-  id: string;
-  section: "plan" | "tech" | "inbox";
-  priority: string;
-  title: string;
-  status: BacklogTaskStatus;
-  status_label: string;
-  updated: string;
-  area?: string | null;
-  details?: string | null;
-  due_date?: string | null;
-  comments?: BacklogComment[];
-};
-
-export type BacklogComment = {
-  id: string;
-  author: string;
-  text: string;
-  created_at: string;
-};
-
-export type BacklogPayload = {
-  tasks: BacklogTask[];
-  counts: Record<BacklogTaskStatus, number>;
-  backlog_path: string;
-  updated_at: string;
-};
-
 export type BackgroundJob = {
   id: number;
   kind: string;
@@ -954,7 +464,7 @@ export type ArticlePatch = {
 };
 
 export type DigestContentItem = {
-  // Сигнал радара в выпуске — не статья: у него signal_id, а article_id пуст.
+  // Сигнал радара в выпуске, не статья: у него signal_id, а article_id пуст.
   item_type?: "article" | "signal";
   article_id?: number | null;
   signal_id?: number | null;
@@ -1203,9 +713,6 @@ export type ManualArticleImportResult = {
 export type AuthResponse = {
   ok: boolean;
   user: User;
-  // Архивные модули, включённые флагом ARCHIVED_MODULES на сервере (по умолчанию пусто):
-  // только их экраны показываются в меню и открываются по ссылке.
-  archived_modules?: string[];
 };
 
 // Пароль верный, но учётка ждёт допуска (#113): сессии нет, нужен код от подтверждающих.
@@ -1233,7 +740,7 @@ export type MonthlyPlatformRow = {
 export type MonthlyAiCostRow = {
   month: string;
   model: string;
-  // feed — лента (суть, теги, скоринг…), radar — технологический радар (стадии radar_*).
+  // feed: лента (суть, теги, скоринг…), radar: технологический радар (стадии radar_*).
   area?: "feed" | "radar" | string;
   runs: number;
   cost_usd: number;
@@ -1284,10 +791,10 @@ export type AnalyticsCost = {
   calls: number;
   articles: number;
   cost_usd: number;
-  // Из cost_usd — технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
+  // Из cost_usd, технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
   // ленты он не входит.
   radar_cost_usd?: number;
-  // Курс ЦБ РФ на последний день месяца (у текущего — на сегодня); «допущение» — ЦБ недоступен.
+  // Курс ЦБ РФ на последний день месяца (у текущего: на сегодня); «допущение»: ЦБ недоступен.
   usd_rub: number;
   usd_rub_date: string | null;
   usd_rub_source: "ЦБ РФ" | "допущение" | string;
@@ -1307,7 +814,7 @@ export type MonthlyAnalytics = {
   // С какого балла «сильный сигнал» и «топ» (с 08.11 ступени балла сигнала, db/analytics.score_thresholds): по ним
   // подписи плиток и графиков. Нет поля (сервер до 08.11): прежние 60 и 70.
   score_thresholds?: { strong: number; top: number };
-  // Только администратору: стоимость — коммерческая сторона.
+  // Только администратору: стоимость: коммерческая сторона.
   ai_cost?: AnalyticsCost[];
   ai_cost_previous_same_period?: AnalyticsCost & { days: number };
 };
@@ -1334,7 +841,7 @@ export type UploadedDocument = {
 };
 
 // summary_json/claims_json приходят из БД как JSON: с сервера обещан список пунктов,
-// но тип здесь unknown НАМЕРЕННО — карточка не должна падать, если в поле окажется
+// но тип здесь unknown НАМЕРЕННО: карточка не должна падать, если в поле окажется
 // объект или строка, а не список (см. ErrorBoundary вокруг карточки).
 export type DocumentCard = {
   doc_type: string | null;
@@ -1376,7 +883,7 @@ export type DocumentUploadResult = {
   job_id?: number;
 };
 
-// Обратная связь человека: оценки 1–5 + быстрая причина + комментарий.
+// Обратная связь человека: оценки 1-5 + быстрая причина + комментарий.
 // Поля выведены из того, как заказчик уже пишет ОС руками (чат 10.09):
 // корректировка заголовка, актуальность статьи, качество источника, правки перевода.
 export type FeedbackEntry = {

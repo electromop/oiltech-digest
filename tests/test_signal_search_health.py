@@ -1,7 +1,7 @@
 """Сбой поиска радара виден админу.
 
 23-27.09 поиск (тогда Brave, 402: исчерпан месячный лимит) не отвечал во всех 13 темах: сигналов 0,
-а задача и прогон — ok, и пять дней этого никто не заметил. В итог темы шёл только
+а задача и прогон: ok, и пять дней этого никто не заметил. В итог темы шёл только
 web_status, причина терялась.
 
 Теперь итог темы хранит первую ошибку поиска GPT коротко, прогон хранит здоровье поиска, и это
@@ -104,7 +104,7 @@ def _daily_through_worker(monkeypatch, *, force: bool = False) -> dict:
     _route(monkeypatch, external=True)
     job_id = int(background_jobs.enqueue_daily_signal_discovery(force=force)["job"]["id"])
     # Часы базы в ВМ colima спешат и откатываются рывками (28.09: до 1,1 с назад за 20 с):
-    # задача с run_after = now() на миг «из будущего», и выдача её не видит — тест плавал.
+    # задача с run_after = now() на миг «из будущего», и выдача её не видит: тест плавал.
     with repository.get_connection() as conn:
         conn.execute("UPDATE background_jobs SET run_after = now() - interval '1 minute' WHERE id = %s", (job_id,))
         conn.commit()
@@ -118,7 +118,7 @@ def _daily_through_worker(monkeypatch, *, force: bool = False) -> dict:
         def no_database(*args, **kwargs):
             raise RuntimeError("у воркера NL нет базы")
 
-        for name in ("get_connection", "list_enabled_tags", "list_signal_agent_memory", "list_agent_memory"):
+        for name in ("get_connection", "list_enabled_tags", "list_signal_agent_memory"):
             worker.setattr(repository, name, no_database)
         result = signal_discovery.process_external_payload(json.loads(json.dumps(claimed["payload"])))
     completed = client.post(
@@ -165,7 +165,7 @@ def test_search_failure_gives_the_same_topic_summary_and_run_on_both_paths(radar
 
 @pytest.mark.parametrize("path", ["on_site", "through_worker"])
 def test_search_failure_keeps_job_ok_and_the_daily_rule(radar, monkeypatch, path):
-    """Прогон failed, а задача ok: правило «уже ставили в эти сутки» её видит — радар не
+    """Прогон failed, а задача ok: правило «уже ставили в эти сутки» её видит: радар не
     переставляется каждые полчаса (134 запуска за 5 дней в сентябре)."""
     _search_answers(monkeypatch, lambda topic: AIClientError(RATE_LIMIT))
     enqueued: list = []
@@ -188,7 +188,7 @@ def test_partial_search_failure_keeps_run_ok_with_health(radar, monkeypatch):
     assert run["status"] == "ok"
     assert run["error_message"] is None
     assert run["result"]["search_health"] == {"topics": 3, "failed": 2, "first_error": FIRST_ERROR}
-    # Тема, где поиск ответил пусто, — не сбой.
+    # Тема, где поиск ответил пусто, не сбой.
     assert [row["web_error"] for row in job["result_json"]["applied"]["topics"]] == [FIRST_ERROR, FIRST_ERROR, None]
 
 
@@ -220,7 +220,7 @@ def test_search_health_goes_to_admin_only(radar, monkeypatch):
     denied = _get("/api/signals/search-health", USER)
     assert denied.status_code == 403
     assert read == []  # до базы запрос не дошёл
-    # Лента радара обычного пользователя — прежняя: список карточек, здоровья поиска в ней нет.
+    # Лента радара обычного пользователя, прежняя: список карточек, здоровья поиска в ней нет.
     signals = _get("/api/signals", USER).json()
     assert [row["title"] for row in signals] == ["Прошлый сигнал"]
     assert not any("search_health" in row or "web_error" in row for row in signals)
@@ -256,12 +256,12 @@ def test_search_health_is_of_the_latest_finished_daily_run(radar):
     healthy = {"topics": 3, "failed": 0, "first_error": None}
     _job_with_run(daily=True, run_status="failed", health=failed, minutes_ago=3 * 24 * 60)
     latest_daily = _job_with_run(daily=True, run_status="ok", health=healthy, minutes_ago=24 * 60)
-    _job_with_run(daily=False, run_status="failed", health=failed, minutes_ago=60)  # ручной прогон — не ежедневный
+    _job_with_run(daily=False, run_status="failed", health=failed, minutes_ago=60)  # ручной прогон: не ежедневный
     _job_with_run(daily=True, run_status="running", health=None, minutes_ago=5)  # ещё идёт
 
     health = _get("/api/signals/search-health", ADMIN).json()["search_health"]
 
-    # После успешного прогона сбоя нет — экран плашку не покажет.
+    # После успешного прогона сбоя нет: экран плашку не покажет.
     assert (health["job_id"], health["failed"], health["topics"]) == (latest_daily, 0, 3)
 
 

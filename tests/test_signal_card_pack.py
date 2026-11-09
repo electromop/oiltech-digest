@@ -1,6 +1,6 @@
 """Пакет эксперту для карточки сигнала (#94): справочники на утверждение и таблица разметки.
 
-Шов — команда `signal-card-expert-pack` на изолированной базе. Статьи и сигналы здесь
+Шов: команда `signal-card-expert-pack` на изолированной базе. Статьи и сигналы здесь
 синтетические: настоящая таблица уходит эксперту вне репозитория (он публичный)."""
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ MACHINE = [
     "RESEARCH_SUMMARY", "JUDGE_VERDICT", "2026-07-03",
 ]
 # Издатель может прислать что угодно: «=» в начале заголовка Excel счёл бы формулой, а
-# управляющий символ openpyxl не пишет вовсе — выгрузка падала бы целиком.
+# управляющий символ openpyxl не пишет вовсе: выгрузка падала бы целиком.
 HOSTILE_TITLE = '=HYPERLINK("https://evil.example") '
 CONTROL = "\x0b"
 
@@ -106,10 +106,10 @@ def _radar(key, category, theme, *, fetched=True, filtered=False, seen="2026-09-
 def corpus(isolated_db):
     with repository.get_connection() as conn:
         source_id, roots = _source_and_tags(conn)
-        # Часть статей помечена дочерним тегом: тема — корневой.
+        # Часть статей помечена дочерним тегом: тема: корневой.
         child = conn.execute("INSERT INTO tags (name, parent_id) VALUES ('Бурение: долота', %s) RETURNING id",
                              (roots[0],)).fetchone()[0]
-        # Полезная статья — балл не ниже порога дайджеста или отметка «в дайджест»; шумная — балл ниже
+        # Полезная статья: балл не ниже порога дайджеста или отметка «в дайджест»; шумная: балл ниже
         # порога или отметка «шум». Отметка человека сильнее балла.
         useful = _seed_feed(conn, source_id, roots + [child], 30)
         noise = _seed_feed(conn, source_id, roots, 10, score=30, prefix="noise")
@@ -130,7 +130,7 @@ def corpus(isolated_db):
     business = [_radar(f"biz{i}", "business", THEMES[i % 2]) for i in range(8)]
     excluded = [
         _radar("filtered", "technology", THEMES[0], filtered=True),
-        _radar("nofetch", "technology", THEMES[0], fetched=False),  # текст — сводка модели, не страница
+        _radar("nofetch", "technology", THEMES[0], fetched=False),  # текст: сводка модели, не страница
     ]
     merged = _radar("merged", "business", THEMES[0])
     with repository.get_connection() as conn:
@@ -173,7 +173,7 @@ def test_dictionaries_are_versioned_nonempty_and_unique():
     assert len(companies) >= 30
     names = [company["name"] for company in companies]
     assert len(names) == len(set(names))
-    # Одно написание — одна компания: иначе алиас свёл бы двух участников к одному имени.
+    # Одно написание, одна компания: иначе алиас свёл бы двух участников к одному имени.
     spellings = [spelling.lower() for company in companies for spelling in [company["name"], *company["aliases"]]]
     assert len(spellings) == len(set(spellings))
 
@@ -202,14 +202,14 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     radar = {item["signal_id"] for item in items if item["origin"] == "radar"}
     assert len(items) == 50 and len(feed) == 30 and len(radar) == 20
     assert feed <= corpus["feed"] and not feed & corpus["not_feed"]
-    # Эксперт размечает в основном полезное: 24 полезных и 6 шумных — намеренно, проверить «нет связи».
+    # Эксперт размечает в основном полезное: 24 полезных и 6 шумных: намеренно, проверить «нет связи».
     strata = {stratum: {item["article_id"] for item in items if item.get("stratum") == stratum}
               for stratum in ("useful", "noise")}
     assert len(strata["useful"]) == 24 and strata["useful"] <= corpus["useful"]
     assert len(strata["noise"]) == 6 and strata["noise"] <= corpus["noise"]
     assert len(radar & corpus["tech"]) == 15 and len(radar & corpus["business"]) == 5
-    # Строки вперемешку: блоками доли выдавали бы эксперту решение машины — шумные шли бы последними
-    # статьями ленты, технологии — первыми сигналами радара.
+    # Строки вперемешку: блоками доли выдавали бы эксперту решение машины: шумные шли бы последними
+    # статьями ленты, технологии: первыми сигналами радара.
     _, _, header, rows = _markup(out)
     stratum_of = {item["id"]: item["stratum"] for item in items}
     order = [stratum_of[row[header.index("ID")].value] for row in rows]
@@ -229,7 +229,7 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
         assert value not in cells, value
     assert CONTROL not in cells
     assert all(cell.data_type != "f" for row in rows for cell in row)
-    # Таблица и манифест — об одних и тех же входах: отпечаток — от текста в таблице.
+    # Таблица и манифест, об одних и тех же входах: отпечаток: от текста в таблице.
     column = {name: index for index, name in enumerate(header)}
     by_id = {row[column["ID"]].value: row for row in rows}
     for item in items:
@@ -239,7 +239,7 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
             assert len(text) == signal_card_pack.TEXT_LIMIT == 6000
             assert by_id[item["id"]][column["Заголовок"]].value.startswith("=HYPERLINK")
 
-    # Разметка — вслепую: колонки атрибутов пусты; у справочных — выпадающий список.
+    # Разметка, вслепую: колонки атрибутов пусты; у справочных: выпадающий список.
     attributes = [name for name, _ in signal_card_pack.MARKUP_COLUMNS]
     assert all(row[column[name]].value is None for row in rows for name in attributes)
     validated = {}
@@ -256,8 +256,8 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
 
 
 def test_feed_signals_of_the_unified_store_stay_out_of_the_radar_part(corpus, tmp_path):
-    # Единое хранилище (#95): принятая статья ленты — сигнал «бизнес» со статьёй-публикацией. Радарная
-    # часть — только находки поиска, иначе сигналы ленты заняли бы квоту «бизнес».
+    # Единое хранилище (#95): принятая статья ленты: сигнал «бизнес» со статьёй-публикацией. Радарная
+    # часть: только находки поиска, иначе сигналы ленты заняли бы квоту «бизнес».
     from oiltech_digest.db import feed_signals
 
     assert feed_signals.sync_feed_signals(collected_since="2026-01-01")["signals_created"] >= len(corpus["feed"])
@@ -291,8 +291,8 @@ def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, t
 
 
 def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, capsys):
-    # Владелец 15.10: в первой таблице половина статей ленты — не про нефтесервис (цены, газификация,
-    # происшествия). Отбор пропускает всё «про ТЭК»; полезность — балл не ниже порога дайджеста или
+    # Владелец 15.10: в первой таблице половина статей ленты: не про нефтесервис (цены, газификация,
+    # происшествия). Отбор пропускает всё «про ТЭК»; полезность: балл не ниже порога дайджеста или
     # отметка «в дайджест», а отметка «шум» делает статью шумной при любом балле.
     with repository.get_connection() as conn:
         source_id, roots = _source_and_tags(conn)
@@ -300,11 +300,11 @@ def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, cap
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=20, prefix="digest-low"), "digest")
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=95, prefix="noise-high"), "noise")
         _seed_feed(conn, source_id, roots, 1, score=30, prefix="weak")
-        _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")  # балла ещё нет — не знаем
+        _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")  # балла ещё нет: не знаем
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=80, prefix="duplicate"), "duplicate")
-        # Отметка одна на статью (#111): «в дайджест» при низком балле — полезная.
+        # Отметка одна на статью (#111): «в дайджест» при низком балле: полезная.
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=40, prefix="both"), "digest")
-        # «Архив» ставят и «скрыть», и «убрать из дайджеста» — по нему не понять, полезна ли статья.
+        # «Архив» ставят и «скрыть», и «убрать из дайджеста»: по нему не понять, полезна ли статья.
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=90, prefix="archived"), "archive")
         conn.commit()
 
@@ -316,8 +316,8 @@ def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, cap
 
 
 def test_a_short_stratum_is_not_filled_from_its_neighbour(isolated_db, tmp_path, capsys):
-    # Добор из соседней доли тихо вернул бы прежний перекос: недостающий шум — полезными статьями,
-    # недостающий бизнес — технологиями.
+    # Добор из соседней доли тихо вернул бы прежний перекос: недостающий шум: полезными статьями,
+    # недостающий бизнес: технологиями.
     with repository.get_connection() as conn:
         source_id, roots = _source_and_tags(conn)
         _seed_feed(conn, source_id, roots, 30)
@@ -340,7 +340,7 @@ def test_a_short_stratum_is_not_filled_from_its_neighbour(isolated_db, tmp_path,
 
 def test_block_pages_and_unreadable_texts_are_not_offered_to_the_expert(isolated_db, capsys):
     # С прода, первая выгрузка 15.10: докачка радара сохранила страницу блокировки вместо статьи,
-    # а один сигнал радара — на китайском. Разметить их эксперт не может.
+    # а один сигнал радара: на китайском. Разметить их эксперт не может.
     blocked = "Доступ с вашего IP-адреса ограничен. Отключите VPN/прокси (если включены) и обновите страницу. " * 3
     chinese = "大庆油田采油八厂第四作业区407注采班中控室内，集输工端坐在操作台前，目光在数据大屏上快速扫过。" * 4
     with repository.get_connection() as conn:
@@ -370,7 +370,7 @@ def test_incomplete_sample_is_reported_and_not_written(isolated_db, tmp_path, ca
     _run("--out", str(out))
     assert "не хватает" in capsys.readouterr().out
 
-    # 4 сигнала вместо 50 и радар одной категории — экзамен на таком наборе ничего не скажет.
+    # 4 сигнала вместо 50 и радар одной категории: экзамен на таком наборе ничего не скажет.
     with pytest.raises(SystemExit):
         _run("--out", str(out), "--apply")
     assert not out.exists()
@@ -386,7 +386,7 @@ def test_pack_is_never_written_inside_the_repository_and_dates_are_checked(corpu
         _run("--since", "август")
 
 
-# --- Ручной отбор (16.10): владелец проверил 50 строк — выгрузка по списку номеров и ручные поправки.
+# --- Ручной отбор (16.10): владелец проверил 50 строк: выгрузка по списку номеров и ручные поправки.
 
 def _ids_file(tmp_path, rows, name="ids.txt"):
     path = tmp_path / name
@@ -421,7 +421,7 @@ def test_ids_file_mistakes_are_refused(corpus, tmp_path):
     cases = {
         "unknown": (listed[:-1] + [("signal:999999", "business")], "нет среди кандидатов"),
         "not-a-candidate": ([(f"article:{sorted(corpus['not_feed'])[0]}", "useful")] + listed[1:], "нет среди кандидатов"),
-        # Доля сигнала радара — его категория: технология, записанная бизнесом, — ошибка списка.
+        # Доля сигнала радара, его категория: технология, записанная бизнесом, ошибка списка.
         "radar-stratum": ([(item, {tech: "business", business: "technology"}.get(item, stratum))
                            for item, stratum in listed], "доля не подходит"),
         "count": (listed[1:], "не те квоты"),
@@ -436,8 +436,8 @@ def test_ids_file_mistakes_are_refused(corpus, tmp_path):
 
 
 def test_overrides_fix_the_date_and_the_text_and_are_recorded(corpus, tmp_path):
-    # Владелец 16.10: у строк радара дата публикации пуста (у находок поиска в базе — дата события по
-    # версии модели), у части текстов в базе — меню сайта. Дату и текст берём с первоисточника вручную.
+    # Владелец 16.10: у строк радара дата публикации пуста (у находок поиска в базе: дата события по
+    # версии модели), у части текстов в базе: меню сайта. Дату и текст берём с первоисточника вручную.
     listed = _listed(corpus)
     radar_id, feed_id = listed[30][0], listed[0][0]
     fixes = tmp_path / "fixes.json"
@@ -477,7 +477,7 @@ def test_overrides_fix_the_date_and_the_text_and_are_recorded(corpus, tmp_path):
 
 def test_manifest_freezes_the_agent_inputs_and_the_table_names_the_publisher(corpus, tmp_path):
     # Экзамен #98 подаёт агенту входы из манифеста, а не из базы: поправки вручную видны только там.
-    # Тип издателя нужен агенту #96 — компания-издатель участник своей новости, издание — нет.
+    # Тип издателя нужен агенту #96: компания-издатель участник своей новости, издание: нет.
     out = tmp_path / "pack"
 
     _run("--out", str(out), "--apply")

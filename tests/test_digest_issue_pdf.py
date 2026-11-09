@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from oiltech_digest.db import connection, repository
 from oiltech_digest.processing import digest as digest_module
-from tests.digest_pdf_support import image_host  # noqa: F401 — фикстура
+from tests.digest_pdf_support import image_host  # noqa: F401: фикстура
 from tests.digest_pdf_support import pdf_figures, pdf_images, pdf_links, pdf_pages
 from tests.digest_user_path_support import (AUTOMATION, DRILLING, ENERGY, HSE, MARKET, SEPT, add_article, add_signal,
                                             breakdown, feed_signal, issue_key, msk, set_card, utc)
-from tests.digest_user_path_support import chromium, issue  # noqa: F401 — фикстуры
+from tests.digest_user_path_support import chromium, issue  # noqa: F401: фикстуры
 
 
 def _keys(materials: list[dict]) -> list[tuple[str, int]]:
@@ -54,7 +54,7 @@ def test_section_follows_the_signal_category_and_each_section_starts_a_new_sheet
     assert "02 Технологические сигналы" in pages[2]
     assert all(title in pages[2] for title in ("Роботизированная буровая", "Находка без категории",
                                                 "Находка другого блока"))
-    # Выгрузка файлом — тот же выпуск, что предпросмотр на экране.
+    # Выгрузка файлом: тот же выпуск, что предпросмотр на экране.
     assert pdf_pages(analyst.export("pdf")) == pages
 
     analyst.mark(a["hi"], status="new")
@@ -113,7 +113,7 @@ def test_cards_go_by_rubric_of_the_spec_table_then_by_score_and_the_draft_does_n
         ("АВТОМАТИЗАЦИЯ", "Цифровой двойник"),
     ]
     assert materials["technology"][5]["label"] == "Практика прошлых периодов"
-    # Письмо и DOCX — по черновику: статьи в его порядке, за ними сигналы.
+    # Письмо и DOCX, по черновику: статьи в его порядке, за ними сигналы.
     assert analyst.issue()[:2] == [("article", a["mid"]), ("article", a["hi"])]
 
     text = " ".join(pdf_pages(analyst.preview_pdf()))
@@ -125,8 +125,8 @@ def test_cards_go_by_rubric_of_the_spec_table_then_by_score_and_the_draft_does_n
 
 def test_label_comes_from_the_card_event_type_with_the_special_cases_of_the_spec(issue, chromium):
     """Подпись после рубрики говорит о стадии события: по типу события «Карточки» (таблица спеки), масштабирование при
-    зрелости «масштабное внедрение» — «Масштабное применение», «нет события» — «Рыночный контекст» в бизнес-разделе и
-    «Обзор практики» в технологиях. Тип не определён — подписи нет, и «/» в строке рубрики не висит."""
+    зрелости «масштабное внедрение»: «Масштабное применение», «нет события»: «Рыночный контекст» в бизнес-разделе и
+    «Обзор практики» в технологиях. Тип не определён: подписи нет, и «/» в строке рубрики не висит."""
     analyst = issue["analyst"]
     cases = {
         "regulation": ("business", "регулирование", None, "Регуляторная инициатива"),
@@ -167,7 +167,7 @@ def test_every_event_type_of_the_card_dictionary_has_a_label():
 def test_card_shows_five_criteria_from_its_score_breakdown_and_the_link_with_oilfield_services(issue, chromium):
     """Таблица под карточкой: пять баллов из разбивки балла сигнала, той же, что на карточке витрины, имена из снимка
     набора на момент оценки, целые от 0 до 100; «Свежесть» без даты события «не входит»; без разбивки «нет оценки по
-    критериям» под именами критериев профиля раздела; итога в таблице нет. Связь: «прямая», «переносимая», пусто — «не
+    критериям» под именами критериев профиля раздела; итога в таблице нет. Связь: «прямая», «переносимая», пусто: «не
     определено»."""
     from oiltech_digest.processing.seed import seed_default_scoring_criteria
 
@@ -200,7 +200,7 @@ def test_card_shows_five_criteria_from_its_score_breakdown_and_the_link_with_oil
     pages = ["".join(text.split()) for text in pdf_pages(analyst.preview_pdf())]
     assert _flat("Ценность (имя на момент оценки) Технологическая новизна Зрелость / доказательность Переносимость "
                  "Свежесть Связь с нефтесервисом 85 60 75 100 не входит переносимая") in pages[2]
-    # Без разбивки — имена набора раздела (технологии: «Технологический радар») и «нет оценки по критериям».
+    # Без разбивки, имена набора раздела (технологии: «Технологический радар») и «нет оценки по критериям».
     assert _flat("Ценность для нефтесервиса Технологическая новизна Зрелость / доказательность Переносимость Свежесть "
                  "Связь с нефтесервисом нет оценки по критериям не определено") in pages[2]
     assert _flat("Стратегическая значимость для нефтесервиса") in pages[1]
@@ -232,7 +232,7 @@ def test_summary_is_printed_whole_and_an_empty_field_leaves_no_empty_caption(iss
 
 
 def test_title_and_read_link_lead_to_the_main_publication_and_nothing_links_inside_the_pdf(issue, chromium):
-    """Заголовок и «Читать материал» ведут на главную публикацию: у статьи ленты — на неё саму, у находки радара — на
+    """Заголовок и «Читать материал» ведут на главную публикацию: у статьи ленты: на неё саму, у находки радара: на
     лучшую ссылку. У материала коллеги без адреса заголовок без ссылки и «Читать материал» нет. Переходов внутри PDF,
     «Стр. N» и содержания нет."""
     analyst, a = issue["analyst"], issue["a"]
@@ -348,7 +348,7 @@ def test_refresh_pdf_rebuilds_past_the_preview_memory_and_replaces_the_remembere
 
     assert own_pictures(analyst.preview_pdf()) == 0
     image_host.revive()
-    assert own_pictures(analyst.preview_pdf()) == 0  # тот же выпуск — из памяти предпросмотра
+    assert own_pictures(analyst.preview_pdf()) == 0  # тот же выпуск: из памяти предпросмотра
 
     assert own_pictures(analyst.preview_pdf(fresh=1)) == 1
     assert own_pictures(analyst.preview_pdf()) == 1
@@ -357,8 +357,8 @@ def test_refresh_pdf_rebuilds_past_the_preview_memory_and_replaces_the_remembere
 
 def test_article_without_a_feed_signal_goes_as_a_signal_without_category_by_its_root_tag(issue, chromium):
     """Статья, собранная до 01.08.2026, сигнала ленты не имеет (бывает только в закрытых месяцах): она не ломает
-    сборку и идёт как сигнал без категории, то есть в технологии, а рубрика — по её корневому тегу (тег статьи
-    дочерний, корень — тема)."""
+    сборку и идёт как сигнал без категории, то есть в технологии, а рубрика: по её корневому тегу (тег статьи
+    дочерний, корень: тема)."""
     analyst, a = issue["analyst"], issue["a"]
     with connection.get_connection() as conn:
         root = conn.execute("INSERT INTO tags (name) VALUES (%s) RETURNING id", (DRILLING,)).fetchone()[0]

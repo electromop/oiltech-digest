@@ -9,7 +9,7 @@ const CYCLE = "Получится цикл: «Газпром» → «Газпр�
 const pairsFixture: CompanyParent[] = [
   {
     id: 1, child_name: "Газпром нефть", parent_name: "Газпром", note: "контроль 95%", created_by: 7,
-    created_by_email: "viktor@example.test", created_at: "2026-10-20T09:30:00+00:00",
+    created_by_email: "expert@example.test", created_at: "2026-10-20T09:30:00+00:00",
   },
   {
     id: 2, child_name: "Газпромнефть-Заполярье", parent_name: "Газпром нефть", note: null, created_by: null,
@@ -85,10 +85,10 @@ describe("экран «Дочерние общества»", () => {
 
     const zapolyarye = (await screen.findByRole("cell", { name: "Газпромнефть-Заполярье" })).closest("tr") as HTMLElement;
     const cellsOf = (row: HTMLElement) => within(row).getAllByRole("cell").map((cell) => cell.textContent);
-    // Учётку автора удалили — «кто» пусто.
+    // Учётку автора удалили: «кто» пусто.
     expect(cellsOf(zapolyarye).slice(0, 5)).toEqual(["Газпромнефть-Заполярье", "→Газпром нефть", "", "", "20.10.2026, 13:00"]);
     const neft = screen.getByRole("cell", { name: "контроль 95%" }).closest("tr") as HTMLElement;
-    expect(cellsOf(neft).slice(0, 5)).toEqual(["Газпром нефть", "→Газпром", "контроль 95%", "viktor@example.test", "20.10.2026, 12:30"]);
+    expect(cellsOf(neft).slice(0, 5)).toEqual(["Газпром нефть", "→Газпром", "контроль 95%", "expert@example.test", "20.10.2026, 12:30"]);
     expect(screen.getByText("2 связи")).toBeInTheDocument();
 
     await waitFor(() => expect(document.querySelectorAll("#company-parents-names option")).toHaveLength(5));

@@ -1,7 +1,7 @@
-"""Общее для тестов пакета эксперту «Отбора» (#129, шов 2 спеки #128): синтетика на изолированной базе —
-статьи ленты, находки радара, материалы коллег, темы и критерии — и прежняя разметка карточки во временной
+"""Общее для тестов пакета эксперту «Отбора» (#129, шов 2 спеки #128): синтетика на изолированной базе:
+статьи ленты, находки радара, материалы коллег, темы и критерии: и прежняя разметка карточки во временной
 папке; ответы эксперта для таблицы разметки. Настоящий пакет уходит эксперту вне репозитория (он публичный).
-Тесты — test_otbor_pack.py (выгрузка), test_otbor_markup.py (проверка разметки) и test_otbor_exam.py (экзамен,
+Тесты: test_otbor_pack.py (выгрузка), test_otbor_markup.py (проверка разметки) и test_otbor_exam.py (экзамен,
 #133)."""
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from oiltech_digest import cli, otbor_pack_format as pack_format
 from oiltech_digest.db import repository
 from oiltech_digest.processing import seed
 
-UNTIL = "2026-10-22"  # окно ленты — 30 дней до него: с 22.09
+UNTIL = "2026-10-22"  # окно ленты, 30 дней до него: с 22.09
 THEMES = {
     "Бурение": "Строительство скважин и буровое оборудование",
     "Добыча": "Механизированная добыча и внутрискважинное оборудование",
@@ -33,7 +33,7 @@ MACHINE = [
     "JUDGE_WHY", "JUDGE_APPLICATION", "JudgeCo", "RESEARCH_SUMMARY", "JUDGE_VERDICT", "FILTER_REASON",
     "MIXED_REASON", "SearchModelPublisher", "AUTHOR_COMMENT", "AuthorCo", "2026-01-03", "MODEL_TITLE",
 ]
-MODEL_DATE = "2026-01-03"  # дата события по версии модели поиска; у «старых» — и дата судьи
+MODEL_DATE = "2026-01-03"  # дата события по версии модели поиска; у «старых»: и дата судьи
 BLOCK_PAGE = "Доступ с вашего IP-адреса ограничен. Отключите VPN/прокси и обновите страницу. " * 3
 CHINESE = "大庆油田采油八厂第四作业区407注采班中控室内，集输工端坐在操作台前，目光在数据大屏上快速扫过。" * 4
 
@@ -89,9 +89,9 @@ def article(conn, source_id, key, day, *, relevant=True, text=None, tag_id=None,
 
 def radar(key, *, category="technology", stage=None, mixed=False, old=False, links=1, fetched=True,
           seen="2026-10-01", archived=False, corpus_article=None, unfetched=(), brave=()) -> int:
-    """Находка поиска: ссылки — страницы, которые докачали (текст издателя), дата ссылки — модели поиска.
-    corpus_article — вторая ссылка ведёт на статью корпуса (заголовок и издатель — её). unfetched — номера ссылок
-    поиска «режима ChatGPT», которые не докачали: заголовок и текст у них от модели поиска. brave — номера ссылок
+    """Находка поиска: ссылки: страницы, которые докачали (текст издателя), дата ссылки: модели поиска.
+    corpus_article: вторая ссылка ведёт на статью корпуса (заголовок и издатель: её). unfetched: номера ссылок
+    поиска «режима ChatGPT», которые не докачали: заголовок и текст у них от модели поиска. brave: номера ссылок
     обычного поиска без докачки: заголовок из выдачи, его написал издатель."""
     signal_id = repository.upsert_signal({
         "signal_key": key, "title": f"JUDGE_TITLE {key}", "title_ru": f"JUDGE_TITLE {key}", "theme": "Бурение",
@@ -135,7 +135,7 @@ def material(conn, key, *, kind="event", url=None, day="2026-10-10", signal_id=N
 
 
 def build_corpus(tmp_path: Path) -> dict:
-    """Кандидатов каждой группы — ровно по квоте (исключения видны по составу), плюс то, что в пакет не идёт."""
+    """Кандидатов каждой группы: ровно по квоте (исключения видны по составу), плюс то, что в пакет не идёт."""
     seed.seed_default_scoring_criteria()
     with repository.get_connection() as conn:
         for order, (name, description) in enumerate(THEMES.items()):
@@ -168,7 +168,7 @@ def build_corpus(tmp_path: Path) -> dict:
         mismatch = article(conn, source, "mismatch", "2026-10-05", tag_id=tag)
         conn.execute("UPDATE articles SET full_text_status = 'mismatch' WHERE id = %s", (mismatch,))
         excluded_feed += [reprint, deleted, mismatch]
-        # Статья корпуса — ссылка находки; собрана до окна ленты, её кандидатом не стать.
+        # Статья корпуса: ссылка находки; собрана до окна ленты, её кандидатом не стать.
         corpus_link = article(conn, source, "corpus-link", "2026-09-10", tag_id=tag)
         conn.commit()
     filtered = {
@@ -207,7 +207,7 @@ def build_corpus(tmp_path: Path) -> dict:
 
 def write_card_pack(folder: Path, feed_ids: list[int], radar_ids: list[int]) -> dict:
     """Прежний пакет карточки (#94): манифест с замороженными входами и заполненная экспертом таблица. Текст
-    манифеста — не текст базы (у прежних строк были поправки с первоисточника)."""
+    манифеста: не текст базы (у прежних строк были поправки с первоисточника)."""
     folder.mkdir(parents=True)
     relevance = ["прямая", "переносимая", "нет связи", "прямая", "прямая", "переносимая"]
     items = []
@@ -272,13 +272,13 @@ def technology(**overrides):
 
 
 def rejected(**overrides):
-    """Отказ, как у эксперта: категории нет — у отклонённого витрины нет (решение владельца 23.10)."""
+    """Отказ, как у эксперта: категории нет: у отклонённого витрины нет (решение владельца 23.10)."""
     return {"Отрасль": "нефтегаз", "Связь с нефтесервисом": "нет связи", "Брать или нет": "не брать",
             "Причина отказа": "Нефтегаз без связи с нефтесервисом", "Общая оценка": "Не релевантно", **overrides}
 
 
 def fill(out, answers, *, name="otbor_markup_done.xlsx", edit=None):
-    """Таблица пакета, заполненная ответами эксперта {ID: {колонка: значение}}, — рядом с манифестом."""
+    """Таблица пакета, заполненная ответами эксперта {ID: {колонка: значение}}, рядом с манифестом."""
     book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
     sheet = book[pack_format.MARKUP_SHEET]
     header = [cell.value for cell in sheet[1]]

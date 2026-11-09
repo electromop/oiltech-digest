@@ -8,9 +8,9 @@
 Сухой прогон заново скачивает и разбирает страницы и даёт поимённый план «id, было, стало».
 Записывается ровно этот план, без новой перекачки: владелец согласует список, и между согласованием
 и записью он не меняется. Правило узкое, как у починки тел: в план идут только статьи, у которых
-сохранённая дата противоречит дате в адресе; «стало» — дата нового разбора той же страницы,
+сохранённая дата противоречит дате в адресе; «стало»: дата нового разбора той же страницы,
 сошедшаяся с адресом, или пусто, если не сошлась ни одна (лента возьмёт дату поступления). Пишется
-только дата публикации и её копия у публикации сигнала ленты: перерасчёт ИИ по исправленным —
+только дата публикации и её копия у публикации сигнала ленты: перерасчёт ИИ по исправленным:
 отдельное решение владельца, он платный.
 """
 
@@ -40,25 +40,25 @@ class DateDecision:
     reason: str
     url: str
     old: datetime | None
-    new: datetime | None  # после записи плана: у замены — дата нового разбора, у пропуска — прежняя
+    new: datetime | None  # после записи плана: у замены: дата нового разбора, у пропуска: прежняя
     page: datetime | None  # что даёт новый разбор страницы
     page_status: str  # read | not downloaded | not the article
 
 
 def _feed_month(published: datetime | None, collected: datetime) -> str:
-    """Месяц ленты и выпуска — как feed_window.period_month_sql (часовой пояс базы, на проде UTC)."""
+    """Месяц ленты и выпуска: как feed_window.period_month_sql (часовой пояс базы, на проде UTC)."""
     return feed_window.month_key((published or collected).astimezone(timezone.utc))
 
 
 def _skip_reason(article: dict[str, Any]) -> str | None:
-    """Почему статья не идёт в план при любой странице; None — сохранённая дата противоречит адресу."""
+    """Почему статья не идёт в план при любой странице; None: сохранённая дата противоречит адресу."""
     in_url = dates.url_date(article.get("url"))
     if in_url is None:
         return "url has no date"
     if article.get("published_at") is None:
         return "no stored date"
-    # В базе — метка времени: полночь UTC там бывает и настоящим временем (выпуск в 17:00 по
-    # Калифорнии), поэтому дефект — только то, что не объясняется сдвигом пояса.
+    # В базе, метка времени: полночь UTC там бывает и настоящим временем (выпуск в 17:00 по
+    # Калифорнии), поэтому дефект: только то, что не объясняется сдвигом пояса.
     if in_url.agrees(article["published_at"], timestamp=True):
         return "stored date agrees with url"
     return None
@@ -100,8 +100,8 @@ def repair_dates(
 ) -> dict[str, Any]:
     """Сухой прогон: скачать и заново разобрать страницы статей; план замен и отчёт по каждой статье.
 
-    В базу не пишет. `changes` — план для apply_plan, `skipped` — остальные статьи с причиной и тем,
-    что даёт их страница (так смотрят статьи, под которые правил нет), `months` — переезды по месяцам
+    В базу не пишет. `changes`: план для apply_plan, `skipped`: остальные статьи с причиной и тем,
+    что даёт их страница (так смотрят статьи, под которые правил нет), `months`: переезды по месяцам
     ленты после записи плана."""
     if fetch_fn is None:
         from oiltech_digest.ingestion.http_client import fetch as fetch_fn  # noqa: PLW0127
@@ -136,7 +136,7 @@ def repair_dates(
 
 
 def load_plan(path: str | Path) -> list[tuple[int, datetime | None, datetime | None]]:
-    """Замены из файла сухого прогона (`--save-plan`): (id, было, стало). Не план — ValueError."""
+    """Замены из файла сухого прогона (`--save-plan`): (id, было, стало). Не план: ValueError."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return [(int(item["article_id"]), _moment(item["old"]), _moment(item["new"])) for item in data["changes"]]

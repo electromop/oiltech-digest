@@ -6,16 +6,6 @@ from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 
 
-def _stub_empty_daily_budget(monkeypatch):
-    # Разовый поиск источников сверяется с суточным бюджетом агента — без заглушки тест
-    # читал бы счётчики из настоящей базы.
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "source_discovery_daily_usage",
-        lambda: {"loop_runs": 0, "candidates_created": 0, "candidate_evaluations": 0},
-    )
-
-
 def test_background_job_run_records_success(monkeypatch, isolated_db):
     job = repository.create_background_job("test_success", {"value": 3})
 
@@ -144,7 +134,7 @@ def test_enqueue_daily_signal_discovery_skips_existing_daily_job(monkeypatch):
     result = background_jobs.enqueue_daily_signal_discovery()
 
     assert result["enqueued"] is False and result["reason"] == "already_scheduled"
-    assert 0 < result["lookback_hours"] <= 24  # окно — с полуночи по Москве
+    assert 0 < result["lookback_hours"] <= 24  # окно: с полуночи по Москве
     assert called == []
 
 
@@ -261,291 +251,6 @@ def test_daily_radar_queued_yesterday_holds_and_force_bypasses(isolated_db, monk
     assert background_jobs.enqueue_daily_signal_discovery()["reason"] == "not_due"
     assert background_jobs.enqueue_daily_signal_discovery(force=True)["enqueued"] is True
     assert len(enqueued) == 1
-
-
-def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatch):
-    _stub_empty_daily_budget(monkeypatch)
-    from oiltech_digest.source_discovery import agent
-    from oiltech_digest.source_discovery import sandbox
-
-    progress = []
-    configs = []
-
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "update_background_job_progress",
-        lambda job_id, value: progress.append((job_id, value)),
-    )
-    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit: [{"topic": "роботизация бурения"}])
-
-    def fake_discover(config):
-        configs.append(config)
-        return {
-            "task_id": 7,
-            "search": {"status": "ok"},
-            "candidates": [
-                {
-                    "id": 42,
-                    "url": "https://example.com/newsroom",
-                    "recommended_action": "add",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(agent, "discover_sources", fake_discover)
-    monkeypatch.setattr(
-        sandbox,
-        "evaluate_source_candidate",
-        lambda candidate_id, article_limit, offline, collect, process: {
-            "candidate_id": candidate_id,
-            "metrics": {"tested_articles": article_limit, "relevant_articles": 3},
-            "recommended_action": "add",
-            "next_status": "needs_human_review",
-        },
-    )
-
-    result = background_jobs._run_discover_source_candidates(
-        {
-            "topic_limit": 1,
-            "limit": 5,
-            "offline": True,
-            "auto_evaluate": True,
-            "article_limit": 4,
-        },
-        job_id=123,
-    )
-
-    assert result["topics"] == ["роботизация бурения"]
-    assert result["candidates"] == 1
-    assert result["evaluated"] == 1
-    assert result["results"][0]["candidates"][0]["id"] == 42
-    assert result["results"][0]["evaluations"][0]["metrics"]["tested_articles"] == 4
-    assert configs[0].topic == "роботизация бурения"
-    assert configs[0].limit == 5
-    assert configs[0].offline is True
-    assert progress[0] == (123, 10)
-    assert progress[-1] == (123, 95)
-
-
-def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch):
-    _stub_empty_daily_budget(monkeypatch)
-    from oiltech_digest.source_discovery import agent
-
-    jobs = []
-
-    monkeypatch.setattr(background_jobs.config, "EXTERNAL_WORKERS_ENABLED", True)
-    monkeypatch.setattr(background_jobs.config, "AI_EXECUTION_REGION", "external")
-    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
-    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit: [{"topic": "роботизация бурения"}])
-    monkeypatch.setattr(
-        agent,
-        "discover_sources",
-        lambda config: {
-            "task_id": 7,
-            "search": {"status": "ok"},
-            "candidates": [{"id": 42, "url": "https://example.com/newsroom", "recommended_action": "add"}],
-        },
-    )
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs})
-        # Репозиторий может переложить задачу в другую полосу (lanes.route) — метка берётся из строки задачи.
-        or {"id": 99, "queue_name": "external-agents"},
-    )
-
-    result = background_jobs._run_discover_source_candidates(
-        {
-            "topic_limit": 1,
-            "limit": 5,
-            "offline": False,  # флажок «Без ИИ» снят — оценка в очередь ИИ
-            "auto_evaluate": True,
-            "article_limit": 4,
-        },
-        job_id=123,
-    )
-
-    assert result["evaluated"] == 0
-    assert result["evaluation_jobs"] == 1
-    assert result["results"][0]["evaluations"][0]["queued"] == "external-agents"
-    assert jobs[0]["agent_run_id"] is None
-    assert jobs == [
-        {
-            "kind": "source_candidate_evaluate",
-            "payload": {
-                "candidate_id": 42,
-                "article_limit": 4,
-                "offline": False,
-                "collect": True,
-                "process": True,
-            },
-            "queue_name": "external-ai",
-            "execution_region": "external",
-            "capability": "openai",
-            "max_attempts": 1,
-            "agent_run_id": None,
-        }
-    ]
-
-
-def test_discover_source_candidates_job_stops_at_daily_candidate_budget(monkeypatch):
-    # Дефект 4: лимит смотрел только цикл, разовый поиск и шаги плана шли сверх него.
-    from oiltech_digest.source_discovery import agent
-
-    searched = []
-    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "source_discovery_daily_usage",
-        lambda: {"loop_runs": 99, "candidates_created": 100, "candidate_evaluations": 0},
-    )
-    monkeypatch.setattr(agent, "discover_sources", lambda config: searched.append(config.topic) or {"candidates": []})
-
-    result = background_jobs._run_discover_source_candidates({"topics": ["бурение"]}, job_id=1)
-
-    assert searched == []
-    assert result["candidates"] == 0
-    assert result["budget_stop"]["reason"] == "daily_candidate_budget_reached"
-    assert result["budget_stop"]["limits"]["candidates_created"] == 100
-
-
-def test_discover_source_candidates_job_does_not_enqueue_evaluation_over_budget(monkeypatch):
-    from oiltech_digest.source_discovery import agent
-
-    jobs = []
-    monkeypatch.setattr(background_jobs.config, "EXTERNAL_WORKERS_ENABLED", True)
-    monkeypatch.setattr(background_jobs.config, "AI_EXECUTION_REGION", "external")
-    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
-    # До поиска лимит оценок ещё не исчерпан (4 из 5); к моменту постановки оценки его
-    # добрали параллельные задачи.
-    evaluations_today = iter([4, 5])
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "source_discovery_daily_usage",
-        lambda: {"loop_runs": 0, "candidates_created": 1, "candidate_evaluations": next(evaluations_today)},
-    )
-    monkeypatch.setattr(
-        agent,
-        "discover_sources",
-        lambda config: {"task_id": 7, "search": {"status": "ok"}, "candidates": [{"id": 42}]},
-    )
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append(kind) or {"id": 99, "queue_name": "external-agents"},
-    )
-
-    result = background_jobs._run_discover_source_candidates(
-        {"topics": ["бурение"], "offline": False, "max_daily_evaluations": 5},
-        job_id=1,
-    )
-
-    assert jobs == []
-    assert result["evaluation_jobs"] == 0
-    assert result["results"][0]["evaluations"] == [{"candidate_id": 42, "skipped": "daily_evaluation_budget_reached"}]
-    assert result["budget_stop"]["reason"] == "daily_evaluation_budget_reached"
-
-
-def test_source_discovery_plan_job_builds_plan_and_queues_actions(monkeypatch):
-    from oiltech_digest.source_discovery import planner
-
-    progress = []
-    config_seen = {}
-    finished = []
-
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "update_background_job_progress",
-        lambda job_id, value: progress.append((job_id, value)),
-    )
-    monkeypatch.setattr(background_jobs.repository, "create_agent_run", lambda *args, **kwargs: 555)
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "finish_agent_run",
-        lambda run_id, **kwargs: finished.append({"run_id": run_id, **kwargs}),
-    )
-
-    def fake_build_plan(config):
-        config_seen.update({
-            "days": config.days,
-            "target_per_topic": config.target_per_topic,
-            "topic_limit": config.topic_limit,
-            "candidate_limit": config.candidate_limit,
-            "max_actions": config.max_actions,
-            "persist_memory": config.persist_memory,
-            "run_id": config.run_id,
-        })
-        return {"actions": [{"action_type": "discover_sources", "topic": "бурение", "priority": 90, "limit": 5}]}
-
-    monkeypatch.setattr(planner, "build_plan", fake_build_plan)
-    monkeypatch.setattr(
-        planner,
-        "enqueue_plan_actions",
-        lambda plan, offline, evaluate, run_id=None: {
-            "queued": 1,
-            "jobs": [{"job_id": 77, "topic": "бурение", "run_id": run_id}],
-        },
-    )
-
-    result = background_jobs._run_source_discovery_plan(
-        {
-            "days": 14,
-            "target_per_topic": 8,
-            "topic_limit": 2,
-            "candidate_limit": 5,
-            "max_actions": 3,
-            "persist_memory": False,
-            "offline": True,
-            "evaluate": False,
-        },
-        job_id=123,
-    )
-
-    assert config_seen == {
-        "days": 14,
-        "target_per_topic": 8,
-        "topic_limit": 2,
-        "candidate_limit": 5,
-        "max_actions": 3,
-        "persist_memory": False,
-        "run_id": 555,
-    }
-    assert result["run_id"] == 555
-    assert result["queued"]["queued"] == 1
-    assert result["queued"]["jobs"][0]["run_id"] == 555
-    assert finished[0]["run_id"] == 555
-    assert finished[0]["status"] == "ok"
-    assert progress == [(123, 20), (123, 70), (123, 95)]
-
-
-def test_source_discovery_loop_job_runs_loop(monkeypatch):
-    from oiltech_digest.source_discovery import loop
-
-    progress = []
-    captured = {}
-    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: progress.append((job_id, value)))
-    monkeypatch.setattr(
-        loop,
-        "run_agent_loop",
-        lambda config: captured.update({"config": config}) or {
-            "run_id": 12,
-            "iterations": [],
-            "total_candidates": 0,
-            "terminal_reason": "no_auto_actions",
-        },
-    )
-
-    result = background_jobs._HANDLERS["source_discovery_loop"](
-        {"goal": "найти", "max_iterations": 2, "max_actions": 3},
-        99,
-    )
-
-    assert result["run_id"] == 12
-    assert captured["config"].goal == "найти"
-    assert captured["config"].max_iterations == 2
-    assert captured["config"].max_actions == 3
-    assert captured["config"].test_parse is True
-    assert progress == [(99, 10), (99, 95)]
 
 
 def test_parse_source_once_job_routes_rss_source(monkeypatch):
@@ -786,14 +491,14 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     """Зависшая ЛОКАЛЬНАЯ AI-обработка, уже начавшая жечь OpenAI, не перезапускается.
 
     requeue переиспользует тот же job_id, а get_articles_by_ids не пропускает уже
-    обработанные статьи — повторный прогон означает повторный РЕАЛЬНЫЙ расход.
+    обработанные статьи: повторный прогон означает повторный РЕАЛЬНЫЙ расход.
     Дедуп биллинга по (job_id, article_id, stage) тут не помог бы: он лишь СПРЯТАЛ бы
     второй, реально оплаченный вызов из отчёта о стоимости. Поэтому помечаем failed
-    без авто-ретрая. Внешний контур (external-ai) не затрагиваем — у него свой lease.
+    без авто-ретрая. Внешний контур (external-ai) не затрагиваем: у него свой lease.
 
-    Дискриминатор — ai_started_at, НЕ progress: claim/mark-running форсят progress в 10
+    Дискриминатор, ai_started_at, НЕ progress: claim/mark-running форсят progress в 10
     ещё до тела обработчика, поэтому «до-AI» кейс здесь реалистичен (running, progress=10,
-    ai_started_at IS NULL) — ровно он ломался у прежнего гарда `progress > 0`.
+    ai_started_at IS NULL): ровно он ломался у прежнего гарда `progress > 0`.
     """
     stale_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
@@ -833,9 +538,9 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     # Упала ДО первого вызова модели (ai_started_at IS NULL) → безопасно перезапустить.
     assert repository.get_background_job(int(not_started["id"]))["status"] == "queued"
 
-    # Внешний контур не задет — у него собственная защита (lease/finalize, T2/H1).
+    # Внешний контур не задет: у него собственная защита (lease/finalize, T2/H1).
     # Проверяем именно 'running': прежняя версия теста ждала 'queued', а это состояние
-    # давали ОБА поведения — и «не тронули», и «переочередили». Ассерт был слеп ровно
+    # давали ОБА поведения: и «не тронули», и «переочередили». Ассерт был слеп ровно
     # к тому багу, который потом устроил вечную петлю 1181.
     assert repository.get_background_job(int(external["id"]))["status"] == "running"
 
@@ -862,13 +567,13 @@ def _claimed_external_job(*, max_attempts: int = 3, lease_seconds: int = 600) ->
 def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
     """Регресс на вечную петлю 1181 (24.07).
 
-    Батч 800 статей идёт ~93 минуты — дольше stale_minutes=60. Воркер при этом жив
+    Батч 800 статей идёт ~93 минуты: дольше stale_minutes=60. Воркер при этом жив
     и продлевает lease heartbeat'ом перед каждой статьёй. Уборщик по настенным часам
     возвращал такую задачу в очередь вопреки живому lease: воркер получал 409, бросал
     батч, тут же забирал ту же задачу (она самая старая в очереди) и начинал с первой
     статьи. Ровно раз в час, вечно, каждый круг заново оплачивая OpenAI.
 
-    Настоящий признак жизни внешней задачи — lease, и он здесь свежий. Значит уборщик
+    Настоящий признак жизни внешней задачи: lease, и он здесь свежий. Значит уборщик
     по часам обязан пройти мимо.
     """
     job = _claimed_external_job()
@@ -887,7 +592,7 @@ def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
     assert stored["status"] == "running"
     assert stored["lease_token_hash"] == "hash-live"
 
-    # А по своему собственному сигналу — протухшему lease — она разбирается штатно.
+    # А по своему собственному сигналу, протухшему lease, она разбирается штатно.
     with connection.get_connection() as conn:
         conn.execute(
             "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = %s",
@@ -899,11 +604,11 @@ def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
 
 
 def test_external_job_running_without_lease_is_not_orphaned(isolated_db):
-    """У внешней задачи осталась ОДНА страховка — lease, значит она обязана крыть всё поле.
+    """У внешней задачи осталась ОДНА страховка: lease, значит она обязана крыть всё поле.
 
     `release_external_background_job_finalize` откатывает finalizing→running и рассчитывает,
     что задачу подберёт путь восстановления. Пока уборщик по часам тоже трогал внешние задачи,
-    'running' без lease подобрал бы он. Теперь не подберёт — поэтому «lease IS NULL» обязано
+    'running' без lease подобрал бы он. Теперь не подберёт: поэтому «lease IS NULL» обязано
     считаться потерей, иначе задача зависла бы в 'running' навсегда.
     """
     job = _claimed_external_job()
@@ -954,7 +659,7 @@ def test_lost_external_job_dies_after_max_attempts_instead_of_looping(isolated_d
 
     assert repository.get_background_job(job_id)["attempts"] == 3
 
-    # Третий круг: попытки исчерпаны — задача закрывается, а не возвращается в очередь.
+    # Третий круг: попытки исчерпаны: задача закрывается, а не возвращается в очередь.
     expire_lease()
     outcome = repository.requeue_expired_external_leases()
 
@@ -987,7 +692,7 @@ def test_stale_local_job_dies_after_max_attempts(isolated_db):
 def test_worker_loop_sweep_reaps_expired_external_leases(monkeypatch, isolated_db):
     """T21: реапер lease обязан работать по расписанию, а не только внутри claim.
 
-    Пока воркер занят длинной задачей, за новой он не приходит — значит и протухшие
+    Пока воркер занят длинной задачей, за новой он не приходит: значит и протухшие
     lease никто не разбирает. Умри воркер совсем, задачи висели бы 'running' вечно,
     и интерфейс показывал бы идущую работу, которой нет.
     """
@@ -1022,45 +727,3 @@ def test_worker_loop_once_processes_queued_jobs(monkeypatch, isolated_db):
     assert repository.get_background_job(int(first["id"]))["result_json"] == {"value": 2}
     assert repository.get_background_job(int(second["id"]))["status"] == "ok"
     assert repository.get_background_job(int(second["id"]))["result_json"] == {"value": 4}
-
-
-def test_discover_source_candidates_offline_does_not_enqueue_paid_ai(monkeypatch):
-    _stub_empty_daily_budget(monkeypatch)
-    # Флажок «Без ИИ» (offline=True): оценка по правилам на месте, в очередь ИИ — ничего.
-    # Раньше флажок здесь не смотрелся, и с воркером агентов на NL каждое нажатие
-    # «Поставить в очередь» стоило бы до 26 вызовов модели на кандидата.
-    from oiltech_digest.source_discovery import agent
-
-    jobs = []
-    evaluated = []
-    monkeypatch.setattr(background_jobs.config, "EXTERNAL_WORKERS_ENABLED", True)
-    monkeypatch.setattr(background_jobs.config, "AI_EXECUTION_REGION", "external")
-    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
-    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit: [{"topic": "роботизация бурения"}])
-    monkeypatch.setattr(
-        agent,
-        "discover_sources",
-        lambda config: {"task_id": 7, "search": {"status": "ok"},
-                        "candidates": [{"id": 42, "url": "https://example.com/newsroom", "recommended_action": "add"}]},
-    )
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append(kind) or {"id": 99},
-    )
-    from oiltech_digest.source_discovery import sandbox
-
-    def fake_evaluate(candidate_id, **kwargs):
-        evaluated.append((candidate_id, kwargs.get("offline")))
-        return {"metrics": {}, "recommended_action": "review", "next_status": "review"}
-
-    monkeypatch.setattr(sandbox, "evaluate_source_candidate", fake_evaluate)
-
-    result = background_jobs._run_discover_source_candidates(
-        {"topic_limit": 1, "limit": 5, "offline": True, "auto_evaluate": True, "article_limit": 4},
-        job_id=123,
-    )
-
-    assert jobs == []
-    assert result["evaluation_jobs"] == 0
-    assert evaluated == [(42, True)]

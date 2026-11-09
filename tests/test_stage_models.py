@@ -1,8 +1,8 @@
 """Свои модели стадий, «Дедуп» без отката на модель ленты и совместимость с gpt-6 (переезд с gpt-5 до 11.12.2026).
 
-Уровни рассуждения — страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra — 03.11.2026): gpt-6.1-sol и
-gpt-6-astra принимают low…max (ни none, ни minimal); gpt-6-luna, gpt-6-sol, gpt-6.1-terra и gpt-5.6-sol/-terra/-luna —
-none…max (без minimal). Наш код слал gpt-6 «minimal» как есть — каждый вызов без строки уровня получил бы 400.
+Уровни рассуждения: страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra: 03.11.2026): gpt-6.1-sol и
+gpt-6-astra принимают low…max (ни none, ни minimal); gpt-6-luna, gpt-6-sol, gpt-6.1-terra и gpt-5.6-sol/-terra/-luna:
+none…max (без minimal). Наш код слал gpt-6 «minimal» как есть: каждый вызов без строки уровня получил бы 400.
 Суть и перевод (#150) проверяет test_processing.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("model, configured, expected", [
-    # GPT-6.1 Sol и Astra: ни none, ни minimal — самый лёгкий уровень у них low.
+    # GPT-6.1 Sol и Astra: ни none, ни minimal: самый лёгкий уровень у них low.
     ("gpt-6.1-sol", "minimal", "low"),
     ("gpt-6.1-sol", "none", "low"),
     ("gpt-6.1-sol", "", "low"),
@@ -47,11 +47,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
     ("gpt-5.6-sol", "minimal", "none"),
     ("gpt-5.6-terra", "", "none"),
     ("gpt-5.6-luna", "xhigh", "xhigh"),
-    # Имя с датой — по началу имени.
+    # Имя с датой: по началу имени.
     ("gpt-6-luna-2026-12-01", "minimal", "none"),
-    # Незнакомая модель семейства gpt-6 — уровень, который принимают все известные gpt-6: low.
+    # Незнакомая модель семейства gpt-6, уровень, который принимают все известные gpt-6: low.
     ("gpt-6.2-nova", "minimal", "low"),
-    # Прежние поколения — как до правки.
+    # Прежние поколения: как до правки.
     ("gpt-5-mini", "none", "minimal"),
     ("gpt-5-2025-08-07", "", "minimal"),
     ("gpt-5.4-mini", "minimal", "none"),
@@ -92,7 +92,7 @@ SCHEMA = {"name": "s", "schema": {"type": "object"}}
 
 
 def test_client_raises_budget_when_model_cannot_do_requested_level(monkeypatch):
-    """Стадия просила minimal и лимит без запаса, а gpt-6.1-sol minimal не умеет — уходит low, и лимит растёт на запас low.
+    """Стадия просила minimal и лимит без запаса, а gpt-6.1-sol minimal не умеет: уходит low, и лимит растёт на запас low.
     Иначе рассуждение съело бы весь ответ («ответ без текста», как 28.09)."""
     post = _Post()
     monkeypatch.setattr(openai_client.requests, "post", post)
@@ -136,7 +136,7 @@ def test_research_call_raises_budget_too(monkeypatch):
     ("gpt-6-sol", (2.0, 10.0)),
     ("gpt-6-luna", (0.10, 0.50)),
     ("gpt-6-astra", (10.0, 50.0)),
-    # Без своей строки gpt-5.6-* попали бы под префикс gpt-5 — по цене 1,25 / 10.
+    # Без своей строки gpt-5.6-* попали бы под префикс gpt-5: по цене 1,25 / 10.
     ("gpt-5.6-sol", (4.0, 20.0)),
     ("gpt-5.6-terra", (2.0, 12.0)),
     ("gpt-5.6-luna", (0.20, 1.20)),
@@ -263,7 +263,7 @@ def test_radar_run_without_dedup_model_fails_before_search(monkeypatch):
     assert searched == []
 
 
-# --- Расход судьи перепечаток — в ai_processing_runs -------------------------------------------------------------
+# --- Расход судьи перепечаток: в ai_processing_runs -------------------------------------------------------------
 
 
 def test_worker_verdict_carries_tokens(monkeypatch):
@@ -292,7 +292,7 @@ def _reprint_runs(job_id: int) -> list[tuple]:
 
 
 def test_reprint_usage_is_recorded_for_partial_and_rest_but_not_for_dry_run(isolated_db):
-    # Частичный итог (воркер остановлен) и итог остатка той же задачи судят разные пары — строки складываются.
+    # Частичный итог (воркер остановлен) и итог остатка той же задачи судят разные пары: строки складываются.
     external_ai.apply_reprint_review_result({"reprint_review": True, "verdicts": [_verdict(1, 2)]}, job_id=41)
     external_ai.apply_reprint_review_result({"reprint_review": True, "verdicts": [_verdict(3, 4), _verdict(5, 6)]},
                                             job_id=41)
@@ -362,7 +362,7 @@ def test_client_reads_object_despite_broken_wrapper(monkeypatch, text, expected)
 
 
 def test_client_reads_object_before_cut_repeat(monkeypatch):
-    """Форма из переигровки: целый объект, мусор и оборванный повтор — берётся целый."""
+    """Форма из переигровки: целый объект, мусор и оборванный повтор: берётся целый."""
     text = '{"same_event": true, "reason": "одно"}\n\nОтвет:\n{"same_event": tr'
     monkeypatch.setattr(openai_client.requests, "post", _Post(text))
     client = OpenAIResponsesClient(api_key="k", model="gpt-6-luna")

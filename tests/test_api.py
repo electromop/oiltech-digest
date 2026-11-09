@@ -6,9 +6,9 @@ from oiltech_digest import api, contract, feed_window
 
 
 def _freeze_inside_month(monkeypatch, month: str) -> None:
-    """Часы — середина месяца `month`: выпуск этого месяца открыт для правки.
+    """Часы, середина месяца `month`: выпуск этого месяца открыт для правки.
 
-    С 23.09 черновик выпуска прошлого месяца не сохраняется (архив — только просмотр).
+    С 23.09 черновик выпуска прошлого месяца не сохраняется (архив: только просмотр).
     Тесты ниже проверяют само сохранение и писались, когда их месяц был текущим."""
     year, number = (int(part) for part in month.split("-"))
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(year, number, 15, 12, 0, tzinfo=feed_window.MSK))
@@ -161,7 +161,7 @@ def test_signal_feedback_endpoint_stores_learning(monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    # Сохранённый блок ОС (#130) — для списка на карточке: экран добавляет его, не перечитывая витрину.
+    # Сохранённый блок ОС (#130), для списка на карточке: экран добавляет его, не перечитывая витрину.
     block = body.pop("block")
     assert body == {"ok": True, "event_id": 11, "memory_ids": [21, 22], "memories": 2}
     assert {key: block[key] for key in ("id", "author", "verdict", "reason")} == {
@@ -241,11 +241,11 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    # Отметка общая (#111); учётка — последний поставивший.
+    # Отметка общая (#111); учётка: последний поставивший.
     assert captured == {"user_id": 3, "signal_id": 7, "status": "digest", "analyst_comment": "Берём в выпуск"}
     assert events[0][1]["signal_id"] == 7
     assert events[0][1]["user_id"] == 3
-    # Выбор в дайджест — пример «Сильный сигнал» для агента, со ссылкой на событие.
+    # Выбор в дайджест: пример «Сильный сигнал» для агента, со ссылкой на событие.
     assert learned == [(7, {"selected": True, "user_id": 3, "event_id": 12})]
 
 
@@ -329,779 +329,6 @@ def test_signal_memory_endpoint_uses_signal_agent_memory(monkeypatch):
     assert response.status_code == 200
     assert response.json()[0]["subject"] == "closed-loop control"
     assert captured == {"memory_type": "signal_glossary", "status": "active", "limit": 10}
-
-
-def test_source_candidates_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    monkeypatch.setattr(
-        api.repository,
-        "list_source_candidates",
-        lambda status=None, topic=None, limit=100: [
-            {
-                "id": 7,
-                "url": "https://example.com/news",
-                "status": status or "needs_human_review",
-                "topic": topic,
-                "tested_articles": 5,
-                "relevant_articles": 4,
-                "avg_score": 72,
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-candidates?status=needs_human_review&topic=бурение&limit=10")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload[0]["id"] == 7
-    assert payload[0]["status"] == "needs_human_review"
-    assert payload[0]["topic"] == "бурение"
-
-
-def test_source_candidate_triage_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "source_candidate_triage_report",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "id": 7,
-                "url": "https://example.com/news",
-                "normalized_domain": "example.com",
-                "status": "needs_human_review",
-                "recommended_action": "add",
-                "triage_priority": 120,
-                "triage_reason": "Можно добавлять после проверки человеком",
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-candidates/triage?limit=5")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["triage_priority"] == 120
-    assert captured == {"limit": 5}
-
-
-def test_source_discovery_evaluation_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    monkeypatch.setattr(
-        api.repository,
-        "list_source_candidates",
-        lambda limit=500: [
-            {"id": 1, "name": "Good", "status": "approved", "recommended_action": "add", "topic": "бурение", "avg_score": 80},
-            {"id": 2, "name": "Bad", "status": "rejected", "recommended_action": "add", "topic": "бурение", "avg_score": 10},
-        ],
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "list_agent_memory",
-        lambda **kwargs: [
-            {
-                "id": 1,
-                "subject": "Blocked Source",
-                "score": -60,
-                "facts_json": {
-                    "source_id": 11,
-                    "problem_type": "needs_external",
-                    "severity": "high",
-                    "confidence": "high",
-                    "recommendation": "move_to_external_region",
-                    "recommendation_label": "Перенести в external-worker",
-                    "decision_log": {
-                        "triggered_rules": [{"rule": "needs_external", "severity": "high"}],
-                        "suppressed_rules": [{"rule": "parser_suspect", "severity": "high"}],
-                    },
-                },
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "list_agent_actions",
-        lambda **kwargs: [{"action_type": "source_candidate_learning"}, {"action_type": "source_discovery_plan_built"}],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/evaluation?limit=500")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["summary"]["candidate_decisions"] == 2
-    assert payload["summary"]["candidate_agreement_rate"] == 0.5
-    assert payload["summary"]["sources_under_watch"] == 1
-    assert payload["source_audit"]["rules"][0]["rule"] == "parser_suspect"
-    assert payload["recent_actions"]["learning_events"] == 1
-
-
-def test_source_discovery_plan_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    from oiltech_digest.source_discovery import planner
-
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    configs = []
-    monkeypatch.setattr(
-        planner,
-        "build_plan",
-        lambda config: configs.append(config) or {"actions": [{"action_type": "discover_sources", "topic": "бурение"}]},
-    )
-    try:
-        response = TestClient(app).get(
-            "/api/source-discovery/plan?days=14&target_per_topic=8&topic_limit=2&candidate_limit=6&max_actions=3"
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["actions"][0]["topic"] == "бурение"
-    assert configs[0].days == 14
-    assert configs[0].target_per_topic == 8
-    assert configs[0].topic_limit == 2
-    assert configs[0].candidate_limit == 6
-    assert configs[0].max_actions == 3
-    assert configs[0].persist_memory is False
-
-
-def test_source_discovery_discover_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    from oiltech_digest.source_discovery import agent
-
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 5, "email": "admin@example.com", "role": "admin"}
-    configs = []
-    actions = []
-    monkeypatch.setattr(
-        agent,
-        "discover_sources",
-        lambda config: configs.append(config) or {
-            "topic": config.topic,
-            "candidates": [{"id": 11, "url": config.seed_urls[0]}],
-            "duration_ms": 123,
-        },
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "record_agent_action",
-        lambda *args, **kwargs: actions.append((args, kwargs)) or 1,
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-discovery/discover",
-            json={
-                "topic": "бурение",
-                "seed_url": "https://example.com/news",
-                "limit": 7,
-                "offline": True,
-                "fetch_inspection": True,
-                "test_parse": False,
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["result"]["candidates"][0]["id"] == 11
-    assert configs[0].topic == "бурение"
-    assert configs[0].seed_urls == ("https://example.com/news",)
-    assert configs[0].limit == 7
-    assert configs[0].dry_run is False
-    assert actions[0][1]["output_payload"]["candidate_ids"] == [11]
-
-
-def test_enqueue_source_discovery_plan_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.background_jobs,
-        "enqueue",
-        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {
-            "id": 77,
-            "kind": kind,
-            "queue_name": kwargs["queue_name"],
-            "execution_region": kwargs["execution_region"],
-            "capability": kwargs["capability"],
-            "status": "queued",
-            "progress": 0,
-            "attempts": 0,
-            "max_attempts": 1,
-            "run_after": None,
-            "payload_json": payload,
-            "result_json": None,
-            "error_message": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        },
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-discovery/plan/enqueue",
-            json={"days": 14, "topic_limit": 2, "candidate_limit": 6, "max_actions": 3},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["job"]["id"] == 77
-    assert captured["kind"] == "source_discovery_plan"
-    assert captured["payload"]["days"] == 14
-    assert captured["payload"]["topic_limit"] == 2
-    assert captured["queue_name"] == "default"
-    assert captured["user_id"] == 1
-
-
-def test_enqueue_source_discovery_loop_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.background_jobs,
-        "enqueue",
-        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {
-            "id": 88,
-            "kind": kind,
-            "queue_name": kwargs["queue_name"],
-            "execution_region": kwargs["execution_region"],
-            "capability": kwargs["capability"],
-            "status": "queued",
-            "progress": 0,
-            "attempts": 0,
-            "max_attempts": 1,
-            "run_after": None,
-            "payload_json": payload,
-            "result_json": None,
-            "error_message": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        },
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-discovery/loop/enqueue",
-            json={"goal": "найти источники", "max_iterations": 2, "max_actions": 3},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["job"]["id"] == 88
-    assert captured["kind"] == "source_discovery_loop"
-    assert captured["payload"]["max_iterations"] == 2
-    assert captured["payload"]["fetch_inspection"] is True
-    assert captured["payload"]["test_parse"] is True
-    assert captured["queue_name"] == "default"
-    assert captured["user_id"] == 1
-
-
-def test_source_discovery_loop_dry_run_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    from oiltech_digest.source_discovery import loop
-
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-
-    def fake_run_agent_loop(config):
-        captured["config"] = config
-        return {
-            "run_id": None,
-            "goal": config.goal,
-            "iterations": [
-                {
-                    "iteration": 1,
-                    "action_count": 1,
-                    "auto_action_count": 1,
-                    "human_review_count": 0,
-                    "observations": [
-                        {
-                            "topic": "бурение",
-                            "query_strategy": "balanced",
-                            "search_status": "ok",
-                            "query_count": 2,
-                            "candidate_count": 1,
-                        }
-                    ],
-                }
-            ],
-            "total_candidates": 1,
-            "empty_iterations": 0,
-            "terminal_reason": "max_iterations_reached",
-            "dry_run": True,
-            "duration_ms": 12,
-        }
-
-    monkeypatch.setattr(loop, "run_agent_loop", fake_run_agent_loop)
-    try:
-        response = TestClient(app).post(
-            "/api/source-discovery/loop/dry-run",
-            json={"goal": "проверить", "max_iterations": 2, "max_actions": 3, "dry_run": False, "auto_evaluate": True},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["result"]["dry_run"] is True
-    assert body["result"]["run_id"] is None
-    assert body["result"]["total_candidates"] == 1
-    assert captured["config"].dry_run is True
-    assert captured["config"].auto_evaluate is False
-    assert captured["config"].persist_memory is False
-
-
-def test_source_discovery_memory_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "list_agent_memory",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "id": 1,
-                "memory_key": "topic:бурение",
-                "memory_type": "topic",
-                "subject": "бурение",
-                "status": "active",
-                "score": 80,
-                "facts_json": {"gap": 3},
-                "last_seen_at": None,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/memory?memory_type=topic&status=active&limit=10")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["memory_key"] == "topic:бурение"
-    assert captured == {"memory_type": "topic", "status": "active", "limit": 10}
-
-
-def test_source_discovery_memory_patch_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    actions = []
-    monkeypatch.setattr(api.repository, "update_agent_memory_status", lambda memory_id, status: captured.update({"memory_id": memory_id, "status": status}) or True)
-    monkeypatch.setattr(
-        api.repository,
-        "record_agent_action",
-        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
-    )
-    try:
-        response = TestClient(app).patch("/api/source-discovery/memory/7", json={"status": "muted"})
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert captured == {"memory_id": 7, "status": "muted"}
-    assert actions[0]["action_type"] == "update_agent_memory"
-
-
-def test_source_discovery_memory_create_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    actions = []
-    monkeypatch.setattr(
-        api.repository,
-        "upsert_agent_memory",
-        lambda **kwargs: captured.update(kwargs) or 44,
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "record_agent_action",
-        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-discovery/memory",
-            json={"memory_type": "domain", "subject": "https://Example.com/news", "status": "rejected", "score": 0},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "id": 44}
-    assert captured["memory_key"] == "manual:domain:example.com"
-    assert captured["subject"] == "example.com"
-    assert captured["status"] == "rejected"
-    assert captured["facts"]["manual"] is True
-    assert actions[0]["action_type"] == "create_agent_memory"
-
-
-def test_source_discovery_quality_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "source_candidate_quality_report",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "subject": "бурение",
-                "candidates": 3,
-                "approved": 1,
-                "rejected": 1,
-                "paused": 0,
-                "needs_human_review": 1,
-                "test_more": 1,
-                "tested_articles": 10,
-                "relevant_articles": 6,
-                "noise_count": 2,
-                "avg_score": 70,
-                "approval_rate": 0.5,
-                "relevance_rate": 0.6,
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/quality?group_by=topic&limit=5")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["subject"] == "бурение"
-    assert response.json()[0]["approval_rate"] == 0.5
-    assert captured == {"group_by": "topic", "limit": 5}
-
-
-def test_source_discovery_quality_endpoint_rejects_bad_group_by(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    try:
-        response = TestClient(app).get("/api/source-discovery/quality?group_by=source")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 400
-
-
-def test_source_discovery_query_memory_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "query_memory_report",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "query": "robotic drilling automation newsroom",
-                "topic": "бурение",
-                "score": 76,
-                "status": "active",
-                "found_candidates": 3,
-                "tested_articles": 5,
-                "relevant_articles": 4,
-                "avg_score": 80,
-                "empty_result": False,
-                "relevance_rate": 0.8,
-                "last_seen_at": None,
-                "updated_at": None,
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/query-memory?limit=5")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["query"] == "robotic drilling automation newsroom"
-    assert captured == {"status": "active", "limit": 5}
-
-
-def test_source_discovery_readiness_endpoint(monkeypatch):
-    from oiltech_digest.source_discovery import readiness
-
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    monkeypatch.setattr(
-        readiness,
-        "source_discovery_readiness",
-        lambda: {"ok": True, "status": "ready", "checks": {}, "issues": [], "recommendations": []},
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/readiness")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ready"
-
-
-def test_source_discovery_actions_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "list_agent_actions",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "id": 1,
-                "run_id": 55,
-                "task_id": 7,
-                "action_type": "discover_sources_finished",
-                "input_json": {"topic": "бурение"},
-                "output_json": {"candidates": 2},
-                "cost_usd": 0,
-                "duration_ms": 123,
-                "created_at": None,
-                "task_kind": "discover_sources",
-                "task_status": "ok",
-                "task_topic": "бурение",
-                "decision_title": "Поиск источников завершён",
-                "decision_summary": "Тема: бурение, кандидатов: 2.",
-                "decision_tone": "good",
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/actions?action_type=discover_sources_finished&limit=10")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["action_type"] == "discover_sources_finished"
-    assert response.json()[0]["task_topic"] == "бурение"
-    assert response.json()[0]["decision_title"] == "Поиск источников завершён"
-    assert captured == {"action_type": "discover_sources_finished", "run_id": None, "limit": 10}
-
-
-def test_source_discovery_runs_endpoint(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    monkeypatch.setattr(
-        api.repository,
-        "list_agent_runs",
-        lambda **kwargs: captured.update(kwargs) or [
-            {
-                "id": 55,
-                "kind": "source_discovery_cycle",
-                "status": "ok",
-                "trigger": "scheduler",
-                "payload_json": {"topic_limit": 5},
-                "result_json": {"queued": {"queued": 2}},
-                "error_message": None,
-                "started_at": None,
-                "finished_at": None,
-                "created_at": None,
-                "action_count": 3,
-                "job_count": 2,
-                "ok_job_count": 1,
-                "failed_job_count": 0,
-            }
-        ],
-    )
-    try:
-        response = TestClient(app).get("/api/source-discovery/runs?status=ok&limit=10")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()[0]["kind"] == "source_discovery_cycle"
-    assert response.json()[0]["job_count"] == 2
-    assert captured == {"status": "ok", "limit": 10}
-
-
-def test_source_candidate_evaluate_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-
-    def fake_eval(candidate_id, article_limit=5, offline=True, collect=True, process=True):
-        return {
-            "candidate_id": candidate_id,
-            "task_id": 99,
-            "metrics": {"tested_articles": article_limit, "relevant_articles": 3, "avg_score": 70},
-            "recommended_action": "add",
-            "next_status": "needs_human_review",
-        }
-
-    from oiltech_digest.source_discovery import sandbox
-
-    monkeypatch.setattr(sandbox, "evaluate_source_candidate", fake_eval)
-    try:
-        response = TestClient(app).post(
-            "/api/source-candidates/7/evaluate",
-            json={"article_limit": 4, "offline": True, "collect": True, "process": True},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["metrics"]["tested_articles"] == 4
-
-
-def test_source_candidate_approve_endpoint(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    actions = []
-    enqueued = []
-    monkeypatch.setattr(api.repository, "approve_source_candidate", lambda candidate_id, **kwargs: 55)
-    monkeypatch.setattr(api.repository, "get_source", lambda source_id: {"id": source_id, "parse_strategy": "request", "network_region": "auto"})
-    monkeypatch.setattr(api, "apply_candidate_learning", lambda *args, **kwargs: {"ok": True})
-    monkeypatch.setattr(
-        api.background_jobs,
-        "enqueue",
-        lambda kind, payload, **kwargs: enqueued.append({"kind": kind, "payload": payload, **kwargs}) or {
-            "id": 91,
-            "kind": kind,
-            "queue_name": kwargs["queue_name"],
-            "execution_region": kwargs["execution_region"],
-            "capability": kwargs["capability"],
-            "status": "queued",
-            "progress": 0,
-            "attempts": 0,
-            "max_attempts": kwargs.get("max_attempts", 3),
-            "run_after": None,
-            "payload_json": payload,
-            "result_json": None,
-            "error_message": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        },
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "record_agent_action",
-        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-candidates/7/approve",
-            json={"enabled": True, "parse_strategy": "request", "network_region": "external"},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert response.json()["source_id"] == 55
-    assert response.json()["initial_job"]["id"] == 91
-    assert enqueued[0]["kind"] == "scrape_source"
-    assert enqueued[0]["payload"] == {"source_id": 55, "reason": "approved_source_candidate", "candidate_id": 7}
-    assert actions[0]["action_type"] == "approve_source_candidate"
-    assert actions[0]["output_payload"]["initial_job_id"] == 91
-
-
-def test_source_candidate_approve_endpoint_enqueues_initial_parse_for_rss(monkeypatch):
-    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
-    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    monkeypatch.setattr(api.repository, "approve_source_candidate", lambda candidate_id, **kwargs: 55)
-    monkeypatch.setattr(api.repository, "get_source", lambda source_id: {"id": source_id, "parse_strategy": "rss"})
-    monkeypatch.setattr(api.repository, "record_agent_action", lambda *args, **kwargs: 1)
-    monkeypatch.setattr(api, "apply_candidate_learning", lambda *args, **kwargs: {"ok": True})
-    called = []
-    monkeypatch.setattr(
-        api.background_jobs,
-        "enqueue",
-        lambda kind, payload, **kwargs: called.append({"kind": kind, "payload": payload, **kwargs}) or {
-            "id": 92,
-            "kind": kind,
-            "queue_name": kwargs["queue_name"],
-            "execution_region": kwargs["execution_region"],
-            "capability": kwargs["capability"],
-            "status": "queued",
-            "progress": 0,
-            "attempts": 0,
-            "max_attempts": kwargs.get("max_attempts", 3),
-            "run_after": None,
-            "payload_json": payload,
-            "result_json": None,
-            "error_message": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        },
-    )
-    try:
-        response = TestClient(app).post(
-            "/api/source-candidates/7/approve",
-            json={"enabled": True, "parse_strategy": "rss", "network_region": "auto"},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["initial_job"]["id"] == 92
-    assert called[0]["kind"] == "parse_source_once"
-    assert called[0]["payload"] == {"source_id": 55, "reason": "approved_source_candidate", "candidate_id": 7}
-    assert called[0]["capability"] == "rss_parse"
-
-
-def test_source_candidate_patch_endpoint_records_operator_decision(monkeypatch):
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
-    captured = {}
-    actions = []
-    monkeypatch.setattr(api.repository, "get_source_candidate", lambda candidate_id: {"id": candidate_id})
-    monkeypatch.setattr(api, "apply_candidate_learning", lambda *args, **kwargs: {"ok": True})
-    monkeypatch.setattr(
-        api.repository,
-        "update_source_candidate_assessment",
-        lambda candidate_id, **kwargs: captured.update({"candidate_id": candidate_id, **kwargs}),
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "record_agent_action",
-        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
-    )
-    try:
-        response = TestClient(app).patch(
-            "/api/source-candidates/7",
-            json={
-                "status": "rejected",
-                "recommended_action": "reject",
-                "review_comment": "Не подходит по теме",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert captured == {
-        "candidate_id": 7,
-        "status": "rejected",
-        "recommended_action": "reject",
-        "review_comment": "Не подходит по теме",
-    }
-    assert actions[0]["action_type"] == "update_source_candidate"
-    assert actions[0]["input_payload"]["candidate_id"] == 7
 
 
 def test_source_diagnose_endpoint_accepts_unsaved_overrides(monkeypatch):
@@ -1294,7 +521,7 @@ def test_digest_content_endpoint_passes_filters(monkeypatch):
 
 def test_update_monthly_digest_endpoint(monkeypatch):
     _freeze_inside_month(monkeypatch, "2026-06")
-    # Статьи выпуска — из открытого месяца (проверка «не из архива», сессия B).
+    # Статьи выпуска: из открытого месяца (проверка «не из архива», сессия B).
     monkeypatch.setattr(api.repository, "article_period_months", lambda ids: {"2026-06"})
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
@@ -1618,7 +845,7 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     articles_sql, articles_params = fake_conn.executed[0]
     # Тема и балл берутся у публикации ленты (08.11): у сигнала ленты, у статьи без него её тег и балл.
     assert api.repository.publication_joins("a") in articles_sql
-    # Поиск идёт по видимому заголовку (title_ru с откатом на оригинал), телу, сути И тегу —
+    # Поиск идёт по видимому заголовку (title_ru с откатом на оригинал), телу, сути И тегу:
     # проверяем состав, а не точную склейку строки, иначе тест ломается от переносов.
     assert "LOWER(" in articles_sql and "LIKE %s" in articles_sql
     for fragment in ("c.title_ru", "a.title", "a.raw_text", "c.summary", "pub.tag_name", "pub.parent_tag_name"):
@@ -1812,7 +1039,7 @@ def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
 
 
 def test_auth_register_login_me_and_logout(monkeypatch):
-    # Самостоятельная регистрация по умолчанию закрыта (#33) — здесь включаем её
+    # Самостоятельная регистрация по умолчанию закрыта (#33): здесь включаем её
     # явно, чтобы проверять сам сценарий, а не запрет.
     monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", True)
     app = api.app
@@ -1911,7 +1138,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
             "search": "drilling",
             "top_tag": "Бурение",
         },
-        # Выпуск общий (#111): учётки в задании нет, она — только владелец задачи.
+        # Выпуск общий (#111): учётки в задании нет, она: только владелец задачи.
         "kwargs": {"user_id": 1, "queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"
@@ -2248,7 +1475,7 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
 
 
 def test_external_worker_claim_fails_job_with_malformed_only_instead_of_handing_it_out(monkeypatch):
-    """Ревью 27.09: битую пометку only ловила только запись — после оплаты ответа модели."""
+    """Ревью 27.09: битую пометку only ловила только запись: после оплаты ответа модели."""
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
     failed = []
@@ -2314,52 +1541,6 @@ def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):
     assert response.json()["job"]["payload"]["source"] == {"id": 7, "parse_strategy": "request"}
 
 
-def test_external_worker_claim_hydrates_source_candidate_evaluation_payload(monkeypatch):
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
-    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
-    monkeypatch.setattr(
-        api.external_ai,
-        "build_source_candidate_evaluate_payload",
-        lambda payload: {"kind": "source_candidate_evaluate", "candidate_id": payload["candidate_id"], "articles": [{"id": 101}]},
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "claim_external_background_job",
-        lambda **kwargs: {
-            "id": 12,
-            "kind": "source_candidate_evaluate",
-            "queue_name": "external-agents",
-            "execution_region": "external",
-            "capability": "openai",
-            "status": "running",
-            "progress": 10,
-            "attempts": 1,
-            "max_attempts": 1,
-            "run_after": None,
-            "payload_json": {"candidate_id": 42},
-            "result_json": None,
-            "error_message": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        },
-    )
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
-        json={"worker_id": "nl-agents-1", "queues": ["external-agents"], "capabilities": ["openai"]},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["job"]["payload"] == {
-        "kind": "source_candidate_evaluate",
-        "candidate_id": 42,
-        "articles": [{"id": 101}],
-    }
-
-
 def test_external_worker_progress_and_complete_validate_lease(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     progress_calls = []
@@ -2419,35 +1600,6 @@ def test_external_worker_complete_applies_external_ai_result(monkeypatch):
     assert response.status_code == 200
     assert applied == [{"external_ai": True, "articles": [{"article_id": 1}]}]
     assert completed[0][1]["result"]["applied"] == {"articles": 1}
-
-
-def test_external_worker_complete_applies_source_candidate_result(monkeypatch):
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
-    applied = []
-    completed = []
-    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "source_candidate_evaluate"})
-    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(
-        api.external_ai,
-        "apply_source_candidate_result",
-        lambda result, **kwargs: applied.append((result, kwargs)) or {"articles": 1, "ok": 1},
-    )
-    monkeypatch.setattr(
-        api.repository,
-        "finish_external_background_job",
-        lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
-    )
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/api/external-worker/jobs/10/complete",
-        headers={"Authorization": "Bearer secret"},
-        json={"lease_token": "lease", "result": {"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}},
-    )
-
-    assert response.status_code == 200
-    assert applied == [({"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}, {"job_id": 10})]
-    assert completed[0][1]["result"]["applied"] == {"articles": 1, "ok": 1}
 
 
 def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
@@ -2610,7 +1762,7 @@ def test_maintenance_benchmark_endpoint(monkeypatch):
 
 
 def test_process_endpoints_require_admin():
-    """Тех-долг T7: /api/process и /api/jobs/process тратят платный OpenAI —
+    """Тех-долг T7: /api/process и /api/jobs/process тратят платный OpenAI:
     должны быть admin-only, обычному пользователю 403."""
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "user@example.com", "role": "user"}
@@ -2626,7 +1778,7 @@ def test_process_endpoints_require_admin():
 
 
 def test_process_endpoints_allow_admin(monkeypatch):
-    """Админ проходит гейт прав (не 403) — enqueue замокан, без реального OpenAI/БД."""
+    """Админ проходит гейт прав (не 403): enqueue замокан, без реального OpenAI/БД."""
     import types
 
     app = api.app
@@ -2650,7 +1802,7 @@ def test_process_endpoints_allow_admin(monkeypatch):
 
 def test_session_cookie_secure_follows_config(monkeypatch):
     """Тех-долг T8: при AUTH_COOKIE_SECURE=True (прод/HTTPS) cookie получает Secure;
-    при False (локалка/http) — нет. HttpOnly всегда."""
+    при False (локалка/http): нет. HttpOnly всегда."""
     from fastapi import Response
 
     from oiltech_digest import config
@@ -2692,7 +1844,7 @@ def test_digest_branding_write_is_admin_only():
 
 def test_maintenance_endpoints_are_admin_only():
     """Аудит изоляции 24.07: /api/maintenance/* стояли на require_user, а cleanup удаляет
-    background_jobs и export_jobs ВСЕХ пользователей (в SQL нет фильтра по user_id) —
+    background_jobs и export_jobs ВСЕХ пользователей (в SQL нет фильтра по user_id):
     любой пользователь стирал историю задач и выгрузок остальным."""
     app = api.app
     app.dependency_overrides[api.require_user] = _as_user("user")
@@ -2751,10 +1903,10 @@ def _articles_sql(monkeypatch) -> str:
 
 def test_feed_hides_own_noise_duplicate_and_archive(monkeypatch):
     """Задача 19: пометка «Шум»/«Дубликат» обязана убирать статью из ЛИЧНОЙ ленты.
-    Замер 24.07: 104 помеченных статьи продолжали висеть — фильтра по статусу не было вовсе.
+    Замер 24.07: 104 помеченных статьи продолжали висеть: фильтра по статусу не было вовсе.
 
     12.09: к ним добавлен `archive`. Раньше он был декоративным счётчиком и ничего не делал;
-    теперь это целевой статус для «снял из дайджеста», и он обязан убирать с глаз —
+    теперь это целевой статус для «снял из дайджеста», и он обязан убирать с глаз:
     иначе снятая статья остаётся в ленте и операция выглядит как не сработавшая."""
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
@@ -2770,7 +1922,7 @@ def test_feed_hides_own_noise_duplicate_and_archive(monkeypatch):
 
 
 def test_feed_still_shows_noise_when_explicitly_filtered(monkeypatch):
-    """Помеченное должно оставаться доступным по явному фильтру — иначе его не пересмотреть."""
+    """Помеченное должно оставаться доступным по явному фильтру: иначе его не пересмотреть."""
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
     captured = _articles_sql(monkeypatch)
@@ -2797,7 +1949,7 @@ def test_changed_only_tab_still_shows_marked(monkeypatch):
 
 
 def test_monthly_stats_is_admin_only(monkeypatch):
-    """Задача 18: раздел статистики сводный — показывает работу КАЖДОГО пользователя,
+    """Задача 18: раздел статистики сводный: показывает работу КАЖДОГО пользователя,
     поэтому по решению владельца он admin-only. Гейт обязан стоять на API, а не только
     во фронте: аудит 24.07 показал, что фронтовый гейт без серверного (брендинг,
     maintenance) означает доступ любым запросом в обход UI."""
@@ -2828,7 +1980,7 @@ def test_monthly_stats_is_admin_only(monkeypatch):
 
 
 def test_article_payload_strips_emoji_from_title_and_summary():
-    """Пункт 6 Виктора: в показе сигнала эмодзи быть не должно — ни в названии, ни в сути.
+    """Пункт 6 эксперта заказчика: в показе сигнала эмодзи быть не должно: ни в названии, ни в сути.
 
     Чистим на выдаче, а не при вставке (решение владельца 12.09), поэтому проверяем
     именно сериализатор: через него идут лента, поиск и карточка статьи.
@@ -2845,13 +1997,13 @@ def test_article_payload_strips_emoji_from_title_and_summary():
     }
     payload = api._article_payload(row)
     assert payload["title"] == "Срочно! Роснефть запустила установку"
-    # Стрелка, знак ± и градусы — законная отраслевая запись, их резать нельзя:
+    # Стрелка, знак ± и градусы, законная отраслевая запись, их резать нельзя:
     # замер 12.09 показал, что наивная регулярка на \p{Emoji} била именно по ним.
     assert payload["summary"] == "Команда сообщила: добыча ↓ 3% при ±5 °C"
 
 
 def test_article_payload_keeps_plain_text_untouched():
-    """Чистка не должна трогать обычный текст — иначе она незаметно портит корпус."""
+    """Чистка не должна трогать обычный текст: иначе она незаметно портит корпус."""
     row = {
         "id": 2,
         "title": "«Газпром нефть» ввела НПЗ мощностью 15 000 барр./сут",
@@ -2870,7 +2022,7 @@ def test_feed_search_covers_translated_title_and_tag(monkeypatch):
 
     Два расхождения, которые чинит эта правка:
     (1) на карточке показывается COALESCE(c.title_ru, a.title), а искали только по
-        a.title — русский заголовок иностранной статьи не находился;
+        a.title: русский заголовок иностранной статьи не находился;
     (2) теги в поиск не входили вовсе, хотя в сборщике дайджеста такой поиск уже был.
     Требование владельца 12.09: теги влияют и на парсинг, и на выдачу. С 08.11 вместо тега статьи тема её публикации
     (repository.publication_joins): тема сигнала ленты, у статьи без него тег и его родитель.
@@ -2892,7 +2044,7 @@ def test_feed_search_covers_translated_title_and_tag(monkeypatch):
 def test_feedback_reasons_use_official_wording():
     """Формулировки заказчика 13.09: «придать более официальный статус платформы».
 
-    Платформа выходит на корпоративный портал ГПН, разговорный тон там неуместен.
+    Платформа выходит на корпоративный портал заказчика, разговорный тон там неуместен.
     Закрепляем тестом, чтобы правка не отъехала при следующем редактировании словаря.
     """
     app = api.app
@@ -2912,7 +2064,7 @@ def test_feedback_reasons_use_official_wording():
 
 
 def test_feedback_reasons_wrong_block_only_for_signal_feedback():
-    """«Не тот блок» в ленте бизнес-сигналов — решение 5 встречи с заказчиком 21.09.
+    """«Не тот блок» в ленте бизнес-сигналов: решение 5 встречи с заказчиком 21.09.
 
     Метка про сам сигнал («это технологический сигнал»), поэтому в ОС по источнику её
     нет: у издания блока не бывает. Набор решает сервер, фронт только говорит, чья ОС.

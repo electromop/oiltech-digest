@@ -1,5 +1,5 @@
--- OilTech Digest — схема БД (PostgreSQL).
--- Структура и связи — по docs/architecture.md §9. Типы адаптированы под Postgres.
+-- OilTech Digest: схема БД (PostgreSQL).
+-- Структура и связи: по docs/architecture.md §9. Типы адаптированы под Postgres.
 -- Идемпотентно: повторный запуск безопасен (CREATE TABLE IF NOT EXISTS).
 -- На Issue #1 наполняются только sources и articles; остальные таблицы создаются «впрок».
 
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS sources (
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
 -- Естественный ключ: бренд может иметь несколько каналов (сайт + Telegram) с одним
--- именем, но разным типом — это разные источники. Поэтому уникальность по (name, source_type).
+-- именем, но разным типом: это разные источники. Поэтому уникальность по (name, source_type).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_name_type ON sources(name, source_type);
 CREATE INDEX IF NOT EXISTS idx_sources_enabled_strategy ON sources(enabled, parse_strategy);
 
@@ -57,11 +57,11 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS external_cooldown_until TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS idx_sources_last_seen_published_at ON sources(last_seen_published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sources_network_region ON sources(network_region, enabled);
 
--- Архив источника (требование заказчика 12.09: «выключаем источник — не парсится больше,
+-- Архив источника (требование заказчика 12.09: «выключаем источник: не парсится больше,
 -- уходит в архив, его статьи уходят из выборки»). Отдельно от `enabled`, потому что это
 -- РАЗНЫЕ вещи: выключенный источник просто не опрашивается, но его накопленные статьи
 -- продолжают висеть в ленте у всех (лента джойнит sources без условия на enabled).
--- Архивный — и не опрашивается, и не показывает свои статьи. Обратимо: NULL = активен.
+-- Архивный: и не опрашивается, и не показывает свои статьи. Обратимо: NULL = активен.
 -- Жёсткого DELETE нет намеренно: articles.source_id ссылается на sources БЕЗ ON DELETE,
 -- то есть Postgres просто откажет удалить источник, у которого есть хоть одна статья.
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_sources_archived_at ON sources(archived_at) WHERE
 
 -- Дата начала сбора (решение владельца 06.11): статью, опубликованную раньше, сбор не берёт (рубеж OLD у всех
 -- стратегий, `verdicts.old_cutoff`). Новому источнику база ставит дату на две недели раньше заведения, каким бы путём
--- он ни заводился (экран «Источники», агент источников, Excel), чтобы подключение не тащило архив ленты в «Отбор»:
+-- он ни заводился (экран «Источники», Excel), чтобы подключение не тащило архив ленты в «Отбор»:
 -- ФИПС 06.11 принёс 264 статьи с 2017 года, свежих среди них 27. Повторное заведение (ON CONFLICT) дату не трогает.
 -- NULL: без границы, так у источников, заведённых до колонки. Нужен архив: UPDATE sources SET collect_since = NULL.
 -- Колонка без значения по умолчанию, затем значение для новых строк: иначе now() легло бы и на прежние источники.
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS articles (
   full_text_fetched_at TIMESTAMPTZ,
   full_text_status TEXT,                          -- ok / failed / too_short / no_gain / mismatch / blocked / paywall
                                                   -- no_gain: текст извлёкся нормально, но не вдвое длиннее
-                                                  -- уже сохранённого — перезаписывать нечем, статья цела
+                                                  -- уже сохранённого: перезаписывать нечем, статья цела
   full_text_error TEXT,
   extraction_method TEXT,                         -- rss / lxml / trafilatura / selector
   language       TEXT,
@@ -99,8 +99,8 @@ CREATE TABLE IF NOT EXISTS articles (
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
--- body_hash — хэш САМОГО ТЕКСТА (в отличие от content_hash = заголовок+URL). Нужен,
--- чтобы ловить подмену «одно тело — многим статьям» (задача №24): без него на проде
+-- body_hash: хэш САМОГО ТЕКСТА (в отличие от content_hash = заголовок+URL). Нужен,
+-- чтобы ловить подмену «одно тело, многим статьям» (задача №24): без него на проде
 -- накопилось 951 статья с побайтово общим телом, а всего чужое тело оказалось
 -- у 10.4% видимой ленты.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS body_hash TEXT;
@@ -118,19 +118,19 @@ CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DE
 
 
 -- =========================================================================
--- Карточки статей (рабочее представление в «Все статьи») — будущее
+-- Карточки статей (рабочее представление в «Все статьи»): будущее
 -- =========================================================================
 -- Перепечатки: одна публикация, разошедшаяся по нескольким изданиям. Таблица
--- ГЛОБАЛЬНАЯ, в отличие от user_article_states.status='duplicate': перепечатка —
+-- ГЛОБАЛЬНАЯ, в отличие от user_article_states.status='duplicate': перепечатка:
 -- факт о материале, а не мнение конкретного пользователя.
 --
 -- Почему отдельная таблица, а не флаг в articles: запись обратима и объяснима.
--- Храним, ЧЕГО копия, чем измерено сходство и почему судья решил именно так —
+-- Храним, ЧЕГО копия, чем измерено сходство и почему судья решил именно так:
 -- без этого разбор жалобы «почему статья пропала» превращается в гадание, а
 -- заказчик уже жаловался на исчезновение материалов.
 --
 -- Идёт ПОСЛЕ articles: обе ссылки ведут туда, и порядок блоков в этом файле
--- значим — блок исполняется сверху вниз одной транзакцией.
+-- значим: блок исполняется сверху вниз одной транзакцией.
 CREATE TABLE IF NOT EXISTS article_reprints (
   article_id     BIGINT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
   primary_id     BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
@@ -166,7 +166,7 @@ CREATE INDEX IF NOT EXISTS idx_article_cards_article_id ON article_cards(article
 CREATE UNIQUE INDEX IF NOT EXISTS idx_article_cards_article_unique ON article_cards(article_id);
 
 -- =========================================================================
--- Скоринг — будущее
+-- Скоринг: будущее
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS scoring_criteria (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS article_scores (
 CREATE INDEX IF NOT EXISTS idx_article_scores_article_id ON article_scores(article_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_article_scores_article_unique ON article_scores(article_id);
 -- Происхождение балла (сессия G, ADR 0002): каким профилем и каким набором критериев он
--- посчитан. NULL — балл до профилей, читается как business. Снимок — id, имя, вес и хэш
+-- посчитан. NULL: балл до профилей, читается как business. Снимок: id, имя, вес и хэш
 -- текста каждого критерия на момент оценки: по нему видно, хватит ли пересчёта без ИИ
 -- (изменились только веса) или нужен новый вызов модели (тексты или набор другие).
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS profile TEXT;
@@ -203,10 +203,8 @@ ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS criteria_snapshot JSONB;
 -- радар» (tech_radar). Колонка с умолчанием, без UPDATE: строки, что были до профилей,
 -- читаются как business, и лента считается тем же набором, что и раньше. Имя уникально в
 -- пределах профиля: «Технологическая новизна» есть и в наборе радара, и в старом сиде.
--- На живой базе эти строки выполняются вручную ДО выката кода (scripts/g/), выкат —
--- --no-schema. Глобальный индекс имён снимается ПОСЛЕ выката: старый код пишет
--- ON CONFLICT (name) и без этого индекса не сохранил бы новый критерий. Блок — после
--- article_scores: порядок таблиц как у записи балла и у шага 1 выката.
+-- Глобальный индекс имён снят: имя уникально в пределах профиля. Блок после article_scores:
+-- порядок таблиц как у записи балла.
 ALTER TABLE scoring_criteria ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'business';
 DO $$
 BEGIN
@@ -230,7 +228,7 @@ CREATE TABLE IF NOT EXISTS article_score_items (
 );
 
 -- =========================================================================
--- Теги (иерархические) — будущее
+-- Теги (иерархические): будущее
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS tags (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -263,7 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_article_tags_tag_id ON article_tags(tag_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_article_tags_article_unique ON article_tags(article_id);
 
 -- =========================================================================
--- Месячные дайджесты — будущее
+-- Месячные дайджесты: будущее
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS monthly_digests (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -290,7 +288,7 @@ CREATE TABLE IF NOT EXISTS monthly_digest_items (
 );
 
 -- =========================================================================
--- История выгрузок — будущее
+-- История выгрузок: будущее
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS export_jobs (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -325,8 +323,8 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- До #111 — личное состояние пользователя: свои статусы статей и свой дайджест. С #111 —
--- архив только для чтения: отметки общие (article_marks ниже), перенос — migrate-shared-marks.
+-- До #111, личное состояние пользователя: свои статусы статей и свой дайджест. С #111:
+-- архив только для чтения: отметки общие (article_marks ниже), перенос: migrate-shared-marks.
 CREATE TABLE IF NOT EXISTS user_article_states (
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
@@ -342,10 +340,10 @@ CREATE INDEX IF NOT EXISTS idx_user_article_states_user_status ON user_article_s
 -- 12.09.2026: статус `review` («На проверке») убран из набора (решение заказчика).
 -- Существующие строки переводим в `new`, а НЕ в `archive`, хотя новый переход
 -- «снял из дайджеста» ведёт именно в archive. Причина: `review` использовался как
--- «посмотрите, тут косяк» — 22.08 заказчика прямо просили ставить этот статус, чтобы
+-- «посмотрите, тут косяк»: 22.08 заказчика прямо просили ставить этот статус, чтобы
 -- системно отловить дефекты. `archive` теперь СКРЫВАЕТ статью из ленты, и миграция в
 -- него спрятала бы ровно те статьи, ради которых пометка ставилась. `new` возвращает
--- их в общий поток — ничего не теряется.
+-- их в общий поток: ничего не теряется.
 -- Идемпотентно: повторный запуск не находит строк и ничего не делает.
 UPDATE user_article_states SET status = 'new' WHERE status = 'review';
 -- Та же чистка в легаси-колонке article_cards.status (до #111 её читал разовый перенос
@@ -353,9 +351,9 @@ UPDATE user_article_states SET status = 'new' WHERE status = 'review';
 UPDATE article_cards SET status = 'new' WHERE status = 'review';
 
 -- Общие отметки статей (#111, ADR 0004): одна строка на статью, кто бы её ни поставил.
--- Нет строки — «новая». Последний поставивший — set_by_user_id (учётку удалили — пусто,
--- отметка остаётся). user_article_states выше — архив личных отметок только для чтения:
--- приложение его не читает и не пишет (перенос — команда migrate-shared-marks).
+-- Нет строки: «новая». Последний поставивший: set_by_user_id (учётку удалили: пусто,
+-- отметка остаётся). user_article_states выше, архив личных отметок только для чтения:
+-- приложение его не читает и не пишет (перенос: команда migrate-shared-marks).
 CREATE TABLE IF NOT EXISTS article_marks (
   article_id      BIGINT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
   status          TEXT NOT NULL DEFAULT 'new',  -- new / digest / archive / noise / duplicate
@@ -376,10 +374,9 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
 
--- Допуск по коду (#113, admission.py). Время допуска пусто — учётка ждёт допуска; новые учётки
--- создаются без него. Учётки, которые были до колонки, допускаются один раз — при её
--- добавлении: повторный init-db не должен вернуть допуск тем, с кого его сняли. На живой базе
--- то же делает scripts/admission/admission-before-deploy.sql до выката кода.
+-- Допуск по коду (#113, admission.py). Время допуска пусто: учётка ждёт допуска; новые учётки
+-- создаются без него. Учётки, которые были до колонки, допускаются один раз: при её
+-- добавлении: повторный init-db не должен вернуть допуск тем, с кого его сняли.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
@@ -389,8 +386,8 @@ BEGIN
   END IF;
 END $$;
 
--- Код допуска: у учётки один действующий, новый заменяет прежний. Сам код не хранится — только
--- отпечаток (PBKDF2, как пароль). notify_job_id — задача отправки в Telegram (external-notify).
+-- Код допуска: у учётки один действующий, новый заменяет прежний. Сам код не хранится: только
+-- отпечаток (PBKDF2, как пароль). notify_job_id: задача отправки в Telegram (external-notify).
 CREATE TABLE IF NOT EXISTS admission_codes (
   user_id        BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   code_salt      TEXT NOT NULL,
@@ -413,8 +410,8 @@ CREATE TABLE IF NOT EXISTS admission_codes (
 -- карточки (signal_card_dictionaries.json): его версия входит в рецепт карточки, правка списка там
 -- означала бы повторную оплату прогона по истории. Имена как написаны: одна ли это компания (форма
 -- собственности, регистр, падеж) решает правило при сверке, поэтому уникального ключа нет; одну мать у
--- дочки и отсутствие циклов держит проверка API под блокировкой таблицы. Учётку автора удалили — пусто.
--- Блок после users (ссылка на неё). На живой базе — этим же CREATE до выката кода, без init-db.
+-- дочки и отсутствие циклов держит проверка API под блокировкой таблицы. Учётку автора удалили: пусто.
+-- Блок после users (ссылка на неё). На живой базе: этим же CREATE до выката кода, без init-db.
 CREATE TABLE IF NOT EXISTS company_parents (
   id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   child_name   TEXT NOT NULL,
@@ -497,9 +494,9 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 CREATE INDEX IF NOT EXISTS idx_background_jobs_status_created ON background_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_kind_created ON background_jobs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(queue_name, status, run_after, created_at);
--- ВНИМАНИЕ: индекс по user_id создаётся НИЖЕ, в идемпотентной секции — ПОСЛЕ
+-- ВНИМАНИЕ: индекс по user_id создаётся НИЖЕ, в идемпотентной секции: ПОСЛЕ
 -- `ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS user_id`. Здесь (в CREATE-секции)
--- его держать нельзя: на существующей БД `CREATE TABLE IF NOT EXISTS` — no-op, колонки
+-- его держать нельзя: на существующей БД `CREATE TABLE IF NOT EXISTS`: no-op, колонки
 -- user_id ещё нет → init-db падает `column "user_id" does not exist`.
 
 -- =========================================================================
@@ -531,17 +528,17 @@ CREATE INDEX IF NOT EXISTS idx_signal_feedback_event_created ON signal_feedback_
 -- =========================================================================
 -- Обратная связь человека: оценки + комментарий (требование владельца 12.09)
 -- =========================================================================
--- Зачем отдельная таблица, а не signal_feedback_events: та — append-only ЖУРНАЛ
+-- Зачем отдельная таблица, а не signal_feedback_events: та: append-only ЖУРНАЛ
 -- («статус сменился с X на Y»), а это ДОКУМЕНТ, который автор правит. Разные формы
--- жизни. Журнал отвечает «что произошло», эта таблица — «что человек об этом думает».
+-- жизни. Журнал отвечает «что произошло», эта таблица: «что человек об этом думает».
 --
--- Поля выбраны не из головы: ровно так заказчик уже пишет ОС руками (чат 10.09) —
+-- Поля выбраны не из головы: ровно так заказчик уже пишет ОС руками (чат 10.09):
 -- «1. Корректировка названия… 2. Статья интересная и актуальная. 3. Источник отличный.
 -- 4. Перевод: walking island rig → шагающая буровая…». Отсюда три оценки и текст.
 --
 -- article_id и source_id оба необязательны, но хотя бы один обязан быть: ОС бывает
 -- и про конкретный сигнал, и про источник целиком («канал никто не ведёт»).
--- Оценка по источнику проставляется и при ОС о сигнале — тогда source_id берётся
+-- Оценка по источнику проставляется и при ОС о сигнале: тогда source_id берётся
 -- из статьи, и накопленное можно свернуть по источнику без джойнов по всей ленте.
 CREATE TABLE IF NOT EXISTS feedback_entries (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -565,7 +562,7 @@ CREATE TABLE IF NOT EXISTS feedback_entries (
     )
 );
 -- Одна карточка ОС на пару «человек × сигнал»: повторное сохранение правит её,
--- а не плодит дубли. Для ОС об источнике без статьи — своя пара.
+-- а не плодит дубли. Для ОС об источнике без статьи: своя пара.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_article
   ON feedback_entries(user_id, article_id) WHERE article_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_source_only
@@ -757,11 +754,11 @@ CREATE INDEX IF NOT EXISTS idx_signals_maturity_score ON signals(maturity, score
 CREATE INDEX IF NOT EXISTS idx_signals_theme_seen ON signals(theme, last_seen_at DESC);
 
 -- Материалы коллег из Telegram (бот tg_materials_bot.py на NL): ссылка, файл или событие
--- своими словами и оценка автора по шкале Виктора (те же вердикты, что у карточки радара,
+-- своими словами и оценка автора по шкале эксперта заказчика (те же вердикты, что у карточки радара,
 -- signal_feedback._normalize_verdict). Не статья: у материала нет источника в каталоге, и
 -- в articles его взяли бы дозагрузка, гейт релевантности и дедуп (тот же довод, что у
--- documents). Карточка сигнала из материала — следующий шаг (signal_id), пока — хранение.
--- Повтор отправки после сбоя связи NL↔ядро не двоит материал: ключ — сообщение бота с
+-- documents). Карточка сигнала из материала: следующий шаг (signal_id), пока: хранение.
+-- Повтор отправки после сбоя связи NL↔ядро не двоит материал: ключ: сообщение бота с
 -- карточкой подтверждения (tg_chat_id, tg_message_id).
 CREATE TABLE IF NOT EXISTS colleague_materials (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -853,8 +850,8 @@ CREATE TABLE IF NOT EXISTS user_signal_states (
 );
 CREATE INDEX IF NOT EXISTS idx_user_signal_states_user_status ON user_signal_states(user_id, status);
 
--- Общие отметки карточек радара (#111): как article_marks; нет строки — «наблюдать».
--- user_signal_states выше — архив личных отметок только для чтения.
+-- Общие отметки карточек радара (#111): как article_marks; нет строки: «наблюдать».
+-- user_signal_states выше: архив личных отметок только для чтения.
 CREATE TABLE IF NOT EXISTS signal_marks (
   signal_id       BIGINT PRIMARY KEY REFERENCES signals(id) ON DELETE CASCADE,
   status          TEXT NOT NULL DEFAULT 'watch',  -- watch / digest / archive / noise / duplicate
@@ -864,12 +861,12 @@ CREATE TABLE IF NOT EXISTS signal_marks (
 );
 CREATE INDEX IF NOT EXISTS idx_signal_marks_status ON signal_marks(status);
 
--- Перенос личных отметок в общие (#111) — запись «сделан», одна строка: повторный запуск ничего
+-- Перенос личных отметок в общие (#111), запись «сделан», одна строка: повторный запуск ничего
 -- не меняет, сверка только чтением берёт отсюда основу и первый открытый месяц на момент переноса.
 CREATE TABLE IF NOT EXISTS shared_marks_migration (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   base_user_id   BIGINT NOT NULL,
-  open_from      TEXT NOT NULL,  -- «ГГГГ-ММ»: месяцы раньше — закрытые на момент переноса
+  open_from      TEXT NOT NULL,  -- «ГГГГ-ММ»: месяцы раньше: закрытые на момент переноса
   report_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
   done_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -903,8 +900,8 @@ CREATE INDEX IF NOT EXISTS idx_signals_merged_into ON signals(merged_into_signal
 -- Ревью пачки (21.09): насколько сигнал интересен НА ФОНЕ своей пачки и почему.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS interest_score NUMERIC;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS why_interesting TEXT;
--- Качество радара (замечания Виктора 29.09): поля судьи и архив. Скрытие — в видимости карточки
--- (repository._RADAR_VISIBLE_SQL), карточка при этом хранится. NULL — карточка до правки.
+-- Качество радара (замечания эксперта заказчика 29.09): поля судьи и архив. Скрытие: в видимости карточки
+-- (repository._RADAR_VISIBLE_SQL), карточка при этом хранится. NULL: карточка до правки.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_category TEXT;     -- technology / business / other
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date DATE;          -- дата самого события
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS mixed_events BOOLEAN;     -- ссылки о разных событиях
@@ -920,21 +917,21 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_stage TEXT;   -- search / ju
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_reason TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS verdict_reason TEXT;     -- почему такое решение (судья)
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS decision_log JSONB;      -- ход решения: [{stage, text}]
--- Единое хранилище сигналов (#95, ADR 0003): сигнал ленты — принятая отбором статья
--- (origin_article_id — её главная публикация), находка поиска — радар. Прежние — радар.
+-- Единое хранилище сигналов (#95, ADR 0003): сигнал ленты: принятая отбором статья
+-- (origin_article_id: её главная публикация), находка поиска: радар. Прежние: радар.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'radar';  -- radar / feed
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin_article_id BIGINT REFERENCES articles(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_signals_origin_article ON signals(origin_article_id) WHERE origin_article_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_signals_origin_category ON signals(origin, signal_category);
--- Карточка сигнала (#96, ADR 0003): атрибуты агента «Карточка сигнала». Зрелость технологии —
--- technology_maturity: maturity (watch / shortlist / proven) — подтверждённость радара, не зрелость.
--- Дата события, связь с нефтесервисом, применение и «почему важно» — прежние поля судьи радара.
+-- Карточка сигнала (#96, ADR 0003): атрибуты агента «Карточка сигнала». Зрелость технологии:
+-- technology_maturity: maturity (watch / shortlist / proven): подтверждённость радара, не зрелость.
+-- Дата события, связь с нефтесервисом, применение и «почему важно»: прежние поля судьи радара.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_type TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS region TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_class TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_maturity TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS participants_json JSONB;  -- [{name, quote, verified, country}]
--- Страны события (#137): до трёх имён справочника стран у кода (signal_card_countries); страна участника — в его
+-- Страны события (#137): до трёх имён справочника стран у кода (signal_card_countries); страна участника: в его
 -- записи participants_json.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_countries TEXT[];
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_source TEXT;   -- из текста / по дате публикации / не определено
@@ -948,12 +945,12 @@ UPDATE signals SET card_set_by = jsonb_strip_nulls(jsonb_build_object(
     'oilfield_application', CASE WHEN COALESCE(oilfield_application, '') <> '' THEN 'radar_judge' END,
     'why_interesting', CASE WHEN COALESCE(why_interesting, '') <> '' THEN 'radar_judge' END))
 WHERE origin = 'radar' AND card_set_by IS NULL;
--- Агент «Отбор» (#130, ADR 0005): единственный решает «брать или нет». Решение — у сигнала: отрасль, связь и
+-- Агент «Отбор» (#130, ADR 0005): единственный решает «брать или нет». Решение, у сигнала: отрасль, связь и
 -- применение (прежние поля связи, источник «otbor» в card_set_by), категория, код причины отказа; у отклонённой
--- maturity = 'reject' («Решение платформы»). Нет решения — сбой: технический (шаг повторит) или ответ не по
--- правилам (без повтора). Отклонённое и сбой — разделы для админа (db/rejected_sections.py).
+-- maturity = 'reject' («Решение платформы»). Нет решения, сбой: технический (шаг повторит) или ответ не по
+-- правилам (без повтора). Отклонённое и сбой: разделы для админа (db/rejected_sections.py).
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS industry TEXT;              -- oilfield_services / oil_gas / other_industry
-ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_decision TEXT;        -- accept / reject; NULL — «Отбор» не решал
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_decision TEXT;        -- accept / reject; NULL: «Отбор» не решал
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS reject_reason TEXT;         -- код причины отказа (otbor_dictionaries.json)
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_disputed TEXT;        -- пометка «спорное»: почему
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure TEXT;         -- technical / invalid_answer, пока решения нет
@@ -961,39 +958,38 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure_reason TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_recipe JSONB;         -- инструкция, модель, справочники, время, задача
 -- Статью с selector = 'otbor' (с 08.11 каждую новую: флаг OTBOR_ENABLED и гейт ленты сняты) решает «Отбор»:
 -- пока решения нет, её не видно (feed_window.visible_sql) и обработка ленты её не берёт.
-ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbor; NULL — гейт ленты
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbor; NULL: гейт ленты
 CREATE INDEX IF NOT EXISTS idx_articles_otbor ON articles(collected_at) WHERE selector = 'otbor';
 -- Радар и материалы коллег через «Отбор» (#131): находку поиска и материал коллеги (с 08.11 всегда, флаг снят)
--- решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги —
--- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот — notified_outcome (silent: итог не
--- сообщается, otbor-materials --silent); оценка автора —
+-- решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги:
+-- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот, notified_outcome (silent: итог не
+-- сообщается, otbor-materials --silent); оценка автора:
 -- блок ОС с его именем из Telegram (author).
-ALTER TABLE signals ADD COLUMN IF NOT EXISTS selector TEXT;              -- otbor; NULL — прежние правила
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS selector TEXT;              -- otbor; NULL: прежние правила
 CREATE INDEX IF NOT EXISTS idx_signals_otbor_waiting ON signals(created_at)
   WHERE selector = 'otbor' AND otbor_decision IS NULL;
 ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_outcome TEXT;
 ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS author TEXT; -- кто оставил блок, если не учётка
--- «Карточка» в конвейере «Отбора» (#132): дата события с точностью (у месяца и года — первый день периода, как
+-- «Карточка» в конвейере «Отбора» (#132): дата события с точностью (у месяца и года: первый день периода, как
 -- период её читает только код с точностью); возврат в «Отбор», если «Карточка» нашла в тексте дату события старше
--- 180 дней (один раз; что нашла — во входе «Отбора»); баллы второго вызова по профилю категории: ступень, рецепт с
--- итогами в двух вариантах подмешивания ключевых слов; «не тот блок» — баллы пересчитываются. У «другого»
+-- 180 дней (один раз; что нашла, во входе «Отбора»); баллы второго вызова по профилю категории: ступень, рецепт с
+-- итогами в двух вариантах подмешивания ключевых слов; «не тот блок»: баллы пересчитываются. У «другого»
 -- «Решения платформы» нет: maturity может быть пусто.
-ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_precision TEXT;  -- day / month / year; NULL — день (до #132)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_precision TEXT;  -- day / month / year; NULL: день (до #132)
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_returns INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_return_fact TEXT;    -- что нашла «Карточка»: во вход «Отбора»
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS score_band TEXT;           -- strong / useful / watch / weak
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_recipe JSONB;       -- второй вызов: инструкция, модель, итоги
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_stale_since TIMESTAMPTZ;  -- «не тот блок»: пересчитываются
 -- Когда публикация пошла дальше «Отбора» (его решение «брать» или возврат человеком): от этого считают окна шаги
--- конвейера (суть, оба вызова «Карточки»); NULL — решённое до «Отбора», окна от заведения сигнала.
+-- конвейера (суть, оба вызова «Карточки»); NULL: решённое до «Отбора», окна от заведения сигнала.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
 ALTER TABLE signals ALTER COLUMN maturity DROP NOT NULL;
 -- Поля материала выпуска (#162, ADR 0006): живут на сигнале, у статьи ленты на её сигнале ленты. Подпись выпуска
 -- (пусто: подпись по типу события), «Гипотеза для Компании» (кто поставил: card_set_by->>'hypothesis', agent или human;
 -- когда и почта человека), выбор картинки (placeholder: заглушка темы вместо своей; пусто: своя). Заголовок и суть
--- правятся записью журнала ОС (corrected_title, corrected_thesis), как у находок радара. На живой базе этими же
--- ALTER до выката кода (scripts/digest/issue-edits-before-deploy.sql).
+-- правятся записью журнала ОС (corrected_title, corrected_thesis), как у находок радара.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS issue_label TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis_set_at TIMESTAMPTZ;
@@ -1054,16 +1050,16 @@ CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_del
 -- url_key: тождество статьи по адресу (13.09)
 -- =========================================================================
 -- Уникальность держалась на СЫРОМ url, и один материал заводился по нескольку раз:
--- замер прода 13.09 — за 90 дней 940 лишних статей, три причины поимённо:
---   ?from=main_lines_11 против ?from=newsfeed (РБК)   — query-хвосты
---   http:// против https://            (Ростех)        — схема
---   /topics/x против /topics/x/        (Wood Mackenzie)— хвостовой слэш
--- Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку —
+-- замер прода 13.09, за 90 дней 940 лишних статей, три причины поимённо:
+--   ?from=main_lines_11 против ?from=newsfeed (РБК): query-хвосты
+--   http:// против https://            (Ростех): схема
+--   /topics/x против /topics/x/        (Wood Mackenzie): хвостовой слэш
+-- Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку:
 -- ровно то, на что жаловался заказчик 08.09 («все 4 новости об одном»).
 -- Ключ = host+path без схемы, www и слэша + значимый query (normalize.url_key).
 -- 25.09: query сначала срезался целиком и склеил все статьи сайтов, где номер статьи
 -- живёт в query (Минэнерго ?news-item=, EIA ?id=, Лукойл ?rid=, Новатэк ?id_4=).
--- Теперь срезаются только трекинговые параметры — тот же список, что в Python.
+-- Теперь срезаются только трекинговые параметры: тот же список, что в Python.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS url_key TEXT;
 
 -- Бэкфилл: считаем тем же правилом, что и Python-функция (тест сверяет до символа).
@@ -1082,7 +1078,7 @@ SET url_key = rtrim(regexp_replace(regexp_replace(lower(regexp_replace(url, '^\s
 WHERE url_key IS NULL;
 
 -- Схлопывание УЖЕ накопленных дублей: оставляем самую полную копию (длиннее тело,
--- при равенстве — раньше пришедшую), остальные прячем через существующий мягкий
+-- при равенстве: раньше пришедшую), остальные прячем через существующий мягкий
 -- механизм pending_deletion. НЕ удаляем: вместе со статьёй ушла бы история ИИ-затрат.
 UPDATE articles a
 SET pending_deletion = TRUE
@@ -1155,28 +1151,28 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_background_jobs_external_ready ON background_jobs(execution_region, queue_name, status, run_after, created_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_lease_expires ON background_jobs(status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);
--- Потребители внешних очередей — контейнеры NL (23.09, контракт версий, contract.py):
+-- Потребители внешних очередей: контейнеры NL (23.09, контракт версий, contract.py):
 -- какую сборку и номер контракта каждый сообщил при последнем claim. 18.09 и 21.09
--- «пересобран ли NL» выясняли по косвенным полям; теперь расхождение — тревога сторожа.
+-- «пересобран ли NL» выясняли по косвенным полям; теперь расхождение: тревога сторожа.
 CREATE TABLE IF NOT EXISTS external_worker_consumers (
   consumer       TEXT PRIMARY KEY,           -- EXTERNAL_WORKER_ID без #потока
   queues         TEXT[] NOT NULL DEFAULT '{}',
-  build          TEXT,                       -- git SHA образа; NULL — сборка до контракта
-  contract       INTEGER,                    -- NULL — воркер номер не прислал
+  build          TEXT,                       -- git SHA образа; NULL: сборка до контракта
+  contract       INTEGER,                    -- NULL: воркер номер не прислал
   first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Идемпотентность биллинга AI (баг H1/T2): один (job_id, article_id, stage) — одна строка.
+-- Идемпотентность биллинга AI (баг H1/T2): один (job_id, article_id, stage): одна строка.
 -- Повторное применение результата задачи (ретрай/переотдача воркера) НЕ двоит ai_processing_runs
 -- → нет двойного счёта OpenAI. NULL job_id (локальный путь) и NULL article_id (дайджест) не
--- дедуплицируются (NULL-ы различны в UNIQUE) — вставляются как раньше.
+-- дедуплицируются (NULL-ы различны в UNIQUE): вставляются как раньше.
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS job_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_article_stage ON ai_processing_runs(job_id, article_id, stage);
 
 -- =========================================================================
 -- Загруженные документы (фича «приём файлов»)
 -- =========================================================================
--- ДОКУМЕНТ — НЕ СТАТЬЯ, и это главное решение здесь. У документа нет источника,
+-- ДОКУМЕНТ: НЕ СТАТЬЯ, и это главное решение здесь. У документа нет источника,
 -- нет URL и нет даты публикации в ленте. Положить его в articles через синтетический
 -- источник значило бы отдать его 44 запросам репозитория по articles: дозагрузка
 -- полного текста пошла бы качать несуществующий адрес, гейт релевантности мог бы
@@ -1206,7 +1202,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_owner_created ON documents(owner_user_i
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_owner_sha ON documents(owner_user_id, content_sha256);
 
 -- Текст по якорям. Отдельной таблицей, а не JSON в documents: по ней ищет проверяльщик
--- фактов — «есть ли это число на той странице, на которую сослалась модель».
+-- фактов: «есть ли это число на той странице, на которую сослалась модель».
 CREATE TABLE IF NOT EXISTS document_anchors (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   document_id   BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -1221,7 +1217,7 @@ CREATE TABLE IF NOT EXISTS document_cards (
   doc_type        TEXT,      -- отчёт / презентация / статья / КП / иное
   publisher       TEXT,
   doc_date        TEXT,      -- как в документе, строкой: датой бывает «II квартал 2025»
-  date_source     TEXT,      -- документ / имя файла / нет — чему доверять (тикет #50)
+  date_source     TEXT,      -- документ / имя файла / нет: чему доверять (тикет #50)
   language        TEXT,
   essence         TEXT,      -- СУТЬ: что это за документ и зачем
   summary_json    JSONB,     -- СВОДКА: пункты по разделам
@@ -1233,7 +1229,7 @@ CREATE TABLE IF NOT EXISTS document_cards (
 -- Извлечённые числа. verified проставляет КОД, сверяя значение с текстом якоря,
 -- а не модель о себе. Неподтверждённый факт хранится и показывается с пометкой.
 -- Дата документа часто есть только в НАЗВАНИИ файла: на проде 13.09 два документа
--- из четырёх получили «дата: не указано» при дате в имени. Пометка обязательна —
+-- из четырёх получили «дата: не указано» при дате в имени. Пометка обязательна:
 -- название мог поменять кто угодно, и это менее надёжно, чем дата из текста.
 ALTER TABLE document_cards ADD COLUMN IF NOT EXISTS date_source TEXT;
 
@@ -1251,18 +1247,18 @@ CREATE INDEX IF NOT EXISTS idx_document_facts_doc ON document_facts(document_id)
 
 -- Учёт расходов на разбор документов. ai_processing_runs привязана к статье внешним
 -- ключом, и дедуп биллинга держится на UNIQUE (job_id, article_id, stage). Для документа
--- article_id пуст, а NULL-ы в UNIQUE не конфликтуют — значит существующий индекс защиты
+-- article_id пуст, а NULL-ы в UNIQUE не конфликтуют: значит существующий индекс защиты
 -- НЕ даёт, и повторное применение результата удвоило бы счёт (баг H1/T2 заново).
 -- Поэтому отдельная колонка и СВОЙ ЧАСТИЧНЫЙ уникальный индекс для строк по документам.
 -- Существующий индекс по статьям НЕ трогаем: он корректен для своих строк, а лишний
--- DROP на проде ночью — риск без выигрыша.
+-- DROP на проде ночью: риск без выигрыша.
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS document_id BIGINT REFERENCES documents(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_document_stage
   ON ai_processing_runs(job_id, document_id, stage) WHERE document_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_runs_document_id ON ai_processing_runs(document_id);
 
 -- Учёт расходов агента «Карточка сигнала» (#96): строка на (задача, сигнал, стадия). Статьи у
--- вызова нет — как у документов, свой частичный уникальный индекс: повторное применение итога
+-- вызова нет, как у документов, свой частичный уникальный индекс: повторное применение итога
 -- той же задачи не удваивает счёт.
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS signal_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_signal_stage
@@ -1288,7 +1284,7 @@ CREATE TABLE IF NOT EXISTS otbor_shadow_decisions (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Решения «Отбора» по находкам пробного прогона широкого поиска (#138) — в той же таблице: у строки статья или находка
+-- Решения «Отбора» по находкам пробного прогона широкого поиска (#138), в той же таблице: у строки статья или находка
 -- (signal_id), одно из двух. Перенос в витрины строки находок не берёт (его запросы идут от статьи).
 ALTER TABLE otbor_shadow_decisions ALTER COLUMN article_id DROP NOT NULL;
 ALTER TABLE otbor_shadow_decisions ADD COLUMN IF NOT EXISTS signal_id BIGINT REFERENCES signals(id) ON DELETE CASCADE;

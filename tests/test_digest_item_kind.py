@@ -1,6 +1,6 @@
 """Плашка «Технология / Бизнес» у элемента выпуска и предпросмотр PDF в окне (решения владельца 23.10).
 
-Категория элемента — категория сигнала: у статьи — её сигнала ленты, у находки радара — своя. Плашка видна и на
+Категория элемента, категория сигнала: у статьи: её сигнала ленты, у находки радара: своя. Плашка видна и на
 экране сборки, и в самом выпуске: письмо и PDF (одна вёрстка), DOCX.
 """
 
@@ -43,7 +43,7 @@ def test_items_carry_kind_and_the_issue_shows_the_badge(monkeypatch):
 
     content = build_digest_content("2026-10")
 
-    # Сигнал радара — после статей (24.10), у статьи без сигнала ленты плашки нет.
+    # Сигнал радара: после статей (24.10), у статьи без сигнала ленты плашки нет.
     assert [(item["kind"], item["kind_label"]) for item in content["news"]] == [
         ("business", "Бизнес"), (None, None), ("technology", "Технология"),
     ]
@@ -86,7 +86,7 @@ def test_kind_comes_from_the_feed_signal_of_the_article(isolated_db):
     by_article, by_signal = repository.digest_item_kinds([article_id], [radar_id, feed_id])
 
     assert by_article == {article_id: "business"}
-    # Находка радара без категории — технология, как на экране радара.
+    # Находка радара без категории: технология, как на экране радара.
     assert by_signal == {radar_id: "technology", feed_id: "business"}
 
 
@@ -110,7 +110,7 @@ def test_preview_pdf_opens_inline_without_files_or_jobs(monkeypatch, tmp_path):
 
 def test_preview_pdf_builds_one_issue_once_and_one_at_a_time(monkeypatch):
     """Ревью 24.10: предпросмотр собирает Chromium в процессе API. Тот же выпуск (возврат на вкладку, повторное
-    открытие архива) отдаётся без новой сборки, разные — по одной за раз, а память — на четыре последних."""
+    открытие архива) отдаётся без новой сборки, разные: по одной за раз, а память: на четыре последних."""
     calls = []
     running = []
 
@@ -135,7 +135,7 @@ def test_preview_pdf_builds_one_issue_once_and_one_at_a_time(monkeypatch):
     assert results == [b"%PDF 2026-10"] * 3
     assert calls == ["2026-10"]
 
-    # Сменилось содержание (черновик, отметка, фильтр) — новая сборка.
+    # Сменилось содержание (черновик, отметка, фильтр): новая сборка.
     digest.render_digest_preview_pdf({"month": "2026-10", "news": [{"title": "Другой"}]})
     assert calls == ["2026-10", "2026-10"]
 

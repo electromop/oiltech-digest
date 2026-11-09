@@ -2,7 +2,7 @@
 
 Основная часть работает на синтетике, собранной прямо здесь: набор должен
 проходить на любой машине. Калибровочные тесты на реальных файлах владельца
-помечены skipif — без файлов на диске они пропускаются, а не падают.
+помечены skipif: без файлов на диске они пропускаются, а не падают.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from oiltech_digest.documents.parsing import (
 
 def _content_stream(text: str) -> bytes:
     if not text:
-        return b"BT ET"  # страница есть, текста на ней нет — имитация скана
+        return b"BT ET"  # страница есть, текста на ней нет: имитация скана
     escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
     return f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
 
@@ -145,7 +145,7 @@ def test_detect_kind_pdf():
 
 
 def test_detect_kind_separates_pptx_and_docx():
-    # Оба формата — zip с одинаковой сигнатурой PK\x03\x04, различает только
+    # Оба формата: zip с одинаковой сигнатурой PK\x03\x04, различает только
     # содержимое архива. Тест ловит регрессию «всё zip считаем docx».
     pptx_bytes = make_pptx([{"text": "Slide"}])
     docx_bytes = make_docx(["Абзац"])
@@ -171,7 +171,7 @@ def test_detect_kind_rejects_unknown_bytes(data):
 
 
 def test_detect_kind_ignores_filename_and_looks_at_bytes():
-    # Имя приходит от браузера и ничего не гарантирует: содержимое — текст,
+    # Имя приходит от браузера и ничего не гарантирует: содержимое: текст,
     # хоть «файл и называется отчёт.pdf».
     with pytest.raises(UnsupportedFormatError):
         detect_kind("Это отчёт.pdf, честное слово".encode("utf-8"))
@@ -190,7 +190,7 @@ def test_detect_kind_rejects_zip_without_office_parts():
 
 
 def test_detect_kind_reports_broken_archive_as_unreadable():
-    # Сигнатура zip есть, содержимое обрезано — это битый файл, а не чужой формат.
+    # Сигнатура zip есть, содержимое обрезано: это битый файл, а не чужой формат.
     broken = make_docx(["Абзац"])[:200]
     with pytest.raises(UnreadableDocumentError):
         detect_kind(broken)
@@ -217,7 +217,7 @@ def test_parse_pdf_anchor_per_page():
 
 
 def test_parse_pdf_keeps_empty_pages_and_numbering():
-    """Пустые страницы остаются якорями — иначе съедет нумерация.
+    """Пустые страницы остаются якорями: иначе съедет нумерация.
 
     Это уменьшенная копия файла «Росатом»: текст есть не везде, но ссылка
     «страница 4» должна указывать на четвёртую страницу исходника.
@@ -262,7 +262,7 @@ def test_parse_pdf_with_open_password_is_unreadable():
 
 
 def test_parse_pdf_with_owner_password_only_is_readable():
-    # Запрет печати/копирования шифрует файл пустым паролем на открытие —
+    # Запрет печати/копирования шифрует файл пустым паролем на открытие:
     # такие документы читаются, отказывать в них нельзя.
     data = _encrypt_pdf(make_pdf(["Restricted but readable page of text"]), "")
     document = parse_document(data)
@@ -362,15 +362,15 @@ def test_looks_scanned_on_page_number_artifacts():
 
 
 def test_sparse_document_is_not_a_scan():
-    # Три слайда по одной строке — редкий текст, но документ настоящий.
+    # Три слайда по одной строке: редкий текст, но документ настоящий.
     assert looks_scanned(_anchors([30, 28, 35]), "pptx") is False
 
 
 @pytest.mark.parametrize(
     "length, expected",
     [
-        (SCAN_MEANINGFUL_ANCHOR_CHARS, False),  # ровно порог — уже содержательно
-        (SCAN_MEANINGFUL_ANCHOR_CHARS - 1, True),  # на знак меньше — артефакт
+        (SCAN_MEANINGFUL_ANCHOR_CHARS, False),  # ровно порог: уже содержательно
+        (SCAN_MEANINGFUL_ANCHOR_CHARS - 1, True),  # на знак меньше: артефакт
     ],
 )
 def test_meaningful_anchor_threshold_both_sides(length, expected):
@@ -380,8 +380,8 @@ def test_meaningful_anchor_threshold_both_sides(length, expected):
 @pytest.mark.parametrize(
     "filler, expected",
     [
-        (5, False),  # плотность ровно 5.0 знаков на страницу — проходит
-        (4, True),  # ниже порога — скан с редкими вкраплениями текста
+        (5, False),  # плотность ровно 5.0 знаков на страницу: проходит
+        (4, True),  # ниже порога: скан с редкими вкраплениями текста
     ],
 )
 def test_density_threshold_both_sides(filler, expected):
@@ -394,10 +394,10 @@ def test_density_threshold_both_sides(filler, expected):
 
 
 def test_half_scanned_document_is_not_rejected():
-    """Главный кейс калибровки: «Росатом» — 40 страниц с текстом из 107.
+    """Главный кейс калибровки: «Росатом»: 40 страниц с текстом из 107.
 
     Доля пустых якорей 63%, но текста 104 тысячи знаков. Критерий по доле
-    пустых страниц выбросил бы этот документ целиком — он обязан разбираться.
+    пустых страниц выбросил бы этот документ целиком: он обязан разбираться.
     """
     anchors = _anchors([1000] * 40 + [0] * 67)
     assert looks_scanned(anchors, "pdf") is False
@@ -410,10 +410,18 @@ def test_density_rule_does_not_apply_to_docx():
 
 # --- калибровка на реальных файлах (пропускается, если файлов нет) ---------
 
-ROSATOM_PDF = "/Users/apple/Downloads/Росатом_позиция_+_заключение_экспертизы.pdf"
-BPMN_PDF = "/Users/apple/Downloads/BPMN_2_0.pdf"
-RADAR_PPTX = "/Users/apple/Downloads/Нефтесервисный радар.pptx"
-NIR_DOCX = "/Users/apple/Downloads/Отчёт_НИР_Липскеров_МАС_нефтегаз_1.docx"
+# Файлы калибровки лежат вне репозитория: каталог задаёт OILTECH_CALIBRATION_DIR, без него тесты пропускаются.
+CALIBRATION_DIR = os.environ.get("OILTECH_CALIBRATION_DIR", "")
+
+
+def _calibration(name: str) -> str:
+    return os.path.join(CALIBRATION_DIR, name) if CALIBRATION_DIR else ""
+
+
+HALF_SCANNED_PDF = _calibration("half-scanned.pdf")
+TEXT_PDF = _calibration("text.pdf")
+SLIDES_PPTX = _calibration("slides.pptx")
+REPORT_DOCX = _calibration("report.docx")
 
 
 def _read(path: str) -> bytes:
@@ -421,9 +429,9 @@ def _read(path: str) -> bytes:
         return handle.read()
 
 
-@pytest.mark.skipif(not os.path.exists(ROSATOM_PDF), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(HALF_SCANNED_PDF), reason="нет файла калибровки")
 def test_calibration_half_scanned_pdf():
-    data = _read(ROSATOM_PDF)
+    data = _read(HALF_SCANNED_PDF)
     assert detect_kind(data) == "pdf"
     document = parse_document(data)  # не должен упасть как «скан»
     assert len(document.anchors) == 107
@@ -433,17 +441,17 @@ def test_calibration_half_scanned_pdf():
     assert looks_scanned(document.anchors, "pdf") is False
 
 
-@pytest.mark.skipif(not os.path.exists(BPMN_PDF), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(TEXT_PDF), reason="нет файла калибровки")
 def test_calibration_full_text_pdf():
-    document = parse_document(_read(BPMN_PDF))
+    document = parse_document(_read(TEXT_PDF))
     assert len(document.anchors) == 299
     assert all(a.text for a in document.anchors)
     assert document.total_chars > 600_000
 
 
-@pytest.mark.skipif(not os.path.exists(RADAR_PPTX), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(SLIDES_PPTX), reason="нет файла калибровки")
 def test_calibration_real_pptx():
-    data = _read(RADAR_PPTX)
+    data = _read(SLIDES_PPTX)
     assert detect_kind(data) == "pptx"
     document = parse_document(data)
     assert len(document.anchors) == 13
@@ -451,9 +459,9 @@ def test_calibration_real_pptx():
     assert [a.number for a in document.anchors] == list(range(1, 14))
 
 
-@pytest.mark.skipif(not os.path.exists(NIR_DOCX), reason="нет файла калибровки")
+@pytest.mark.skipif(not os.path.exists(REPORT_DOCX), reason="нет файла калибровки")
 def test_calibration_real_docx():
-    data = _read(NIR_DOCX)
+    data = _read(REPORT_DOCX)
     assert detect_kind(data) == "docx"
     document = parse_document(data)
     # 90 непустых абзацев + 4 таблицы отдельными блоками

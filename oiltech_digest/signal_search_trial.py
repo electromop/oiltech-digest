@@ -1,14 +1,14 @@
 """Пробный прогон широкого поиска радара (#138, спека #128): один прогон поиска GPT по всем темам за период, находки
 проходят «Отбор», в витрины не попадает ничего. По цифрам владелец решает частоту поиска и включение радара.
 
-- plan/estimate — сухой прогон (по умолчанию): темы, число вызовов и оценка цены до оплаты; ничего не пишет.
-- enqueue — запуск: задача прогона радара («поиск только находит», как у любого прогона с 08.11) с меткой пробного
+- plan/estimate, сухой прогон (по умолчанию): темы, число вызовов и оценка цены до оплаты; ничего не пишет.
+- enqueue, запуск: задача прогона радара («поиск только находит», как у любого прогона с 08.11) с меткой пробного
   прогона. Ядро пишет находки отдельно от радара (signal_discovery, trial): метка пути
   SIGNAL_SELECTOR_TRIAL и свой ключ, существующие сигналы прогон не меняет.
-- after_search — ядро, когда находки записаны: задачи «Отбора» по ним в тени проверки #134 (вид задачи и воркер те же,
-  что в работе; ответы проверяет код ядра, otbor.apply_result), решение — в строке находки таблицы проверки
+- after_search, ядро, когда находки записаны: задачи «Отбора» по ним в тени проверки #134 (вид задачи и воркер те же,
+  что в работе; ответы проверяет код ядра, otbor.apply_result), решение: в строке находки таблицы проверки
   (otbor_shadow_store.write_signal), а не в полях сигнала: витрины и шаги конвейера его не видят.
-- report — отчёт: материалы, доля уже собранного сбором, полнота по эталону эксперта, доля принятого «Отбором», цена.
+- report, отчёт: материалы, доля уже собранного сбором, полнота по эталону эксперта, доля принятого «Отбором», цена.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from oiltech_digest import config, signal_discovery, signal_reference
 from oiltech_digest.db import otbor_shadow_store, otbor_store, repository, search_trial_store
 
 TRIGGER = otbor_shadow_store.SEARCH_TRIAL_TRIGGER
-# Оценка цены до оплаты. Вызов поиска — средний по прошлым прогонам радара (ai_processing_runs), без них — замер 18.10
+# Оценка цены до оплаты. Вызов поиска: средний по прошлым прогонам радара (ai_processing_runs), без них: замер 18.10
 # (gpt-5 low: 74 тыс. токенов входа, 5,1 тыс. выхода, 15,6 поиска на вызов); те прогоны просили до 12 событий на тему,
-# поэтому верхняя граница растит выход и поиски по потолку. Вызов «Отбора» — замер 03.11 по 2 649 статьям ленты
+# поэтому верхняя граница растит выход и поиски по потолку. Вызов «Отбора»: замер 03.11 по 2 649 статьям ленты
 # (4 900 токенов входа, 600 выхода) плюс повтор при конфликте шагов.
 DEFAULT_SEARCH_CALL = {"input_tokens": 74_000.0, "output_tokens": 5_100.0, "web_search_calls": 15.6}
 HISTORY_EVENTS_PER_TOPIC = 12
@@ -42,7 +42,7 @@ REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class TrialError(ValueError):
-    """Пробный прогон нельзя поставить или посчитать: причина — для человека."""
+    """Пробный прогон нельзя поставить или посчитать: причина: для человека."""
 
 
 def priced(model: str) -> bool:
@@ -76,7 +76,7 @@ def plan(*, since: date, until: date, per_topic: int | None = None, model: str |
             raise TrialError(f"у модели {name} нет строки в OPENAI_MODEL_PRICES: цену до оплаты не посчитать")
     return {
         "topics": signal_discovery.search_topic_names(),
-        # Период поиска — days до until (research_period); ноль код прочёл бы как «по умолчанию», поэтому хотя бы день.
+        # Период поиска: days до until (research_period); ноль код прочёл бы как «по умолчанию», поэтому хотя бы день.
         "since": since.isoformat(), "until": until.isoformat(), "days": max(1, (until - since).days),
         "per_topic": per_topic,
         "model": model, "reasoning": reasoning, "otbor_model": otbor_model, "otbor_reasoning": otbor_reasoning,
@@ -112,7 +112,7 @@ def estimate(trial: dict[str, Any]) -> dict[str, Any]:
 
 def enqueue(trial: dict[str, Any]) -> dict[str, Any]:
     """Один широкий прогон: задача радара на полосе агентов NL, одна попытка (прогон оплачивается целиком). Пока идёт
-    другой прогон радара — отказ: два прогона одновременно платили бы за одни и те же находки."""
+    другой прогон радара, отказ: два прогона одновременно платили бы за одни и те же находки."""
     from oiltech_digest import network_policy
 
     if repository.has_recent_background_job(kind="signal_discovery", payload_subset={}, lookback_hours=24 * 30,
@@ -171,7 +171,7 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
     verdicts = {row["signal_id"]: _verdict(row) for row in otbor_shadow_store.signal_rows(new_ids)}
     topics = [_topic_row(topic, verdicts) for topic in applied.get("topics") or []]
     otbor_jobs = search_trial_store.otbor_jobs(int(job_id))
-    # Материал — ссылка, прошедшая технические проверки; уже собранная сбором — тоже материал поиска.
+    # Материал: ссылка, прошедшая технические проверки; уже собранная сбором: тоже материал поиска.
     materials = sum(topic["links"] for topic in topics)
     collected = sum(topic["already_collected"] for topic in topics)
     decided = [verdict for verdict in verdicts.values() if verdict and verdict.get("decision")]
@@ -205,7 +205,7 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
 
 def _topic_row(topic: dict[str, Any], verdicts: dict[int, Any]) -> dict[str, Any]:
     """Тема в отчёте (и база будущей ОС поиска по темам): сколько принёс поиск, сколько отсеяли технические проверки,
-    сколько ссылок прошло их (links: и уже собранные сбором — воркер отбросил их до докачки страницы), сколько из них
+    сколько ссылок прошло их (links: и уже собранные сбором: воркер отбросил их до докачки страницы), сколько из них
     в сборе, сколько новых находок после «Дедупа», сколько из них принял «Отбор» и сколько сигналов платформы найдено
     снова."""
     research = topic.get("research") or {}
@@ -249,7 +249,7 @@ def _cyrillic(text: str) -> bool:
 
 def _russian_titles(findings: list[dict[str, Any]], verdicts: dict[int, Any]) -> dict[str, Any]:
     """Сколько принятых находок с русским заголовком страницы: он идёт без правил заголовка «Сути и перевода»
-    (перевод правит только иноязычный), решение по нему — по этим цифрам."""
+    (перевод правит только иноязычный), решение по нему: по этим цифрам."""
     accepted = [row for row in findings if (verdicts.get(row["id"]) or {}).get("decision") == "accept"]
     russian = [row for row in accepted if _cyrillic(str(row.get("title") or ""))]
     return {"accepted": len(accepted), "russian": len(russian), "share": _share(len(russian), len(accepted)),
@@ -272,7 +272,7 @@ def _recall(reference: list[dict[str, Any]], findings: list[dict[str, Any]], aga
     found_search = {item["title"] for item in by_search["found_items"]}
     found_collection = {item["title"] for item in by_collection["found_items"]}
     titles = [row["title"] for row in reference]
-    # База будущей ОС поиска (решение владельца 03.11): по каждой строке эталона и по направлению эксперта — что нашёл
+    # База будущей ОС поиска (решение владельца 03.11): по каждой строке эталона и по направлению эксперта: что нашёл
     # поиск, что есть только в сборе, что пропущено.
     items = [{"title": row["title"], "direction": row.get("direction") or "без направления",
               "search": row["title"] in found_search, "collection": row["title"] in found_collection}

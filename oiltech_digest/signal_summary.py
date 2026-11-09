@@ -2,14 +2,14 @@
 суть и русский заголовок тем же этапом, что статьи ленты (pipeline.summarize_article, title_ru_for_article). Раньше
 находке их давал судья радара, а при «Отборе» судьи нет.
 
-Вход — публикация (та же, что видел «Отбор») и поля «Отбора» по договорённости: категория, связь с нефтесервисом и
+Вход, публикация (та же, что видел «Отбор») и поля «Отбора» по договорённости: категория, связь с нефтесервисом и
 применение; решения и обоснования «Отбора» на входе нет. Дальше «Отбора» идут только принятые. Заполняется только
-недостающее: описание автора материала — его суть, правку человека этап не трогает. Русский заголовок находки не по
+недостающее: описание автора материала: его суть, правку человека этап не трогает. Русский заголовок находки не по
 правилам эксперта правится, как у статьи ленты; заголовок материала написал человек, его этап не правит (решение
-владельца 03.11). Модели — те же, что у сути и
-перевода ленты (OPENAI_SUMMARY_MODEL, OPENAI_TRANSLATE_MODEL на воркере; по проверке на эталоне #150 — gpt-6.1-terra,
+владельца 03.11). Модели: те же, что у сути и
+перевода ленты (OPENAI_SUMMARY_MODEL, OPENAI_TRANSLATE_MODEL на воркере; по проверке на эталоне #150: gpt-6.1-terra,
 low, вместо снимаемой 11.12.2026 gpt-5-mini). Ядро собирает пакет при выдаче, воркер без базы зовёт модель, ядро пишет:
-ответ воркера — недоверенный ввод.
+ответ воркера: недоверенный ввод.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from oiltech_digest.signal_card_pack import _publisher_label, publication_day, p
 KIND = signal_summary_store.KIND
 # Шаг этапа в «Ходе решения» сигнала.
 STAGE = "Суть и перевод"
-# Потолки ответа воркера (недоверенный ввод): суть — несколько предложений, заголовок — как у перевода ленты.
+# Потолки ответа воркера (недоверенный ввод): суть: несколько предложений, заголовок: как у перевода ленты.
 _SUMMARY_CHARS, _TITLE_CHARS = 1500, 200
 
 
@@ -41,15 +41,15 @@ def scheduler_step() -> dict[str, Any]:
 
 
 def enqueue_named(signal_ids: list[int]) -> dict[str, Any]:
-    """Названные сигналы (повтор после сбоя модели) — по полосе пересчётов. Дальше «Отбора» идут только принятые:
-    остальные — мимо (skipped), за них не платим."""
+    """Названные сигналы (повтор после сбоя модели): по полосе пересчётов. Дальше «Отбора» идут только принятые:
+    остальные: мимо (skipped), за них не платим."""
     accepted = signal_summary_store.accepted_ids(signal_ids)
     return {"signals": len(accepted), "skipped": [one for one in signal_ids if one not in accepted],
             "jobs": enqueue(accepted, trigger="manual", bulk=True)}
 
 
 def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
-    """Задачи этапа пачками по OTBOR_BATCH; bulk — названные сигналы, по полосе пересчётов."""
+    """Задачи этапа пачками по OTBOR_BATCH; bulk: названные сигналы, по полосе пересчётов."""
     from oiltech_digest import network_policy
 
     route = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
@@ -73,10 +73,10 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
-    """Публикация сигнала так, как её видит этап, — поля статьи ленты (pipeline._article_prompt), публикация та же, что
-    у «Отбора» (у материала — colleague_materials.as_publication); поля «Отбора» — ключами сигнала
-    (pipeline.OTBOR_FIELDS). edit_title — править ли русский заголовок по правилам эксперта (решение владельца 03.11):
-    у находки да, у материала нет — его заголовок написал человек."""
+    """Публикация сигнала так, как её видит этап, поля статьи ленты (pipeline._article_prompt), публикация та же, что
+    у «Отбора» (у материала: colleague_materials.as_publication); поля «Отбора»: ключами сигнала
+    (pipeline.OTBOR_FIELDS). edit_title: править ли русский заголовок по правилам эксперта (решение владельца 03.11):
+    у находки да, у материала нет: его заголовок написал человек."""
     return {
         "signal_id": int(row["signal_id"]),
         "needs": signal_summary_store.missing(row),
@@ -98,7 +98,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Сторона воркера: суть и перевод заголовка — что нужно сигналу; ответы модели — как есть."""
+    """Сторона воркера: суть и перевод заголовка: что нужно сигналу; ответы модели: как есть."""
     client = make_client()
     summaries: list[dict[str, Any]] = []
     result = {"signal_summary": True, "kind": KIND, "summaries": summaries}
@@ -107,7 +107,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             try:
                 heartbeat(result)
             except StopRequested:
-                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное — в очередь.
+                # Остановка воркера: сделанное уходит ядру частичным итогом, остальное: в очередь.
                 result["partial"] = True
                 break
         needs = set(item.get("needs") or [])
@@ -116,7 +116,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             if "summary" in needs:
                 row["summary"] = _answer(summarize_article(item, client), "summary")
             if "translation" in needs:
-                # Править — только по явному разрешению ядра: пакет без пометки (ядро до правки) заголовок не правит.
+                # Править, только по явному разрешению ядра: пакет без пометки (ядро до правки) заголовок не правит.
                 title_ru, response = title_ru_for_article(item, client, edit_russian=item.get("edit_title") is True)
                 if title_ru is not None:
                     row["translation"] = (_answer(response, "title_ru", title_ru) if response is not None
@@ -137,8 +137,8 @@ def _answer(response: Any, field: str, value: Any = None) -> dict[str, Any]:
 
 def apply_result(result: dict[str, Any], *, job_id: int | None = None,
                  signal_ids: list[Any] | None = None) -> dict[str, Any]:
-    """Сторона ядра: суть и русский заголовок — в сигнал, только в пустые поля (signal_summary_store.write_summary),
-    словарь терминов — версией ядра. Строка чужого сигнала не пишется; расход — по ставкам ядра."""
+    """Сторона ядра: суть и русский заголовок: в сигнал, только в пустые поля (signal_summary_store.write_summary),
+    словарь терминов: версией ядра. Строка чужого сигнала не пишется; расход: по ставкам ядра."""
     rows = [row for row in result.get("summaries") or [] if isinstance(row, dict)]
     expected = None if signal_ids is None else {str(value) for value in signal_ids}
     ids = [signal_id for row in rows if (signal_id := _signal_id(row, expected)) is not None]
@@ -179,7 +179,7 @@ def _text(stage: Any, field: str, limit: int) -> str:
 
 def _author_title(row: dict[str, Any] | None, title_ru: str) -> str:
     """Русский заголовок материала написал человек: ядро пишет его как есть, что бы ни прислал воркер (решение владельца
-    03.11). Перевод иноязычного заголовка материала и заголовки находок — ответ воркера."""
+    03.11). Перевод иноязычного заголовка материала и заголовки находок: ответ воркера."""
     if row is None or row.get("origin") != SIGNAL_ORIGIN_MATERIAL or not title_ru:
         return title_ru
     title = " ".join(str(row.get("title") or "").split())
@@ -200,7 +200,7 @@ def _step(values: dict[str, str]) -> dict[str, str]:
 
 
 def _usage(row: dict[str, Any], expected: set[str] | None) -> list[dict[str, Any]]:
-    """Оплаченные вызовы модели — по стадиям сути и перевода; строка чужого сигнала — не расход этой задачи."""
+    """Оплаченные вызовы модели: по стадиям сути и перевода; строка чужого сигнала: не расход этой задачи."""
     signal_id = _signal_id(row, expected)
     if signal_id is None:
         return []

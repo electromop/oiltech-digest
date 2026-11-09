@@ -103,7 +103,7 @@ def test_parse_source_reports_unavailable_without_rendering(monkeypatch):
 
 def test_playwright_proxy_for_only_overridden_hosts(monkeypatch):
     """Через прокси идут только хосты из PROXY_HOST_OVERRIDES (точечно для Hard-WAF);
-    остальные playwright-источники — напрямую. PROXY_URL парсится в playwright-формат."""
+    остальные playwright-источники: напрямую. PROXY_URL парсится в playwright-формат."""
     from oiltech_digest.ingestion import http_client
 
     monkeypatch.setattr(
@@ -125,7 +125,7 @@ def test_playwright_proxy_for_only_overridden_hosts(monkeypatch):
 
 
 def test_listing_gets_a_second_longer_attempt_when_first_is_empty(monkeypatch):
-    """«Пока не получится — пара попыток»: у ядра повтор был, а NL-воркер его не
+    """«Пока не получится, пара попыток»: у ядра повтор был, а NL-воркер его не
     унаследовал. Теперь оба зовут одну функцию."""
     settles: list[int] = []
 
@@ -190,7 +190,7 @@ def _group_gone(pgid: int, timeout: float = 5.0) -> bool:
 
 
 def test_render_deadline_kills_the_whole_browser_process_group():
-    """Chromium идёт лидером своей группы вместе с хелперами — снимается вся группа."""
+    """Chromium идёт лидером своей группы вместе с хелперами: снимается вся группа."""
     helper = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
     browser = subprocess.Popen([sys.executable, "-c", helper], start_new_session=True)
     try:
@@ -243,7 +243,7 @@ def test_render_whose_browser_is_not_found_kills_nothing():
 
 
 def test_browser_pid_comes_from_the_marker_in_its_command_line():
-    """Метка рендера — только в командной строке его браузера: чужой рендер (пул потоков API)
+    """Метка рендера, только в командной строке его браузера: чужой рендер (пул потоков API)
     со своей меткой не заденет. Проверка на настоящей таблице процессов этой системы."""
     marker = f"--oiltech-render={uuid.uuid4().hex}"
     browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--disable-gpu", marker])
@@ -259,7 +259,7 @@ def test_browser_pid_comes_from_the_marker_in_its_command_line():
 
 
 def test_linux_process_table_is_read_from_proc(monkeypatch, tmp_path):
-    """В образах ядра и NL `ps` нет — таблица читается из /proc: аргументы там через NUL."""
+    """В образах ядра и NL `ps` нет, таблица читается из /proc: аргументы там через NUL."""
     for pid, cmdline in (("19", b"/root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-linux/headless_shell"
                                 b"\0--no-sandbox\0--oiltech-render=abc\0--remote-debugging-pipe\0"),
                          ("21", b"headless_shell\0--type=zygote\0--oiltech-render=abc\0")):
@@ -273,7 +273,7 @@ def test_linux_process_table_is_read_from_proc(monkeypatch, tmp_path):
 
 
 def test_browser_pid_lookup_failure_or_doubt_is_not_fatal(monkeypatch):
-    """Без PID рендер идёт, только без сторожа — сбой поиска не роняет его до try/finally с close()."""
+    """Без PID рендер идёт, только без сторожа: сбой поиска не роняет его до try/finally с close()."""
     marker = "--oiltech-render=abc"
 
     def unreadable():
@@ -288,16 +288,16 @@ def test_browser_pid_lookup_failure_or_doubt_is_not_fatal(monkeypatch):
     table((1234, f"chrome --headless {marker}"), (1235, f"chrome --type=renderer {marker}"))
     assert playwright_parser._browser_pid(marker) == 1234  # хелпер с меткой браузером не считается
     table((1234, f"chrome {marker}"), (1300, f"chrome {marker}"))
-    assert playwright_parser._browser_pid(marker) is None  # два браузера с одной меткой — не угадываем
+    assert playwright_parser._browser_pid(marker) is None  # два браузера с одной меткой: не угадываем
     table((1234, f"chrome {marker}x"))
     assert playwright_parser._browser_pid(marker) is None  # метка сверяется целиком
-    # killpg(0) снял бы группу самого шага — скрипт и сторожа, killpg(1) бьёт в init.
+    # killpg(0) снял бы группу самого шага: скрипт и сторожа, killpg(1) бьёт в init.
     for pid in (0, 1):
         table((pid, f"chrome {marker}"))
         assert playwright_parser._browser_pid(marker) is None
 
 
-# Настоящий Chromium: срок рендера — это снятый браузер, подделка вызова его не проверит.
+# Настоящий Chromium: срок рендера это снятый браузер, подделка вызова его не проверит.
 RENDER_CHILD = r"""
 import json, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -347,7 +347,7 @@ for page, settle_ms in (("ok", 0), ("wedge", 1000)):
 
 @pytest.fixture(scope="module")
 def chromium():
-    """Есть ли Chromium — проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
+    """Есть ли Chromium: проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
     probe = ("from playwright.sync_api import sync_playwright\n"
              "with sync_playwright() as pw:\n"
              "    pw.chromium.launch(headless=True, args=['--no-sandbox']).close()\n")
@@ -372,7 +372,7 @@ def test_render_that_never_returns_is_cut_by_the_deadline(chromium):
     try:
         out, err = child.communicate(timeout=60)
     except subprocess.TimeoutExpired:
-        # Драйвер Playwright — в группе ребёнка; Chromium выходит сам, когда закрывается его труба.
+        # Драйвер Playwright: в группе ребёнка; Chromium выходит сам, когда закрывается его труба.
         os.killpg(child.pid, signal.SIGKILL)
         child.communicate()
         pytest.fail("рендер не вернулся за 60 с: срока у него нет")
@@ -390,7 +390,7 @@ def test_render_that_never_returns_is_cut_by_the_deadline(chromium):
     assert not any(_alive(pid) for pid in wedge["pids"]), "браузер пережил рендер"
 
 
-# Брешь #67: срок взводился после launch() и после вызова CDP за PID браузера — зависание там
+# Брешь #67: срок взводился после launch() и после вызова CDP за PID браузера: зависание там
 # не снималось. «Браузер», который запускается, но на рукопожатие по трубе не отвечает:
 FAKE_BROWSER = """#!/usr/bin/env python3
 import os, time
@@ -433,7 +433,7 @@ print(json.dumps({"html": html is not None, "status": pp.last_fetch_status(),
 
 
 def _dies(pid: int, timeout: float = 5.0) -> bool:
-    """Процесс ушёл: зомби подбирает его родитель (драйвер) или launchd — на это нужен миг."""
+    """Процесс ушёл: зомби подбирает его родитель (драйвер) или launchd: на это нужен миг."""
     deadline = time.monotonic() + timeout
     while _alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -450,10 +450,10 @@ def _kill_groups(pids: list[int]) -> None:
 
 @pytest.mark.parametrize("mode", ["no-handshake", "stopped"])
 def test_render_hung_before_the_browser_pid_is_known_is_cut_too(chromium, tmp_path, mode):
-    """no-handshake: launch() ждёт браузер, который не отвечает, — у Playwright 1.62 это 180 с
-    (замер 28.09), а не 30, как думали 25.09. stopped: браузер замолчал сразу после запуска —
+    """no-handshake: launch() ждёт браузер, который не отвечает, у Playwright 1.62 это 180 с
+    (замер 28.09), а не 30, как думали 25.09. stopped: браузер замолчал сразу после запуска:
     вызов CDP за его PID не вернётся никогда: срока у него нет, а снятие браузера его не
-    отпускает (замер 28.09 — держал, пока жив драйвер). Теперь срок взведён до запуска, а PID
+    отпускает (замер 28.09: держал, пока жив драйвер). Теперь срок взведён до запуска, а PID
     ищется по метке в командной строке браузера, без вызова, который может не вернуться."""
     fake = tmp_path / "fake-browser"
     fake.write_text(FAKE_BROWSER)
@@ -469,7 +469,7 @@ def test_render_hung_before_the_browser_pid_is_known_is_cut_too(chromium, tmp_pa
     try:
         out, err = child.communicate(timeout=40)
     except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)  # драйвер — в группе ребёнка
+        os.killpg(child.pid, signal.SIGKILL)  # драйвер: в группе ребёнка
         child.communicate()
         pytest.fail(f"{mode}: рендер не вернулся за 40 с — зависание до срока не снимается")
     finally:
@@ -482,5 +482,5 @@ def test_render_hung_before_the_browser_pid_is_known_is_cut_too(chromium, tmp_pa
 
     assert rows[0]["status"] == "error:render_timeout", err[-2000:]
     assert rows[0]["html"] is False
-    assert rows[0]["seconds"] < 20  # срок 5 + 0 + 2 = 7 с — теперь от запуска браузера
+    assert rows[0]["seconds"] < 20  # срок 5 + 0 + 2 = 7 с: теперь от запуска браузера
     assert len(browser_pids) == 1 and survivors == [], "браузер пережил срок рендера"

@@ -1,4 +1,4 @@
-"""Тесты сверки чисел с текстом якоря — чистые функции, без сети и БД."""
+"""Тесты сверки чисел с текстом якоря: чистые функции, без сети и БД."""
 
 import pytest
 
@@ -36,7 +36,7 @@ def test_normalize_mixed_grouping_and_decimal():
 
 
 def test_normalize_single_separator_with_three_digits_is_grouping():
-    # «1,234» — разряды: ровно три цифры после разделителя
+    # «1,234», разряды: ровно три цифры после разделителя
     assert normalize_number("1,234") == "1234"
     assert normalize_number("1.234") == "1234"
 
@@ -65,7 +65,7 @@ def test_verify_plain_number_found_and_missing():
 
 
 def test_verify_number_written_with_other_grouping_in_text():
-    # модель отдала «1234567», в документе — «1 234 567» с неразрывным пробелом
+    # модель отдала «1234567», в документе: «1 234 567» с неразрывным пробелом
     assert verify_value("1234567", None, "Объём составил 1 234 567 за период") is True
     assert verify_value("1 234 567", None, "Объём составил 1.234.567 за период") is True
 
@@ -90,7 +90,7 @@ def test_verify_scale_thousand_vs_million_is_false():
 
 
 def test_verify_scale_folded_into_number_matches():
-    # «1 500 000 тонн» в тексте и «1,5» + «млн тонн» от модели — одна величина
+    # «1 500 000 тонн» в тексте и «1,5» + «млн тонн» от модели: одна величина
     assert verify_value("1,5", "млн тонн", "Отгружено 1 500 000 тонн") is True
     assert verify_value("1500000", "тонн", "Отгружено 1,5 млн тонн") is True
 
@@ -157,13 +157,13 @@ def test_verify_unknown_unit_is_compared_literally():
 
 
 def test_verify_unit_none_ignores_scale_and_unit():
-    # модель не заявила единицу — спрашиваем только про цифры
+    # модель не заявила единицу: спрашиваем только про цифры
     assert verify_value("1,5", None, "Добыча 1,5 млн тонн") is True
     assert verify_value("1,5", "", "Добыча 1,5 млн тонн") is True
 
 
 def test_verify_value_may_carry_scale_itself():
-    # value="1,5 млн" + unit="тонн" — масштаб не должен посчитаться дважды
+    # value="1,5 млн" + unit="тонн": масштаб не должен посчитаться дважды
     assert verify_value("1,5 млн", "тонн", "Добыча 1,5 млн тонн") is True
     assert verify_value("1,5 млн", "тонн", "Добыча 1,5 млрд тонн") is False
     assert verify_value("1,5 млн", "млн тонн", "Добыча 1,5 млн тонн") is True
@@ -202,7 +202,7 @@ def test_verify_anchor_without_numbers_returns_false():
 # --- Написание единицы против подмены величины -------------------------------
 # Замер 21.08 на 107-страничном заключении экспертизы: сверка отбивала большинство
 # верных фактов только потому, что модель пишет «метр», а документ «м». Разделяем
-# два разных случая: орфография единицы — не ошибка, подмена величины и масштаба — ошибка.
+# два разных случая: орфография единицы: не ошибка, подмена величины и масштаба: ошибка.
 
 def test_unit_spelling_does_not_block_verification():
     assert verify_value("959,0", "метр", "Длина 959,0 м причала") is True
@@ -212,7 +212,7 @@ def test_unit_spelling_does_not_block_verification():
 
 
 def test_different_quantity_still_blocks_verification():
-    """Барреля вместо тонн — настоящая ошибка, а не орфография."""
+    """Барреля вместо тонн: настоящая ошибка, а не орфография."""
     assert verify_value("1,5", "млн барр", "Добыча составила 1,5 млн тонн.") is False
 
 

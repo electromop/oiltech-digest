@@ -1,13 +1,13 @@
 """Материалы коллег: что сотрудник прислал боту в рабочую группу Telegram, и его оценка.
 
-Бот живёт на NL (`tg_materials_bot.py`: с РФ-ядра Telegram недоступен), а запись — здесь, на
+Бот живёт на NL (`tg_materials_bot.py`: с РФ-ядра Telegram недоступен), а запись: здесь, на
 ядре, через `/api/external-worker/materials` с токеном воркера. Модуль общий для обеих сторон:
 шкала оценки и правила полей одни, и бот не примет того, от чего потом откажется ядро.
 
-Шкала — та же, что у карточки радара (список Виктора от 13.09, `SignalRadarPage.tsx`,
+Шкала: та же, что у карточки радара (список эксперта заказчика от 13.09, `SignalRadarPage.tsx`,
 `signal_feedback._normalize_verdict`), все девять пунктов, одни и те же значения в базе.
 
-ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в
+ВНИМАНИЕ про тесты: соединение: `connection.get_connection()` атрибутом модуля (как в
 documents_repo): изоляция тестов держится на подмене этого атрибута.
 """
 
@@ -31,7 +31,7 @@ KINDS = {
     "event": "Событие — описание своими словами",
 }
 
-# (значение, коротко — для кнопки, полностью — как на экране радара). Порядок — как на экране.
+# (значение, коротко: для кнопки, полностью: как на экране радара). Порядок: как на экране.
 VERDICTS: list[tuple[str, str, str]] = [
     ("strong_signal", "Сильный сигнал", "Сильный сигнал — вынести в дайджест / обсуждать"),
     ("approved", "Полезный сигнал", "Полезный сигнал — релевантно, сохранить в базе"),
@@ -56,11 +56,11 @@ FILES_SUBDIR = "colleague_materials"
 
 
 class InvalidMaterial(ValueError):
-    """Материал не принят; текст — для человека."""
+    """Материал не принят; текст: для человека."""
 
 
 class MaterialInDigest(ValueError):
-    """Материал нельзя удалить: его сигнал выбран «в дайджест» (ревью PR #155); текст — для человека."""
+    """Материал нельзя удалить: его сигнал выбран «в дайджест» (ревью PR #155); текст: для человека."""
 
 
 def check_url(value: str) -> str:
@@ -92,7 +92,7 @@ def check_description(value: str) -> str:
 
 
 def parse_companies(value: str) -> list[str]:
-    """«Газпром нефть, Halliburton; СИБУР» → список; «-» и пусто — нет компаний."""
+    """«Газпром нефть, Halliburton; СИБУР» → список; «-» и пусто: нет компаний."""
     text = (value or "").strip()
     if text in {"", "-", "—", "нет"}:
         return []
@@ -164,7 +164,7 @@ def files_dir() -> Path:
 
 
 def store_file(data: bytes, filename: str) -> Path:
-    """Имя на диске — отпечаток и расширение (только [a-z0-9]): имя от пользователя в путь не идёт."""
+    """Имя на диске, отпечаток и расширение (только [a-z0-9]): имя от пользователя в путь не идёт."""
     suffix = Path(filename or "").suffix.lower().lstrip(".")
     suffix = suffix if re.fullmatch(r"[a-z0-9]{1,8}", suffix) else "bin"
     path = files_dir() / f"{hashlib.sha256(data).hexdigest()}.{suffix}"
@@ -175,7 +175,7 @@ def store_file(data: bytes, filename: str) -> Path:
 
 def save(fields: dict[str, Any], *, file_name: str | None = None, file_path: str | None = None,
          file_size: int | None = None) -> tuple[dict[str, Any], bool]:
-    """Записать материал. Повтор той же отправки (то же сообщение бота) — прежняя строка и False."""
+    """Записать материал. Повтор той же отправки (то же сообщение бота): прежняя строка и False."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -224,15 +224,15 @@ def count_materials(*, tg_user_id: int | None = None) -> int:
 
 
 def status(row: dict[str, Any]) -> tuple[str, str]:
-    """Где материал в воронке. До оценки материалов (следующий шаг) — «принят»; с сигналом — его номер."""
+    """Где материал в воронке. До оценки материалов (следующий шаг): «принят»; с сигналом: его номер."""
     if row.get("signal_id"):
         return "signal", f"Стал сигналом №{row['signal_id']}"
     return "accepted", "Принят на платформу"
 
 
 def publication_text(row: dict[str, Any]) -> tuple[str, str | None]:
-    """Текст материала как публикации — вход агентов (#131, спека #128) и колонка пакета эксперту (#129): описание
-    автора; у файла и текст файла, в тех же пределах, что статья (обрезает publication_text). Файл не прочитался —
+    """Текст материала как публикации, вход агентов (#131, спека #128) и колонка пакета эксперту (#129): описание
+    автора; у файла и текст файла, в тех же пределах, что статья (обрезает publication_text). Файл не прочитался:
     только описание и почему (вторым значением)."""
     if not row.get("file_path"):
         return row["description"], None
@@ -247,8 +247,8 @@ def publication_text(row: dict[str, Any]) -> tuple[str, str | None]:
 
 
 def as_publication(row: dict[str, Any]) -> dict[str, Any]:
-    """Строка материала как публикация агентов (#131) и пакета эксперту (#129): text — publication_text, file_note —
-    почему файл не прочитан. Издатель — сайт ссылки (signal_card_pack._publisher_label): источника у материала нет."""
+    """Строка материала как публикация агентов (#131) и пакета эксперту (#129): text, publication_text, file_note:
+    почему файл не прочитан. Издатель: сайт ссылки (signal_card_pack._publisher_label): источника у материала нет."""
     text, note = publication_text(row)
     return {**row, "text": text, "file_note": note}
 
@@ -289,7 +289,7 @@ def check_edit(row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_material(material_id: int, patch: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any] | None:
-    """Записать правку; нет материала — None, правка не по правилам — InvalidMaterial. Если материал уже сигнал
+    """Записать правку; нет материала: None, правка не по правилам: InvalidMaterial. Если материал уже сигнал
     (#131), правка в той же транзакции доходит и до сигнала (material_signals.apply_edit, ревью PR #155)."""
     from oiltech_digest import material_signals
 
@@ -314,7 +314,7 @@ def update_material(material_id: int, patch: dict[str, Any], *, user_id: int | N
 
 
 def delete_material(material_id: int) -> bool:
-    """Удалить материал. Его сигнал (#131) уходит в архив в той же транзакции, а если он выбран «в дайджест» —
+    """Удалить материал. Его сигнал (#131) уходит в архив в той же транзакции, а если он выбран «в дайджест»:
     MaterialInDigest, ничего не удалено (ревью PR #155): иначе карточка осталась бы в витрине без материала. Файл на
     диске назван по отпечатку и бывает общим у одинаковых файлов: удаляется, только если на него не ссылается другой
     материал."""

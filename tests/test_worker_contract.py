@@ -47,14 +47,14 @@ def test_claim_records_build_and_contract_per_container(isolated_db, monkeypatch
     _claim(core, "nl-ai-1", ["external-ai"], _current("abc1234"))
 
     consumers = {row["consumer"]: row for row in repository.list_external_consumers()}
-    assert set(consumers) == {"nl-fetch-1", "nl-ai-1"}  # потребитель — контейнер, а не поток
+    assert set(consumers) == {"nl-fetch-1", "nl-ai-1"}  # потребитель: контейнер, а не поток
     assert consumers["nl-fetch-1"]["build"] == "f00d123"
     assert consumers["nl-fetch-1"]["contract"] == contract.CONTRACT
     assert consumers["nl-fetch-1"]["queues"] == ["external-fetch"]
 
 
 def test_old_worker_without_contract_raises_alert(isolated_db, monkeypatch):
-    """Воркер сборки до контракта заголовков не шлёт — ровно такой NL будет сразу после
+    """Воркер сборки до контракта заголовков не шлёт: ровно такой NL будет сразу после
     выката ядра, и сторож обязан это показать, а не молчать до первой поломки."""
     core = _core(monkeypatch)
     _claim(core, "nl-ai-1", ["external-ai"])  # старый воркер: без заголовков
@@ -195,7 +195,7 @@ def test_worker_versions_self_check(monkeypatch, capsys, build, number, code):
 
 
 def test_screen_and_nl_get_the_same_mismatch_flag_as_the_watchdog(isolated_db):
-    """Ревью 23.09: экран красил расхождение без окна «живой за 6 ч» — переименованный
+    """Ревью 23.09: экран красил расхождение без окна «живой за 6 ч»: переименованный
     контейнер горел бы вечно. Флаг считает ядро одним правилом с тревогами сторожа."""
     with connection.get_connection() as conn:
         conn.execute(

@@ -1,9 +1,9 @@
-"""Список технологического радара для экрана — выборка на сервере, по всей базе.
+"""Список технологического радара для экрана: выборка на сервере, по всей базе.
 
 Замечание заказчика 19.09: поиск радара «не очень удобен». Экран грузил 150 карточек по
 баллу и искал только в них: карточка ниже 150-й по баллу поиском не находилась, «Тема» и
 «Зрелость» без «Обновить» не применялись. Теперь поиск, период поступления, балл,
-сортировка и страница — параметры GET /api/signals, а числа над списком —
+сортировка и страница, параметры GET /api/signals, а числа над списком:
 GET /api/signals/summary с той же видимостью карточки, что и у списка.
 """
 
@@ -67,21 +67,21 @@ def test_search_finds_the_card_below_the_loaded_page_by_its_link(user):
                    link_title="Seismic survey by a drone swarm", publisher="Rigzone")
 
     assert target not in _ids(_get("/api/signals", user, limit=2))
-    # Заголовок ссылки-доказательства, издатель, заголовок карточки — без учёта регистра.
+    # Заголовок ссылки-доказательства, издатель, заголовок карточки: без учёта регистра.
     assert _ids(_get("/api/signals", user, q="Drone Swarm", limit=2)) == [target]
     assert _ids(_get("/api/signals", user, q="rigzone", limit=2)) == [target]
     assert _ids(_get("/api/signals", user, q="СЕЙСМОРАЗВЕДКА", limit=2)) == [target]
-    # Номер карточки — тот, что просят в поле «ID дубля».
+    # Номер карточки: тот, что просят в поле «ID дубля».
     assert _ids(_get("/api/signals", user, q=f"#{target}", limit=2)) == [target]
-    # Символы шаблона LIKE — обычные символы: «%» не находит всё подряд.
+    # Символы шаблона LIKE, обычные символы: «%» не находит всё подряд.
     assert _ids(_get("/api/signals", user, q="%")) == []
-    # «²» — цифра для str.isdigit(), но не номер карточки: поиск, а не 500 (ревью ветки).
+    # «²»: цифра для str.isdigit(), но не номер карточки: поиск, а не 500 (ревью ветки).
     assert _ids(_get("/api/signals", user, q="²")) == []
     assert _get("/api/signals/summary", user, q="#²").json()["matching"] == 0
 
 
 def test_links_of_the_page_come_in_one_query_the_same_as_card_by_card(user, monkeypatch):
-    # Ссылки страницы — одним запросом, а не подключением к базе на каждую карточку: без
+    # Ссылки страницы, одним запросом, а не подключением к базе на каждую карточку: без
     # пула это ~100 подключений на каждую смену фильтра (ревью ветки).
     main = _card("main", "Главная карточка", score=90)
     repository.upsert_signal_evidence(
@@ -109,7 +109,7 @@ def test_links_of_the_page_come_in_one_query_the_same_as_card_by_card(user, monk
     assert len(rows[0]["evidence"]) == 2
 
 
-# Определение видимости и поиска по ссылкам «в лоб» — одним OR с вложенным подзапросом, как
+# Определение видимости и поиска по ссылкам «в лоб»: одним OR с вложенным подзапросом, как
 # было до переписывания ради скорости (ревью PR #83: на данных как на проде подзапрос
 # исполнялся по строке). Быстрые запросы обязаны давать ровно ту же выборку.
 _REFERENCE_VISIBLE = """
@@ -136,10 +136,10 @@ def _merge(duplicate, main):
 def test_fast_visibility_and_link_search_select_the_same_cards_as_the_plain_definition(user):
     _topics(DRILLING)
     own = _card("own", "Своя ссылка", link_title="Alpha rig", publisher="Rigzone")
-    # Своих ссылок нет — карточку держат ссылки её склеенного дубля.
+    # Своих ссылок нет: карточку держат ссылки её склеенного дубля.
     by_duplicate = repository.upsert_signal({"signal_key": "by-dup", "title": "Только у дубля", "theme": DRILLING})
     _merge(_card("dup-1", "Дубль 1", link_title="Beta drone survey", publisher="WorldOil"), by_duplicate)
-    # Ни своих ссылок, ни ссылок у дубля — карточку не показываем.
+    # Ни своих ссылок, ни ссылок у дубля: карточку не показываем.
     empty = repository.upsert_signal({"signal_key": "empty", "title": "Без ссылок", "theme": DRILLING})
     _merge(repository.upsert_signal({"signal_key": "dup-2", "title": "Пустой дубль", "theme": DRILLING}), empty)
     both = _card("both", "Свои и дубля", link_title="Gamma pump")
@@ -191,7 +191,7 @@ def test_pages_by_offset_cover_the_list_without_repeats(user):
 
 
 def test_arrival_period_is_the_moscow_date_of_the_card(user):
-    # 20.09 22:30 UTC — уже 21.09 по Москве: «Поступил» на экране — по Москве.
+    # 20.09 22:30 UTC: уже 21.09 по Москве: «Поступил» на экране: по Москве.
     late = _card("late", "Поздний вечер", seen=datetime(2026, 9, 20, 22, 30, tzinfo=timezone.utc))
     early = _card("early", "Утро", seen=datetime(2026, 9, 20, 6, 0, tzinfo=timezone.utc))
 
@@ -225,12 +225,12 @@ def test_summary_counts_the_whole_radar_and_the_selection_with_one_visibility(us
     assert summary.status_code == 200, summary.text
     payload = summary.json()
     assert (payload["total"], payload["matching"]) == (4, 4)
-    # В фильтре тем — только тематики заказчика; ранняя карточка со свободной темой — нет.
+    # В фильтре тем: только тематики заказчика; ранняя карточка со свободной темой: нет.
     assert payload["themes"] == [{"theme": DRILLING, "count": 2}, {"theme": ECOLOGY, "count": 1}]
 
     filtered = _get("/api/signals/summary", user, q="буровая").json()
     assert (filtered["total"], filtered["matching"]) == (4, 1)
-    # Тот же поиск в списке — та же выборка: число над списком не расходится с ним.
+    # Тот же поиск в списке, та же выборка: число над списком не расходится с ним.
     assert _ids(_get("/api/signals", user, q="буровая")) == [rig]
     assert _get("/api/signals/summary", user, theme=ECOLOGY).json()["matching"] == 1
 
@@ -247,7 +247,7 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
             conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (fresh, dup))
             conn.commit()
     marks.set_signal_mark(fresh, status="digest", user_id=int(user["id"]))
-    # Выбор коллеги — тоже в дайджесте: плитка, как и кнопка на карточке, — по общей отметке (#111).
+    # Выбор коллеги, тоже в дайджесте: плитка, как и кнопка на карточке, по общей отметке (#111).
     marks.set_signal_mark(old, status="digest", user_id=int(other["id"]))
     repository.record_signal_feedback_event(
         None, "comment_added", signal_id=reviewed, user_id=int(other["id"]), comment="сильный источник",
@@ -258,7 +258,7 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
     assert {key: payload[key] for key in tiles} == {
         "total": 3, "new_7d": 1, "in_digest": 2, "with_feedback": 1, "merged": 2,
     }
-    # Поиск сужает выборку, но не плитки: они — про весь радар.
+    # Поиск сужает выборку, но не плитки: они: про весь радар.
     searched = _get("/api/signals/summary", user, q="двухнедельной").json()
     assert {key: searched[key] for key in tiles} == {key: payload[key] for key in tiles}
     assert searched["matching"] == 1
@@ -266,7 +266,7 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
 
 
 def test_tile_filter_lists_the_cards_behind_each_tile(user):
-    # Плашки над списком — фильтры (решение владельца 23.10): по нажатию список показывает ровно те
+    # Плашки над списком: фильтры (решение владельца 23.10): по нажатию список показывает ровно те
     # карточки, что плашка посчитала. Условие у фильтра и у числа плашки одно.
     other = repository.create_user("colleague@example.test", "long-enough-password", "user")
     now = datetime.now(timezone.utc)
@@ -286,13 +286,13 @@ def test_tile_filter_lists_the_cards_behind_each_tile(user):
         # «N из M»: в выборке плашки столько же, сколько на самой плашке; плашки от фильтра не меняются.
         assert summary["matching"] == tiles[tile] == len(expected), tile
         assert summary["total"] == tiles["total"]
-    # Плашка с поиском — пересечение: свежая карточка не про «отзыв».
+    # Плашка с поиском, пересечение: свежая карточка не про «отзыв».
     assert _ids(_get("/api/signals", user, tile="new_7d", q="отзыв")) == []
     assert _get("/api/signals", user, tile="merged").status_code == 422
 
 def test_card_carries_the_word_rating_by_the_feed_thresholds(user):
     # Оценка «как у бизнес-сигналов» (документ заказчика 19.09): те же пороги 80/65/40,
-    # что у ленты (pipeline.score_label), — один источник слов и цвета.
+    # что у ленты (pipeline.score_label), один источник слов и цвета.
     for key, score in (("a", 85), ("b", 70), ("c", 50), ("d", 20)):
         _card(key, f"Карточка {key}", score=score)
 
