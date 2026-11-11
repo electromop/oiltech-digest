@@ -12,7 +12,9 @@ openpyxl==3.1.5
 python-dotenv==1.0.1
 fastapi==0.125.0
 uvicorn[standard]==0.38.0
-playwright>=1.40  # PDF-экспорт дайджеста через headless Chromium (см. Dockerfile)
+# PDF-экспорт дайджеста и браузерный сбор через headless Chromium (см. Dockerfile). Версия закреплена 11.11: у 1.65.0
+# встроенный node требует libatomic.so.1, которой нет в python:3.13-slim, и сборка образа падает на установке Chromium.
+playwright==1.64.1
 python-docx==1.2.0
 python-multipart==0.0.20  # приём файлов: FastAPI требует его для UploadFile: без него падает ОПРЕДЕЛЕНИЕ маршрута, не запрос
 pypdf==6.16.1  # разбор PDF. Выбран замером 20.08: 35 МБ пик против 511 МБ у pdfplumber; лицензия BSD против AGPL у pymupdf
