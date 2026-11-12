@@ -305,3 +305,21 @@ def test_admin_wrong_block_says_why_a_card_not_accepted_by_otbor_keeps_its_categ
         "«Не тот блок» сразу меняет категорию только у карточки, принятой «Отбором» в бизнес-ленту или технологический "
         "радар")
     assert _cards(admin, "business")[signal_id]["signal_category"] == "business"
+
+
+def test_issue_material_is_edited_only_by_the_admin(issue):
+    """Материал выпуска правит только администратор (решение владельца 12.11, #188): у участника правки ни с экрана
+    «Дайджест», ни с карточки нет, сервер отвечает 403; правку текста участник предлагает отметкой ОС на карточке."""
+    admin, analyst, a = issue["admin"], issue["analyst"], issue["a"]
+    signal_id = _business(a["hi"])
+    analyst.mark(a["hi"])
+
+    for fields in ({"title": "Заголовок участника"}, {"summary": "Суть участника."}, {"label": "Подпись участника"},
+                   {"hypothesis": "Оценить контракт для Компании."}, {"picture": "placeholder"}):
+        response = analyst.patch(f"/api/signals/{signal_id}/issue-material", json=fields)
+        assert response.status_code == 403, (fields, response.text)
+    assert _issue_news(analyst, a["hi"])["title"] == "Материал hi"
+
+    response = admin.patch(f"/api/signals/{signal_id}/issue-material", json={"title": "Правка администратора"})
+    assert response.status_code == 200, response.text
+    assert _issue_news(analyst, a["hi"])["title"] == "Правка администратора"

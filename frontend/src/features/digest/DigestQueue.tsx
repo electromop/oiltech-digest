@@ -25,6 +25,8 @@ type Props = {
   onAdd: (articleId: number) => void;
   // Поля материалов PDF по ключу (#162): правленый заголовок, чего не хватает, правка материала.
   materials: Map<string, DigestMaterial>;
+  // Править материал может только администратор (#188).
+  canEdit: boolean;
   editing: string | null;
   onEdit: (key: string | null) => void;
   onSaveMaterial: (material: DigestMaterial, patch: IssueMaterialPatch) => void;
@@ -99,10 +101,11 @@ export function KindBadge({ kind }: { kind?: ItemKind }) {
 export function DigestQueue(props: Props) {
   const { items, radarItems, available, issueItems, readOnly, busy, materials, editing } = props;
 
-  // «Править» у материала, чьи поля можно менять: месяц открыт и у материала есть сигнал (ADR 0006).
+  // «Править» у материала, чьи поля можно менять: месяц открыт, у материала есть сигнал (ADR 0006), правит
+  // администратор (#188).
   function editButton(key: string) {
     const material = materials.get(key);
-    if (readOnly || !material?.material_signal_id) return null;
+    if (readOnly || !props.canEdit || !material?.material_signal_id) return null;
     return (
       <button type="button" className="ghostButton compactButton" aria-expanded={editing === key}
         onClick={() => props.onEdit(editing === key ? null : key)}>

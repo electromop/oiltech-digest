@@ -1121,7 +1121,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                         </div>
                       ) : null}
                       {/* «Гипотеза для Компании» (#162) сразу после «Применения», та же, что в выпуске. */}
-                      <SignalHypothesis signal={signal} saving={savingThis} onSave={(text) => void saveHypothesis(signal, text)} />
+                      <SignalHypothesis signal={signal} saving={savingThis} editable={isAdmin}
+                        onSave={(text) => void saveHypothesis(signal, text)} />
                       {judgeFieldsOptional && !signal.transferability ? null : (
                         <div>
                           <span>Переносимость</span>

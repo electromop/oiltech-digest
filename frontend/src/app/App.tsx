@@ -205,7 +205,7 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} />;
+    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "scoring") {

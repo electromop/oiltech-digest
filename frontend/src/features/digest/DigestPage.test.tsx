@@ -379,9 +379,9 @@ describe("правки человека в выпуске (#162)", () => {
   const sent = (path: string) =>
     fetchMock.mock.calls.filter(([input]) => String(input) === path).map(([, init]) => JSON.parse(String(init?.body)));
 
-  it("у материала видно, чего не хватает; правка уходит на его сигнал только изменённым", async () => {
+  it("у материала видно, чего не хватает; правка администратора уходит на его сигнал только изменённым", async () => {
     const user = userEvent.setup();
-    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin />);
     const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
     expect(within(row).getByRole("note")).toHaveTextContent(
       "Не хватает: нет гипотезы, нет баллов по критериям, связь с нефтесервисом не определена, нет своей картинки");
@@ -393,6 +393,14 @@ describe("правки человека в выпуске (#162)", () => {
     await waitFor(() => expect(sent("/api/signals/77/issue-material")).toEqual([
       { hypothesis: "Оценить пилот для Компании.", picture: "placeholder" },
     ]));
+  });
+
+  it("материал правит только администратор: у участника «Править» нет, недостающее видно (#188)", async () => {
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
+
+    expect(within(row).getByRole("note")).toHaveTextContent("Не хватает: нет гипотезы");
+    expect(within(row).queryByRole("button", { name: "Править" })).not.toBeInTheDocument();
   });
 
   it("в строке очереди видна гипотеза, кто и когда её поставил", async () => {

@@ -43,13 +43,13 @@ def test_title_and_summary_of_a_feed_article_are_edited_once_and_shown_alike_on_
         issue, chromium):
     """У статьи ленты правки заголовка и сути не было (в октябре 4 карточки из 21). Правка с экрана «Дайджест» ложится
     на её сигнал ленты: бизнес-лента, состав выпуска и PDF показывают один текст."""
-    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    analyst, admin, a = issue["analyst"], issue["admin"], issue["a"]
     signal_id = feed_signal(a["hi"])
     set_card(signal_id, signal_category="business", theme=MARKET)
     analyst.mark(a["hi"])
     assert _material(analyst, "article", a["hi"])["material_signal_id"] == signal_id
 
-    response = _edit(colleague, signal_id, title="Сервисный контракт на бурение", summary="Суть правки коллеги.")
+    response = _edit(admin, signal_id, title="Сервисный контракт на бурение", summary="Суть правки коллеги.")
     assert response.status_code == 200, response.text
 
     material = _material(analyst, "article", a["hi"])
@@ -73,15 +73,13 @@ def _finding(key: str, title: str, *, day: int = 12, **card) -> int:
 
 
 def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_radar_judge(issue):
-    """Правка находки радара с экрана «Дайджест» меняет текст карточки на радаре и в выпуске, ложится в журнал ОС с
-    автором, но в память судьи радара не идёт: это правка текста выпуска, а не отзыв о находке."""
-    analyst, colleague, admin = issue["analyst"], issue["colleague"], issue["admin"]
+    """Правка находки радара с экрана «Дайджест» меняет текст карточки на радаре и в выпуске и ложится в журнал ОС с
+    автором; память агента не пишут ни выбор «в дайджест», ни правка (#188). Правит только администратор (#188)."""
+    analyst, admin = issue["analyst"], issue["admin"]
     finding = _finding("find", "Находка радара", signal_category="technology", theme=DRILLING)
     analyst.mark_signal(finding)
-    # Выбор «в дайджест» сам учит судью («сильный сигнал»): память до правки служит точкой отсчёта.
-    memory_before = admin.get("/api/signals/memory", params={"status": ""}).json()
 
-    response = _edit(colleague, finding, title="Правка заголовка", summary="Правка сути.")
+    response = _edit(admin, finding, title="Правка заголовка", summary="Правка сути.")
     assert response.status_code == 200, response.text
 
     card = _card(analyst, finding)
@@ -90,17 +88,17 @@ def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_rad
     assert (card["feedback_blocks"], card["feedback_count"]) == ([], 0)
     material = _material(analyst, "signal", finding)
     assert (material["title"], material["summary"]) == ("Правка заголовка", "Правка сути.")
-    assert admin.get("/api/signals/memory", params={"status": ""}).json() == memory_before
+    assert admin.get("/api/signals/memory", params={"status": ""}).json() == []
     with connection.get_connection() as conn:
         authors = conn.execute(
             "SELECT user_id FROM signal_feedback_events WHERE signal_id = %s AND corrected_title IS NOT NULL",
             (finding,),
         ).fetchall()
-    assert authors == [(colleague.id,)]
+    assert authors == [(admin.id,)]
 
-    # Заголовок и суть правятся у материала выпуска: у сигнала вне выпуска отказ, как у отзыва о нём.
+    # Заголовок и суть правятся у материала выпуска: у сигнала вне выпуска отказ (там правка: отметка ОС).
     outside = _finding("outside", "Находка вне выпуска", signal_category="technology", theme=DRILLING)
-    response = _edit(colleague, outside, title="Правка вне выпуска")
+    response = _edit(admin, outside, title="Правка вне выпуска")
     assert response.status_code == 409, response.text
     assert _card(analyst, outside)["title_ru"] == "Находка вне выпуска"
 
@@ -108,19 +106,19 @@ def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_rad
 def test_label_edited_by_a_person_replaces_the_event_type_label_and_an_empty_one_returns_it(issue, chromium):
     """Подпись по типу события бывает неточна: человек пишет свою, она хранится на сигнале и главнее таблицы, в том
     числе у давнего события. Стёр: снова подпись из таблицы."""
-    analyst, colleague = issue["analyst"], issue["colleague"]
+    analyst, admin = issue["analyst"], issue["admin"]
     finding = _finding("pilot", "Пилот роботизированной буровой", signal_category="technology", theme=DRILLING,
                        event_type="пилот")
     analyst.mark_signal(finding)
     assert _material(analyst, "signal", finding)["label"] == "Пилот"
 
-    assert _edit(colleague, finding, label="Опытная эксплуатация").status_code == 200
+    assert _edit(admin, finding, label="Опытная эксплуатация").status_code == 200
     material = _material(analyst, "signal", finding)
     assert (material["label"], material["label_default"]) == ("Опытная эксплуатация", "Пилот")
     assert _card(analyst, finding)["issue_label"] == "Опытная эксплуатация"
     assert "БУРЕНИЕ / Опытная эксплуатация" in " ".join(pdf_pages(analyst.preview_pdf()))
 
-    assert _edit(colleague, finding, label="  ").status_code == 200
+    assert _edit(admin, finding, label="  ").status_code == 200
     assert _material(analyst, "signal", finding)["label"] == "Пилот"
 
 
@@ -132,7 +130,7 @@ def test_hypothesis_of_a_person_keeps_who_and_when_and_is_printed_under_the_summ
         issue, chromium):
     """Гипотезу пишут на карточке сигнала и на экране «Дайджест»: она на сигнале с отметкой «человек», его почтой и
     временем, и обе витрины, экран и PDF показывают одну. Нет гипотезы: в карточке PDF нет и строки."""
-    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    analyst, admin, a = issue["analyst"], issue["admin"], issue["a"]
     finding = _finding("robot", "Роботизированная буровая", signal_category="technology", theme=DRILLING)
     bare = _finding("bare", "Находка без гипотезы", signal_category="technology", theme=DRILLING, score=60)
     article_signal = feed_signal(a["hi"])
@@ -141,14 +139,14 @@ def test_hypothesis_of_a_person_keeps_who_and_when_and_is_printed_under_the_summ
     for signal_id in (finding, bare):
         analyst.mark_signal(signal_id)
 
-    assert _edit(analyst, finding, hypothesis=HYPOTHESIS_TECH).status_code == 200  # на карточке сигнала
-    assert _edit(colleague, article_signal, hypothesis=HYPOTHESIS_BUSINESS).status_code == 200  # на «Дайджесте»
+    assert _edit(admin, finding, hypothesis=HYPOTHESIS_TECH).status_code == 200  # на карточке сигнала
+    assert _edit(admin, article_signal, hypothesis=HYPOTHESIS_BUSINESS).status_code == 200  # на «Дайджесте»
 
     material = _material(analyst, "signal", finding)
     assert (material["hypothesis"], material["hypothesis_set_by"], material["hypothesis_author"]) == (
-        HYPOTHESIS_TECH, "human", "user%s@example.test" % analyst.id)
+        HYPOTHESIS_TECH, "human", "user%s@example.test" % admin.id)
     assert material["hypothesis_set_at"].startswith("20")
-    assert _material(analyst, "article", a["hi"])["hypothesis_author"] == "user%s@example.test" % colleague.id
+    assert _material(analyst, "article", a["hi"])["hypothesis_author"] == "user%s@example.test" % admin.id
     assert _material(analyst, "signal", bare)["hypothesis"] is None
     card = _card(analyst, finding)
     assert (card["hypothesis"], card["card_set_by"]["hypothesis"]) == (HYPOTHESIS_TECH, "human")
@@ -160,7 +158,7 @@ def test_hypothesis_of_a_person_keeps_who_and_when_and_is_printed_under_the_summ
     assert text.count("Гипотеза для Компании") == 2
 
     # Стёр: гипотезы нет, но это решение человека, агент её не вернёт (#163).
-    assert _edit(analyst, finding, hypothesis="").status_code == 200
+    assert _edit(admin, finding, hypothesis="").status_code == 200
     material = _material(analyst, "signal", finding)
     assert (material["hypothesis"], material["hypothesis_set_by"]) == (None, "human")
     assert " ".join(pdf_pages(analyst.preview_pdf())).count("Гипотеза для Компании") == 1
@@ -181,12 +179,12 @@ def test_person_replaces_the_own_picture_with_the_placeholder_of_the_theme_and_b
     analyst.mark(article)
     assert pdf_figures_of(analyst) == ["Картинка публикации"]
 
-    assert _edit(analyst, signal_id, picture="placeholder").status_code == 200
+    assert _edit(issue["admin"], signal_id, picture="placeholder").status_code == 200
     material = _material(analyst, "article", article)
     assert (material["image_own"], material["picture"]) == (True, "placeholder")
     assert pdf_figures_of(analyst) == ["Рисунок темы: бурение"]
 
-    assert _edit(analyst, signal_id, picture="own").status_code == 200
+    assert _edit(issue["admin"], signal_id, picture="own").status_code == 200
     assert _material(analyst, "article", article)["picture"] == "own"
     assert pdf_figures_of(analyst) == ["Картинка публикации"]
 
@@ -200,19 +198,19 @@ def test_edit_of_a_closed_month_material_is_refused_everywhere_and_the_closed_is
         issue, monkeypatch):
     """Выпуск закрытого месяца только на просмотр: правку любого поля материала сервер отклоняет и с экрана «Дайджест»,
     и с карточки сигнала; выпуск берёт то, что было до закрытия. Сентябрь закрыт с 05.10 00:00 МСК."""
-    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    analyst, a = issue["analyst"], issue["a"]
     finding = _finding("closed", "Сентябрьская находка", signal_category="technology", theme=DRILLING)
     article_signal = feed_signal(a["hi"])
     analyst.mark(a["hi"])
     analyst.mark_signal(finding)
-    assert _edit(analyst, finding, hypothesis=HYPOTHESIS_TECH).status_code == 200
+    assert _edit(issue["admin"], finding, hypothesis=HYPOTHESIS_TECH).status_code == 200
 
     monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 12, 12, 0))
     for signal_id in (finding, article_signal):
         for fields in ({"title": "Поздняя правка"}, {"summary": "Поздняя суть."}, {"label": "Поздняя подпись"},
                        {"hypothesis": "Изучить позднюю гипотезу для проверки отказа закрытого месяца."},
                        {"picture": "placeholder"}):
-            response = _edit(colleague, signal_id, **fields)
+            response = _edit(issue["admin"], signal_id, **fields)
             assert response.status_code == 409, (signal_id, fields, response.text)
             assert "архив" in response.json()["detail"]
 
@@ -244,7 +242,7 @@ def test_screen_names_what_each_material_lacks(issue, image_host, monkeypatch):
     analyst.mark(article)
     for signal_id in (full, empty):
         analyst.mark_signal(signal_id)
-    _edit(analyst, full, hypothesis=HYPOTHESIS_TECH, picture="placeholder")
+    assert _edit(issue["admin"], full, hypothesis=HYPOTHESIS_TECH, picture="placeholder").status_code == 200
 
     assert _material(analyst, "signal", full)["missing"] == []
     assert _material(analyst, "signal", empty)["missing"] == ["hypothesis", "criteria", "relevance", "picture"]
