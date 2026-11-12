@@ -1,4 +1,4 @@
-"""Обратная связь: вердикт «оценка завышена» принимается и не учит поиск, итоги недели."""
+"""Обратная связь: вердикт «оценка завышена» принимается, итоги недели."""
 
 from __future__ import annotations
 
@@ -16,12 +16,6 @@ DRILLING = "Бурение, направленное бурение, буров�
 @pytest.mark.parametrize("value", ["overrated", "завышено", "Оценка завышена"])
 def test_overrated_verdict_is_accepted(value):
     assert signal_feedback._normalize_verdict(value) == "overrated"
-
-
-def test_overrated_is_a_weak_plus_not_a_search_hint():
-    assert signal_feedback._verdict_score("overrated") == 30
-    assert "overrated" not in signal_feedback.QUERY_HINT_VERDICTS
-    assert "overrated" not in signal_feedback.NEGATIVE_VERDICTS
 
 
 def _verdict(signal_id, verdict):

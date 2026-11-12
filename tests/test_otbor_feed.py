@@ -212,11 +212,9 @@ def test_digest_mark_of_a_rejected_or_failed_article_is_refused_by_the_server(us
     assert showcase(user)["Контракт Weatherford"]["user_status"] != "noise"
 
 
-def test_feedback_of_a_card_is_a_stored_block_unless_the_radar_judge_made_it_and_it_is_on_the_radar(
-        user, admin, contour, monkeypatch):
-    # Форма и API ветвятся одинаково: в память судьи радара идёт отзыв только о его находке на радаре. Блок
-    # сигнала ленты и находки радара в бизнес-ленте только хранится (решение владельца 22.10: учить агентов будет
-    # сервис ОС): «Не тот блок» в бизнес-ленте значит «это технология», а судья прочёл бы «это бизнес».
+def test_feedback_of_any_card_goes_one_path_and_only_the_admin_changes_the_card(user, admin, contour, monkeypatch):
+    # Одна форма и один путь записи (#188): у сигнала ленты и находки радара в бизнес-ленте правки и «дубль»
+    # принимаются, отказа 422 нет. Карточку меняет только отметка администратора; память агента не пишется.
     article("Пилот робота Equinor", "Equinor испытала робота-бурильщика на платформе в Северном море.")
     decide(monkeypatch, {"Пилот робота Equinor": answer(industry="oilfield_services", category="technology")})
     feed_card = showcase(user, "technology")["Пилот робота Equinor"]
@@ -225,15 +223,16 @@ def test_feedback_of_a_card_is_a_stored_block_unless_the_radar_judge_made_it_and
 
     saved = api_send("POST", "/api/signals/feedback", user, {"signal_id": business_find, "verdict": "не тот блок",
                                                           "comment": "Это технология"})
-    # Оценка, тем же словарём, что у судьи радара: «не тот блок» → wrong_block, и блок ответа: сохранённый.
-    assert (saved["memories"], saved["block"]["verdict"]) == (0, "wrong_block")
+    # Оценка: «не тот блок» → wrong_block, и блок ответа: сохранённый; у участника он только записан.
+    assert (saved["applied"], saved["block"]["verdict"]) == (False, "wrong_block")
     assert api_get("/api/signals/memory", admin) == []
-    # Правки карточки и «дубль», только у находки радара на радаре: у блока их нет, и сервер это говорит.
-    response = api_request("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"],
-                                                               "corrected_title": "Другой заголовок"})
-    assert response.status_code == 422, response.text
-    assert showcase(user, "technology")["Пилот робота Equinor"]["title"] == "Пилот робота Equinor"
-    # Пустой блок не пишется: неизвестная оценка: не оценка (как на пути радара).
+    # Правка участника принята, но карточку не меняет; правка администратора ложится сразу.
+    api_send("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"], "corrected_title": "Другой заголовок"})
+    assert showcase(user, "technology")["Пилот робота Equinor"]["title_ru"] == feed_card["title_ru"]
+    api_send("POST", "/api/signals/feedback", admin, {"signal_id": feed_card["id"],
+                                                   "corrected_title": "Робот-бурильщик Equinor"})
+    assert showcase(user, "technology")["Пилот робота Equinor"]["title_ru"] == "Робот-бурильщик Equinor"
+    # Пустой блок не пишется: неизвестная оценка: не оценка.
     response = api_request("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"], "verdict": "xyz"})
     assert response.status_code == 400, response.text
 

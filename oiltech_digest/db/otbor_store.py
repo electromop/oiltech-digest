@@ -24,7 +24,7 @@ from oiltech_digest import config
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
                                           SIGNAL_ORIGIN_FEED, SIGNAL_SELECTOR_OTBOR, SYSTEM_TAG_UNCLASSIFIED,
-                                          refresh_platform_decisions)
+                                          refresh_platform_decisions, signal_digest_sql)
 from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
@@ -36,8 +36,16 @@ FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено: публикацию выбрали «в дайджест», а повтор «Отбора» решения людей не
 # перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»); не изменено: решение человека (#132).
 DECIDED, KEPT_IN_DIGEST, KEPT_BY_HUMAN = "decided", "kept_in_digest", "kept_by_human"
-# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего.
-RETURNED, NOT_REJECTED = "returned", "not_rejected"
+# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего; убрано людьми:
+# его возвращает «вернуть» раздела «Убрано людьми» (human_restore), прежним решением.
+RETURNED, NOT_REJECTED, REMOVED_BY_PEOPLE = "returned", "not_rejected", "removed_by_people"
+# Итог уборки «Не релевантно» администратором (#188): убрано; уже убрано людьми; не убрано, публикацию выбрали «в
+# дайджест» (KEPT_IN_DIGEST: выбранное не прячет ничто). Возврат: восстановлено; людьми не убрано, возвращать нечего.
+REMOVED, ALREADY_REMOVED = "removed", "already_removed"
+RESTORED, NOT_REMOVED = "restored", "not_removed"
+# Поля решения «Отбора», которые уборка людьми меняет и «вернуть» восстанавливает.
+_REMOVAL_FIELDS = ("otbor_decision", "reject_reason", "verdict_reason", "otbor_disputed", "otbor_failure",
+                   "otbor_failure_reason")
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение: в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
 
@@ -384,11 +392,13 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
 
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by FROM signals"
-                    " WHERE id = %s FOR UPDATE", (int(signal_id),))
+        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by, human_removal"
+                    " FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
         row = cur.fetchone()
         if row is None:
             return None
+        if row["human_removal"] is not None:
+            return REMOVED_BY_PEOPLE
         if row["otbor_decision"] != OTBOR_REJECT:
             return NOT_REJECTED
         disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
@@ -418,6 +428,92 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
         # Принятая статья: снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
         feed_signals.sync_quietly([int(row["origin_article_id"])])
     return RETURNED
+
+
+def human_remove(signal_id: int, *, author: str | None, reason: str) -> str | None:
+    """«Не релевантно» от администратора (#188, спека #187): решение человека «не брать» в полях «Отбора», с отметкой,
+    что его поставил человек (card_set_by.otbor_decision), поэтому повтор «Отбора» его не меняет (_write_decision,
+    own_article_ids, own_signal_ids). Карточка уходит из витрины в раздел отклонённого «Убрано людьми»
+    (rejected_sections); прежнее решение, кто, когда и почему лежат в human_removal: его восстанавливает «вернуть»
+    (human_restore). Выбранную «в дайджест» не убирает: выбранное не прячет ничто. REMOVED, ALREADY_REMOVED,
+    KEPT_IN_DIGEST; None: сигнала нет."""
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"SELECT s.id, s.origin, s.origin_article_id, s.card_set_by, s.human_removal,"
+            f" {', '.join(f's.{field}' for field in _REMOVAL_FIELDS)}, {signal_digest_sql('s')} AS chosen"
+            " FROM signals s WHERE s.id = %s FOR UPDATE OF s",
+            (int(signal_id),),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row["human_removal"] is not None:
+            return ALREADY_REMOVED
+        if row["chosen"]:
+            return KEPT_IN_DIGEST
+        set_by = dict(row["card_set_by"] or {})
+        previous = {**{field: row[field] for field in _REMOVAL_FIELDS}, "set_by": set_by.get("otbor_decision")}
+        removal = {"previous": previous, "author": author, "reason": reason or None,
+                   "at": datetime.now(timezone.utc).isoformat()}
+        step = {"stage": "Человек", "text": f"«Не релевантно» ({author or 'без имени'}): убрано людьми"
+                                            + (f": {reason}" if reason else "")}
+        cur.execute(
+            f"""
+            UPDATE signals
+            SET otbor_decision = '{OTBOR_REJECT}', reject_reason = NULL, verdict_reason = %s, otbor_disputed = NULL,
+                otbor_failure = NULL, otbor_failure_reason = NULL, card_set_by = %s, human_removal = %s,
+                decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
+            WHERE id = %s
+            """,
+            (f"Убрано людьми: {reason}" if reason else "Убрано людьми: не релевантно",
+             Json({**set_by, "otbor_decision": CARD_SET_BY_HUMAN}), Json(removal), Json([step]), row["id"]),
+        )
+        refresh_platform_decisions([row["id"]], conn=conn)
+        conn.commit()
+    _sync_feed_article(row)
+    return REMOVED
+
+
+def human_restore(signal_id: int, *, author: str | None) -> str | None:
+    """«Вернуть» в разделе «Убрано людьми» (#188): прежнее решение «Отбора», каким оно было до уборки, и прежняя
+    отметка, кто его поставил; карточка снова там, где была до уборки. RESTORED; NOT_REMOVED: людьми не убрана, вернуть
+    нечего; None: сигнала нет."""
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id, origin, origin_article_id, card_set_by, human_removal FROM signals WHERE id = %s"
+                    " FOR UPDATE", (int(signal_id),))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row["human_removal"] is None:
+            return NOT_REMOVED
+        previous = dict(row["human_removal"].get("previous") or {})
+        set_by = dict(row["card_set_by"] or {})
+        if previous.get("set_by"):
+            set_by["otbor_decision"] = previous["set_by"]
+        else:
+            set_by.pop("otbor_decision", None)
+        step = {"stage": "Человек", "text": f"Вернул из «Убрано людьми» ({author or 'без имени'}): прежнее решение"}
+        cur.execute(
+            f"""
+            UPDATE signals
+            SET {', '.join(f'{field} = %s' for field in _REMOVAL_FIELDS)}, card_set_by = %s, human_removal = NULL,
+                decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
+            WHERE id = %s
+            """,
+            (*(previous.get(field) for field in _REMOVAL_FIELDS), Json(set_by), Json([step]), row["id"]),
+        )
+        refresh_platform_decisions([row["id"]], conn=conn)
+        conn.commit()
+    _sync_feed_article(row)
+    return RESTORED
+
+
+def _sync_feed_article(row: dict[str, Any]) -> None:
+    """Сигнал ленты: решение его статьи сменилось, мост «лента → сигнал» сверяет её публикацию с ним."""
+    if row["origin"] == SIGNAL_ORIGIN_FEED and row["origin_article_id"]:
+        feed_signals.sync_quietly([int(row["origin_article_id"])])
 
 
 def _write_failure(cur, row: dict[str, Any], kind: str, reason: str, log: list[dict[str, str]]) -> None:

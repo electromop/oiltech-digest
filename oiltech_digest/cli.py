@@ -2178,8 +2178,7 @@ def cmd_import_signal_feedback(args: argparse.Namespace) -> None:
         return
     print(
         "import-signal-feedback: "
-        f"rows={result['rows']} events={result['feedback_events']} "
-        f"memories={result['memories']} dry_run={result['dry_run']}"
+        f"rows={result['rows']} events={result['feedback_events']} dry_run={result['dry_run']}"
     )
 
 

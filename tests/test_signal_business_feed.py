@@ -281,12 +281,13 @@ def test_feedback_tile_and_card_counter_count_the_same_records_as_the_filter(use
     assert business(user)["Контракт ленты"]["feedback_count"] == 1
 
 
-def test_feedback_without_a_rating_reason_or_comment_is_not_a_feedback_block(user):
-    # Правка заголовка без оценки, причины и комментария (форма судьи радара) пишется в журнал, но записью блока ОС не
-    # становится: ответ без блока, счётчик 0, карточка «Нет ОС», плашка её не считает (решение владельца 03.11).
+def test_applied_edit_without_a_rating_reason_or_comment_is_not_a_feedback_block(user, admin):
+    # Правка заголовка администратора без оценки, причины и комментария пишется в журнал и ложится на карточку, но
+    # записью блока ОС не становится: ответ без блока, счётчик 0, карточка «Нет ОС», плашка её не считает (решение
+    # владельца 03.11).
     robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
 
-    saved = _edit("POST", "/api/signals/feedback", user, signal_id=robot, corrected_title="Буровой робот Equinor")
+    saved = _edit("POST", "/api/signals/feedback", admin, signal_id=robot, corrected_title="Буровой робот Equinor")
 
     assert saved["block"] is None
     [card] = api_get("/api/signals", user)
@@ -294,6 +295,21 @@ def test_feedback_without_a_rating_reason_or_comment_is_not_a_feedback_block(use
         robot, "Буровой робот Equinor", 0, [])
     assert [row["id"] for row in api_get("/api/signals", user, feedback="without")] == [robot]
     assert api_get("/api/signals/summary", user)["with_feedback"] == 0
+
+
+def test_participant_edit_without_a_rating_is_a_feedback_block_with_the_proposed_title(user):
+    # Правка участника без прав администратора на карточку не ложится (#188), поэтому видна блоком ОС: предложенный
+    # заголовок в «Оценках людей», карточка «Есть ОС», плашка её считает.
+    robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+
+    saved = _edit("POST", "/api/signals/feedback", user, signal_id=robot, corrected_title="Буровой робот Equinor")
+
+    assert (saved["block"]["proposed_title"], saved["block"]["applied"]) == ("Буровой робот Equinor", False)
+    [card] = api_get("/api/signals", user)
+    assert (card["title_ru"], card["feedback_count"]) == ("Робот-бурильщик", 1)
+    assert [block["proposed_title"] for block in card["feedback_blocks"]] == ["Буровой робот Equinor"]
+    assert [row["id"] for row in api_get("/api/signals", user, feedback="with")] == [robot]
+    assert api_get("/api/signals/summary", user)["with_feedback"] == 1
 
 
 def test_value_outside_the_dictionaries_is_refused_not_silently_empty(user):

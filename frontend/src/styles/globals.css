@@ -1906,9 +1906,21 @@
   min-width: 0;
 }
 
-/* Номер главной карточки, короткое число: поле не растягивается на всю колонку. */
-.signalFeedbackDuplicate input {
-  max-width: 260px;
+/* Главная карточка «Дубля» (#188): номер или слова её заголовка; подсказки видимых карточек обеих витрин списком
+   кнопок под полем, выбранная: строкой «Главная карточка: №…». */
+.signalDuplicateHints {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.signalDuplicateHints button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
 }
 
 .signalFeedbackActions {

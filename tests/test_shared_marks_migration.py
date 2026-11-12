@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from oiltech_digest import cli, feed_window, signal_feedback
-from oiltech_digest.db import connection, marks, repository
+from oiltech_digest import cli, feed_window
+from oiltech_digest.db import connection, marks, marks_migration, repository
 from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
 from tests.digest_user_path_support import SEPT, add_article, add_signal, issue_key, msk, utc
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
@@ -95,7 +95,7 @@ def _example(signal_id: int, user_id: int) -> None:
     """Пример «выбран в дайджест» до #111: у каждой учётки свой ключ."""
     repository.upsert_signal_agent_memory(
         memory_key=f"digest-selection:{signal_id}:{user_id}", memory_type="signal_verdict", subject="strong_signal",
-        score=90, facts={"signal_id": signal_id, "origin": signal_feedback.DIGEST_SELECTION_ORIGIN, "user_id": user_id},
+        score=90, facts={"signal_id": signal_id, "origin": marks_migration.DIGEST_SELECTION_ORIGIN, "user_id": user_id},
     )
 
 
@@ -105,7 +105,7 @@ def _active_examples() -> list[tuple[int, int]]:
             (int(signal_id), int(user_id)) for signal_id, user_id in conn.execute(
                 "SELECT facts_json->>'signal_id', facts_json->>'user_id' FROM signal_agent_memory"
                 " WHERE status = 'active' AND facts_json->>'origin' = %s ORDER BY 1",
-                (signal_feedback.DIGEST_SELECTION_ORIGIN,),
+                (marks_migration.DIGEST_SELECTION_ORIGIN,),
             )
         ]
 

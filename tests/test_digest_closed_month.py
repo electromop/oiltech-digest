@@ -55,14 +55,14 @@ def _radar_card(person: Person, signal_id: int) -> dict:
 
 def test_correction_after_the_close_stays_on_the_radar_but_not_in_the_closed_issue(issue, monkeypatch):
     """Карточка выбрана 03.10 (сентябрь ещё открыт), правка заголовка и сути: 10.10, после закрытия
-    сентября (05.10 00:00 МСК). Отзыв принят: экран радара показывает правку, агент учится на ней.
+    сентября (05.10 00:00 МСК). Правка администратора принята: экран радара её показывает.
     Сентябрьский выпуск, прежний: его текст не меняет ничто после закрытия."""
-    analyst, colleague, card = issue["analyst"], issue["colleague"], issue["s"]["sep"]
+    analyst, admin, card = issue["analyst"], issue["admin"], issue["s"]["sep"]
     _freeze(monkeypatch, msk(2026, 10, 3, 12, 0))
     analyst.mark_signal(card)
 
     _freeze(monkeypatch, msk(2026, 10, 10, 12, 0))
-    _correct(colleague, card, "Правка после закрытия", "Суть после закрытия.", at=msk(2026, 10, 10, 12, 0))
+    _correct(admin, card, "Правка после закрытия", "Суть после закрытия.", at=msk(2026, 10, 10, 12, 0))
 
     [item] = analyst.issue_items(SEPT)
     assert (item["title"], item["summary"]) == ("Сигнал sep", "Суть сигнала sep.")
@@ -77,10 +77,10 @@ def test_correction_after_the_close_stays_on_the_radar_but_not_in_the_closed_iss
 def test_closed_issue_keeps_the_last_correction_made_before_the_close(issue, monkeypatch):
     """Правки до закрытия, часть выпуска, как и раньше: последняя из них. 05.10 00:00 МСК: это
     04.10 21:00 UTC; правка в 23:59 МСК 04.10 ещё успевает, правка в 00:00 МСК 05.10: уже нет."""
-    analyst, colleague, card = issue["analyst"], issue["colleague"], issue["s"]["sep"]
+    analyst, admin, card = issue["analyst"], issue["admin"], issue["s"]["sep"]
     analyst.mark_signal(card)
-    _correct(analyst, card, "Первая правка", "Первая суть.", at=msk(2026, 9, 29, 12, 0))
-    _correct(colleague, card, "Правка в последнюю минуту", "Суть в последнюю минуту.", at=msk(2026, 10, 4, 23, 59))
+    _correct(admin, card, "Первая правка", "Первая суть.", at=msk(2026, 9, 29, 12, 0))
+    _correct(admin, card, "Правка в последнюю минуту", "Суть в последнюю минуту.", at=msk(2026, 10, 4, 23, 59))
 
     # До закрытия сентябрьский выпуск ещё правится: в нём последняя правка.
     _freeze(monkeypatch, msk(2026, 10, 4, 23, 59, 59))
@@ -88,7 +88,7 @@ def test_closed_issue_keeps_the_last_correction_made_before_the_close(issue, mon
     assert (item["title"], item["summary"]) == ("Правка в последнюю минуту", "Суть в последнюю минуту.")
 
     _freeze(monkeypatch, msk(2026, 10, 5, 0, 0))
-    _correct(colleague, card, "Правка в момент закрытия", "Суть в момент закрытия.", at=msk(2026, 10, 5, 0, 0))
+    _correct(admin, card, "Правка в момент закрытия", "Суть в момент закрытия.", at=msk(2026, 10, 5, 0, 0))
     [item] = analyst.issue_items(SEPT)
     assert (item["title"], item["summary"]) == ("Правка в последнюю минуту", "Суть в последнюю минуту.")
     assert _radar_card(analyst, card)["title_ru"] == "Правка в момент закрытия"

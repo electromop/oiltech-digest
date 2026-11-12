@@ -125,87 +125,6 @@ def test_source_diagnose_endpoint(monkeypatch):
     }
 
 
-def test_signal_feedback_endpoint_stores_learning(monkeypatch):
-    # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
-    monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
-    monkeypatch.setattr(api.repository, "judge_learns_from", lambda signal_id: True)
-    app = api.app
-    # Отзыв оставляет любой пользователь (коллега заказчика), не только админ.
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "user"}
-
-    captured = {}
-
-    def fake_store_signal_feedback(row, user_id=None, import_source=None, extracted_items=None):
-        captured["row"] = row
-        captured["user_id"] = user_id
-        return {"event_id": 11, "memory_ids": [21, 22], "memories": 2}
-
-    from oiltech_digest import signal_feedback
-
-    monkeypatch.setattr(signal_feedback, "store_signal_feedback", fake_store_signal_feedback)
-    try:
-        response = TestClient(app).post(
-            "/api/signals/feedback",
-            json={
-                "signal_id": 7,
-                "source_url": "https://example.com/signal",
-                "signal_title": "Closed-loop drilling",
-                "comment": "closed-loop control -> управление с замкнутым контуром",
-                "verdict": "approved",
-                "reason": "Есть внедрение",
-                "corrected_title": "Управление бурением с замкнутым контуром",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    # Сохранённый блок ОС (#130), для списка на карточке: экран добавляет его, не перечитывая витрину.
-    block = body.pop("block")
-    assert body == {"ok": True, "event_id": 11, "memory_ids": [21, 22], "memories": 2}
-    assert {key: block[key] for key in ("id", "author", "verdict", "reason")} == {
-        "id": 11, "author": "test@example.com", "verdict": "approved", "reason": "Есть внедрение"}
-    assert captured["row"]["signal_id"] == 7
-    assert captured["row"]["verdict"] == "approved"
-    assert captured["row"]["corrected_title"] == "Управление бурением с замкнутым контуром"
-    assert captured["user_id"] == 1
-
-
-def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(monkeypatch):
-    # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
-    monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
-    monkeypatch.setattr(api.repository, "judge_learns_from", lambda signal_id: True)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "user"}
-
-    captured = {}
-
-    def fake_store_signal_feedback(row, user_id=None, import_source=None, extracted_items=None):
-        captured["row"] = row
-        return {"event_id": 12, "memory_ids": [31], "memories": 1}
-
-    from oiltech_digest import signal_feedback
-
-    monkeypatch.setattr(signal_feedback, "store_signal_feedback", fake_store_signal_feedback)
-    try:
-        response = TestClient(app).post(
-            "/api/signals/feedback",
-            json={
-                "signal_id": 7,
-                "comment": "",
-                "verdict": "merge_duplicate",
-                "duplicate_of_signal_id": 3,
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert captured["row"]["verdict"] == "merge_duplicate"
-    assert captured["row"]["duplicate_of_signal_id"] == 3
-
-
 def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
@@ -226,14 +145,6 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
         "record_signal_feedback_event",
         lambda *args, **kwargs: events.append((args, kwargs)) or 12,
     )
-    learned = []
-    from oiltech_digest import signal_feedback
-
-    monkeypatch.setattr(
-        signal_feedback,
-        "learn_from_digest_selection",
-        lambda signal_id, **kwargs: learned.append((signal_id, kwargs)) or {"memories": 1, "superseded": 0},
-    )
     try:
         response = TestClient(app).patch("/api/signals/7", json={"selected_for_digest": True, "analyst_comment": "Берём в выпуск"})
     finally:
@@ -245,59 +156,6 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
     assert captured == {"user_id": 3, "signal_id": 7, "status": "digest", "analyst_comment": "Берём в выпуск"}
     assert events[0][1]["signal_id"] == 7
     assert events[0][1]["user_id"] == 3
-    # Выбор в дайджест: пример «Сильный сигнал» для агента, со ссылкой на событие.
-    assert learned == [(7, {"selected": True, "user_id": 3, "event_id": 12})]
-
-
-def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
-    # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
-    monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
-    monkeypatch.setattr(api.repository, "signal_digest_refusal", lambda signal_id: None)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
-    monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
-    # Карточка была «в дайджест»: снятие меняет отметку и гасит пример.
-    monkeypatch.setattr(api.marks, "set_signal_mark", lambda *args, **kwargs: "digest")
-    learned = []
-    from oiltech_digest import signal_feedback
-
-    monkeypatch.setattr(
-        signal_feedback,
-        "learn_from_digest_selection",
-        lambda signal_id, **kwargs: learned.append((signal_id, kwargs)) or {"memories": 0, "superseded": 1},
-    )
-    try:
-        response = TestClient(app).patch("/api/signals/7", json={"selected_for_digest": False})
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert learned == [(7, {"selected": False, "user_id": 3, "event_id": None})]
-
-
-def test_signal_patch_keeps_status_when_learning_fails(monkeypatch):
-    # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
-    monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
-    monkeypatch.setattr(api.repository, "signal_digest_refusal", lambda signal_id: None)
-    app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
-    monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
-    saved = []
-    monkeypatch.setattr(api.marks, "set_signal_mark", lambda *args, **kwargs: saved.append(kwargs))
-    monkeypatch.setattr(api.repository, "record_signal_feedback_event", lambda *args, **kwargs: 5)
-    from oiltech_digest import signal_feedback
-
-    def broken(*args, **kwargs):
-        raise RuntimeError("память недоступна")
-
-    monkeypatch.setattr(signal_feedback, "learn_from_digest_selection", broken)
-    try:
-        response = TestClient(app).patch("/api/signals/7", json={"selected_for_digest": True})
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert saved and saved[0]["status"] == "digest"
 
 
 def test_signal_memory_endpoint_uses_signal_agent_memory(monkeypatch):

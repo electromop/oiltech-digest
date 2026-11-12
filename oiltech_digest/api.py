@@ -1517,7 +1517,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         target_status = "digest" if patch.selected_for_digest else "watch"
     _guard_signal_digest_month(signal_id, target_status)
     try:
-        previous = marks.set_signal_mark(
+        marks.set_signal_mark(
             signal_id,
             status=target_status,
             analyst_comment=patch.analyst_comment,
@@ -1525,29 +1525,14 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Signal not found")
-    event_id = None
     if target_status == "digest":
-        event_id = repository.record_signal_feedback_event(
+        repository.record_signal_feedback_event(
             None,
             "added_to_digest",
             signal_id=signal_id,
             user_id=int(user["id"]),
             comment=patch.analyst_comment,
         )
-    was_selected = previous == "digest"
-    if target_status is not None and (target_status == "digest") != was_selected:
-        # Выбор в дайджест: «Сильный сигнал» для обучения агента, один пример на карточку;
-        # снятие отметки (любым статусом и любым участником) гасит примеры этой карточки.
-        # Учимся на смене отметки, а не на нажатии: повторная «в дайджест» второго примера не даёт.
-        # Сбой обучения не должен отменять отметку, которую пользователь уже поставил.
-        from oiltech_digest.signal_feedback import learn_from_digest_selection
-
-        try:
-            learn_from_digest_selection(
-                signal_id, selected=target_status == "digest", user_id=int(user["id"]), event_id=event_id,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning("обучение на выборе в дайджест не записано: сигнал %s", signal_id, exc_info=True)
     return {"ok": True}
 
 
@@ -1570,68 +1555,40 @@ def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
     done = otbor_store.human_return(signal_id, values, author=user.get("email"))
     if done is None:
         raise HTTPException(status_code=404, detail="Signal not found")
+    if done == otbor_store.REMOVED_BY_PEOPLE:
+        raise HTTPException(status_code=409, detail="Карточку убрали люди: её возвращает «Вернуть» прежним решением")
     if done == otbor_store.NOT_REJECTED:
         raise HTTPException(status_code=409, detail="Вернуть можно только отклонённое «Отбором»")
     return {"ok": True}
 
 
-# Отзыв о сигнале оставляет любой пользователь: на отзывах коллег заказчика учится агент
-# (решение владельца 28.09). До этого форма была только у админа, и ОС коллег не доходила.
+@app.post("/api/signals/{signal_id}/restore")
+def restore_removed_signal(signal_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """«Вернуть» в разделе «Убрано людьми» (#188, спека #187): прежнее решение «Отбора», каким оно было до «Не
+    релевантно» администратора, и карточка снова там, где была. Только админ: разделы отклонённого видит только он."""
+    from oiltech_digest.db import otbor_store
+
+    done = otbor_store.human_restore(signal_id, author=user.get("email"))
+    if done is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    if done == otbor_store.NOT_REMOVED:
+        raise HTTPException(status_code=409, detail="Так возвращается только убранное людьми")
+    return {"ok": True}
+
+
+# Отметку ОС оставляет любой допущенный пользователь, одной формой у любой карточки обеих витрин и в «Отклонённых»
+# (#188, спека #187), и пишется она одним путём. Явные действия (правка заголовка и сути, «Не тот блок», «Дубль», «Не
+# релевантно») сразу применяет только отметка администратора; отметка остальных только записывается и видна блоком.
 @app.post("/api/signals/feedback")
 def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    from oiltech_digest.signal_feedback import _normalize_verdict, store_signal_feedback
+    from oiltech_digest.signal_feedback import record_mark
 
-    if not any([
-        payload.comment.strip(),
-        (payload.verdict or "").strip(),
-        (payload.reason or "").strip(),
-        (payload.corrected_title or "").strip(),
-        (payload.corrected_thesis or "").strip(),
-        payload.duplicate_of_signal_id,
-    ]):
-        raise HTTPException(status_code=400, detail="comment or structured feedback is required")
-    if payload.article_id is None and payload.signal_id is None and not payload.source_url:
-        raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
-    if payload.signal_id is not None and not repository.judge_learns_from(payload.signal_id):
-        # Блок ОС (#130, решение владельца 22.10), у сигнала ленты и у находки радара в бизнес-ленте: только
-        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт: ею, как и всей ОС,
-        # будет управлять сервис ОС. Правок карточки и «дубля» у блока нет: экран их не предлагает, сервер не
-        # принимает молча.
-        if (payload.corrected_title or "").strip() or (payload.corrected_thesis or "").strip() \
-                or payload.duplicate_of_signal_id:
-            raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
-                                                        "правки карточки и «дубль» — у находки радара на радаре")
-        # Пустой блок не пишется: неизвестная оценка: не оценка, как на пути радара (store_signal_feedback).
-        verdict = _normalize_verdict(payload.verdict)
-        if not (payload.comment.strip() or verdict or (payload.reason or "").strip()):
-            raise HTTPException(status_code=400, detail="comment or structured feedback is required")
-        event_id = repository.record_signal_feedback_event(
-            None, "comment_added", signal_id=payload.signal_id, user_id=int(user["id"]),
-            signal_title=payload.signal_title, comment=payload.comment.strip(),
-            verdict=verdict, reason=(payload.reason or "").strip() or None,
-        )
-        moved = _recategorize(payload, user)
-        return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
-                "block": _feedback_block(event_id, payload, user), **moved}
-    result = store_signal_feedback(
-        {
-            "article_id": payload.article_id,
-            "signal_id": payload.signal_id,
-            "signal_evidence_id": payload.signal_evidence_id,
-            "source_url": payload.source_url,
-            "signal_title": payload.signal_title,
-            "source": payload.source,
-            "comment": payload.comment,
-            "verdict": payload.verdict,
-            "reason": payload.reason,
-            "corrected_title": payload.corrected_title,
-            "corrected_thesis": payload.corrected_thesis,
-            "duplicate_of_signal_id": payload.duplicate_of_signal_id,
-        },
-        user_id=int(user["id"]),
-    )
-    moved = _recategorize(payload, user)
-    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user), **moved}
+    applies = (user.get("role") or "user") == "admin"
+    try:
+        result = record_mark(payload.model_dump(), user_id=int(user["id"]), author=user.get("email"), applies=applies)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result, "block": _feedback_block(result["event_id"], payload, user, applied=applies)}
 
 
 def _guard_material_month(signal_id: int) -> None:
@@ -1656,8 +1613,8 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
                         user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Правка материала выпуска с экрана «Дайджест» и с карточки сигнала (#162, ADR 0006): поля живут на сигнале
     материала, у статьи ленты на её сигнале ленты, поэтому витрина и выпуск показывают один текст. Правка доступна
-    любой допущенной учётке (ADR 0004). Заголовок и суть ложатся в журнал ОС с автором, как правка находки радара, но
-    мимо памяти судьи радара: это правка текста выпуска, а не отзыв о его работе. Выпуск закрытого месяца только на
+    любой допущенной учётке (ADR 0004). Заголовок и суть ложатся в журнал ОС с автором, применённой записью, как правка
+    администратора в отметке ОС (#188): это правка текста выпуска. Выпуск закрытого месяца только на
     просмотр (решение владельца 30.09): правка его материала получает отказ, поэтому закрытый выпуск хранит поля,
     какими они были до закрытия. Месяц тот же, что у выпуска (repository.signal_issue_month_sql)."""
     if patch.picture is not None and patch.picture not in issue_edits_store.PICTURES:
@@ -1666,8 +1623,8 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
     title = " ".join((patch.title or "").split())
     summary = (patch.summary or "").strip()
     if (title or summary) and not repository.signal_selected_for_digest(signal_id):
-        # Правка текста мимо отзыва есть только у материала выпуска (#162): у прочих сигналов ленты и бизнес-ленты
-        # заголовок и суть не правятся (отзыв о них остаётся блоком ОС, api.create_signal_feedback).
+        # Правка текста мимо отметки ОС есть только у материала выпуска (#162): у прочих карточек заголовок и суть
+        # правит отметка ОС администратора (#188, api.create_signal_feedback).
         raise HTTPException(status_code=409, detail="Заголовок и суть правятся у материала выпуска: "
                                                     "сначала отметьте его «в дайджест»")
     if title or summary:
@@ -1685,32 +1642,26 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
     return {"ok": True, "author": user.get("email")}
 
 
-def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
-    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128), не только блок ОС: категория меняется сразу, баллы
-    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора», как раньше: блок ОС
-    и память судьи. {"recategorized": новая категория} или пусто, если категория не менялась."""
-    from oiltech_digest.signal_feedback import _normalize_verdict
-
-    if payload.signal_id is None or _normalize_verdict(payload.verdict) != "wrong_block":
-        return {}
-    category = signal_scores.wrong_block(int(payload.signal_id), user.get("email"))
-    return {"recategorized": category} if category else {}
-
-
-def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any] | None:
-    """Сохранённый блок ОС (#130): как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
-    экран добавляет его, не перечитывая витрину. Оценка: тем же словарём, каким её сохранили оба пути. Запись без
-    оценки, причины и комментария (только правка заголовка, сути или «дубль») не блок: список и счётчик
-    «Обратная связь: N» её не берут (решение владельца 03.11), поэтому None."""
+def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any], *,
+                    applied: bool) -> dict[str, Any] | None:
+    """Сохранённый блок ОС (#130), как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL): экран
+    добавляет его, не перечитывая витрину. Оценка: тем же словарём, каким её сохранила запись. Отметка участника без
+    прав администратора (#188) блок и с одной правкой заголовка или сути либо «Дублем»: на карточку они не легли, видно
+    их только в блоке. Применённая правка без оценки, причины и комментария не блок: она уже на карточке, а список и
+    счётчик «Обратная связь: N» её не берут (решение владельца 03.11), поэтому None."""
     from oiltech_digest.signal_feedback import _normalize_verdict
 
     verdict = _normalize_verdict(payload.verdict)
     reason = (payload.reason or "").strip() or None
     comment = payload.comment.strip() or None
-    if not (verdict or reason or comment):
+    title = None if applied else " ".join((payload.corrected_title or "").split()) or None
+    thesis = None if applied else (payload.corrected_thesis or "").strip() or None
+    duplicate_of = None if applied else payload.duplicate_of_signal_id
+    if not (verdict or reason or comment or title or thesis or duplicate_of):
         return None
     return {"id": event_id, "author": user.get("email"), "verdict": verdict, "reason": reason, "comment": comment,
-            "created_at": datetime.now(timezone.utc).isoformat()}
+            "proposed_title": title, "proposed_thesis": thesis, "duplicate_of_signal_id": duplicate_of,
+            "applied": applied, "created_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/signals/memory")

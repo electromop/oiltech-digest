@@ -7,6 +7,7 @@ import {
   getSignalSearchHealth,
   getSignalSummary,
   listSignals,
+  restoreSignal,
   returnSignal,
   updateSignal,
 } from "../../api/signals";
@@ -20,7 +21,7 @@ import type {
   SignalSummary,
   SignalTile,
 } from "../../api/signals";
-import type { Signal, SignalEvidence, SignalFeedbackBlock, SignalFeedbackPayload } from "../../api/types";
+import type { Signal, SignalEvidence, SignalFeedbackBlock } from "../../api/types";
 import { radarDigestLockedText } from "../shared/feedWindow";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { SkeletonList } from "../shared/Skeleton";
@@ -32,6 +33,8 @@ import {
   ARRIVAL_FILTER_LABEL, CompanyGroupHint, EMPTY_CARD_FILTERS, FEEDBACK_FILTER, SignalCardFilters, arrivalPeriod,
 } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
+import { EMPTY_FEEDBACK_DRAFT, SignalFeedbackForm, duplicateOf, verdictName } from "./SignalFeedbackForm";
+import type { FeedbackDraft } from "./SignalFeedbackForm";
 import { SignalReturnForm } from "./SignalReturnForm";
 
 // Страница выдачи: остальное: «Показать ещё». Выборку и страницу считает сервер по всему
@@ -106,64 +109,6 @@ const TILE_EMPTY: Record<SignalTile, string> = {
   in_digest: "Отмеченных в дайджест сигналов здесь нет. Отметить можно кнопкой «В дайджест» на карточке.",
   with_feedback: "Сигналов с обратной связью здесь нет.",
 };
-
-type FeedbackDraft = {
-  verdict: NonNullable<SignalFeedbackPayload["verdict"]> | "";
-  reason: string;
-  correctedTitle: string;
-  correctedThesis: string;
-  duplicateOfSignalId: string;
-  comment: string;
-};
-
-const EMPTY_FEEDBACK_DRAFT: FeedbackDraft = {
-  verdict: "",
-  reason: "",
-  correctedTitle: "",
-  correctedThesis: "",
-  duplicateOfSignalId: "",
-  comment: "",
-};
-
-// Шкала заказчика (список эксперта заказчика от 13.09). Это оценка ЧЕЛОВЕКА и она намеренно
-// отличается от maturity выше: та: оценка модели. «Наблюдать» встречается в обеих,
-// поэтому машинная подписана в карточке как «Решение платформы», а эта: как «Оценка сигнала».
-const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> = [
-  { value: "", label: "Не оценено" },
-  { value: "strong_signal", label: "Сильный сигнал — вынести в дайджест / обсуждать" },
-  { value: "approved", label: "Полезный сигнал — релевантно, сохранить в базе" },
-  { value: "watch_later", label: "Наблюдать — рано, нужен следующий этап" },
-  { value: "background_material", label: "Фоновый материал — ориентир или контекст" },
-  { value: "reject", label: "Низкая ценность / шум — по теме, но без новой ценности" },
-  { value: "wrong_domain", label: "Не релевантно — вне интересов Компании" },
-  // Встреча с заказчиком 21.09, решение 5: находка годная, но это бизнес-сигнал.
-  { value: "wrong_block", label: "Не тот блок — бизнес-сигнал, а не технология" },
-  { value: "merge_duplicate", label: "Дубль — тот же сигнал или технологический кластер" },
-  // 03.10: находка годная, но балл выше, чем она стоит: судья учится ставить строже.
-  { value: "overrated", label: "Оценка завышена — сигнал годный, балл слишком высокий" },
-];
-
-// Отзыв учит судью радара только о его находке вне бизнес-ленты (#130, repository.judge_learns_from): у неё
-// полная форма. У остальных (сигнал ленты, материал коллеги, #131, находка в бизнес-ленте) отзыв, блок ОС:
-// оценка, причина и комментарий, правок карточки и «дубля» (он прячет карточку) нет; блок только хранится.
-function judgeFeedback(signal: Signal): boolean {
-  return (signal.origin ?? "radar") === "radar" && signal.signal_category !== "business";
-}
-
-// «Не тот блок» у бизнес-карточки, наоборот: технология, а не бизнес.
-function verdictOptions(signal: Signal): typeof VERDICT_LABELS {
-  const labels = signal.signal_category === "business"
-    ? VERDICT_LABELS.map((item) =>
-      item.value === "wrong_block" ? { ...item, label: "Не тот блок — технологический сигнал, а не бизнес" } : item)
-    : VERDICT_LABELS;
-  return judgeFeedback(signal) ? labels : labels.filter((item) => item.value !== "merge_duplicate");
-}
-
-// Оценка человека в списке блоков, коротко: первая часть подписи шкалы («Сильный сигнал»).
-function verdictName(verdict: string | null): string {
-  const found = VERDICT_LABELS.find((item) => item.value === verdict);
-  return found ? found.label.split(" — ")[0] : verdict || "";
-}
 
 function blockDate(value: string | null): string {
   const date = value ? new Date(value) : null;
@@ -605,14 +550,35 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     }
   }
 
+  // «Вернуть» в «Убрано людьми» (#188): прежнее решение «Отбора» одним нажатием, карточка уходит из «Отклонённых».
+  async function restoreRemoved(signal: Signal) {
+    try {
+      setSaving((current) => ({ ...current, [signal.id]: true }));
+      await restoreSignal(signal.id);
+      setSignals((current) => current.filter((item) => item.id !== signal.id));
+      showToast("Карточка возвращена: прежнее решение «Отбора» восстановлено");
+      reload({ keepLoaded: true });
+    } catch (error) {
+      handleError(error, "Не удалось вернуть карточку");
+    } finally {
+      setSaving((current) => ({ ...current, [signal.id]: false }));
+    }
+  }
+
+  // Отметка ОС (#188): одна форма у любой карточки, сервер пишет её одним путём. Явные действия сразу применяет только
+  // отметка администратора; что стало с карточкой, говорит ответ сервера.
   async function submitFeedback(signal: Signal) {
     const draft = feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT;
     const comment = draft.comment.trim();
     const reason = draft.reason.trim();
     const correctedTitle = draft.correctedTitle.trim();
     const correctedThesis = draft.correctedThesis.trim();
-    const duplicateOfSignalId = Number(draft.duplicateOfSignalId || 0) || null;
-    if (!comment && !draft.verdict && !reason && !correctedTitle && !correctedThesis && !duplicateOfSignalId) {
+    const duplicate = duplicateOf(draft);
+    if (duplicate === "words") {
+      showToast("Выберите главную карточку из подсказок или впишите её номер", "error");
+      return;
+    }
+    if (!comment && !draft.verdict && !reason && !correctedTitle && !correctedThesis && !duplicate) {
       showToast("Заполни вердикт, причину или комментарий по сигналу", "error");
       return;
     }
@@ -630,47 +596,51 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         reason: reason || null,
         corrected_title: correctedTitle || null,
         corrected_thesis: correctedThesis || null,
-        duplicate_of_signal_id: duplicateOfSignalId,
+        duplicate_of_signal_id: duplicate,
       });
       setFeedbackDrafts((current) => ({ ...current, [signal.id]: EMPTY_FEEDBACK_DRAFT }));
       // Сохранено, форма закрывается. Сохранённый блок ОС ложится в список на карточке (#130), и счётчик
-      // «Обратная связь: N» растёт: он считает записи этого списка, как сервер (решение владельца 03.11). Запись без
-      // оценки, причины и комментария блоком не приходит и карточку не меняет.
+      // «Обратная связь: N» растёт: он считает записи этого списка, как сервер (решение владельца 03.11). Применённая
+      // правка без оценки, причины и комментария блоком не приходит: она уже на карточке.
       closeFeedback(signal.id);
       const block = result.block;
-      if (block) {
-        setSignals((current) =>
-          current.map((item) =>
-            item.id === signal.id
-              ? { ...item, feedback_count: (item.feedback_count || 0) + 1, feedback_blocks: [...(item.feedback_blocks || []), block] }
-              : item,
-          ),
-        );
-      }
+      // Правка администратора применена сразу: карточка показывает новый текст, как покажет и сервер.
+      const edited = result.applied ? {
+        ...(correctedTitle ? { title_ru: correctedTitle } : {}),
+        ...(correctedThesis ? { summary: correctedThesis } : {}),
+      } : {};
+      setSignals((current) =>
+        current.map((item) =>
+          item.id === signal.id
+            ? {
+              ...item,
+              ...edited,
+              ...(block ? { feedback_count: (item.feedback_count || 0) + 1, feedback_blocks: [...(item.feedback_blocks || []), block] } : {}),
+            }
+            : item,
+        ),
+      );
       if (result.recategorized) {
         // «Не тот блок» у сигнала после «Отбора» (#132): категория сменилась сразу: карточка уже в другой
         // витрине, баллы там пересчитываются по профилю новой категории.
         const target = result.recategorized === "technology" ? "технологический радар" : "бизнес-ленту";
-        showToast(`Отзыв сохранён: карточка перешла в ${target}, баллы пересчитываются`);
-        setSignals((current) => current.filter((item) => item.id !== signal.id));
-        reload({ keepLoaded: true });
-        return;
+        showToast(`Отметка сохранена: карточка перешла в ${target}, баллы пересчитываются`);
+      } else if (result.merged) {
+        showToast("Отметка сохранена: карточка склеена с главной, её ссылки в главной карточке");
+      } else if (result.merge_refused) {
+        showToast(`Отметка сохранена, карточка не склеена: ${result.merge_refused}`);
+      } else if (result.removed) {
+        showToast("Отметка сохранена: карточка убрана в «Убрано людьми», вернуть её можно в «Отклонённых»");
+      } else if (result.remove_refused) {
+        showToast(`Отметка сохранена, карточка не убрана: ${result.remove_refused}`);
+      } else if (!result.applied) {
+        showToast("Отметка сохранена и видна на карточке; заголовок, суть, категорию и склейку меняет администратор");
+      } else {
+        showToast("Отметка сохранена");
       }
-      showToast(
-        result.merged
-          ? "Отзыв сохранён: карточка скрыта как дубль, её ссылки — в главной карточке"
-          : result.merge_skipped
-            ? "Отзыв сохранён, карточка не скрыта: она уже скрыта, выбрана в дайджест или главной с таким номером нет"
-            // Блок ОС только хранится: учить им агентов будет сервис ОС.
-            : judgeFeedback(signal)
-              ? "Отзыв сохранён — агент учтёт его в следующем прогоне радара"
-              : "Отзыв сохранён",
-      );
-      if (result.merged) {
-        // Список заново: у главной карточки растёт «Объединено дублей» и появляются ссылки дубля.
+      if (result.recategorized || result.merged || result.removed) {
+        // Карточка ушла из этой выборки: в другую витрину, в главную карточку или в «Убрано людьми».
         setSignals((current) => current.filter((item) => item.id !== signal.id));
-      }
-      if (result.merged || result.merge_skipped) {
         reload({ keepLoaded: true });
       } else {
         afterListChange();
@@ -1066,8 +1036,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                         {signal.selected_for_digest ? "Убрать" : "В дайджест"}
                       </button>
                     ) : null}
+                    {/* Убранное людьми (#188) возвращает «Вернуть» одним нажатием: прежнее решение «Отбора». */}
+                    {isAdmin && signal.human_removal ? (
+                      <button
+                        type="button"
+                        className="ghostButton compactButton"
+                        disabled={savingThis}
+                        onClick={() => void restoreRemoved(signal)}
+                      >
+                        Вернуть
+                      </button>
+                    ) : null}
                     {/* Отклонённое «Отбором» возвращает человек, вписав его поля (#132): разделы видит только админ. */}
-                    {isAdmin && signal.otbor_decision === "reject" && dictionaries?.otbor_return ? (
+                    {isAdmin && signal.otbor_decision === "reject" && !signal.human_removal && dictionaries?.otbor_return ? (
                       <button
                         type="button"
                         className="ghostButton compactButton"
@@ -1209,93 +1190,30 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                               {block.verdict ? <strong>{verdictName(block.verdict)}</strong> : null}
                               {block.reason ? <span>Причина: {block.reason}</span> : null}
                               {block.comment ? <span>{block.comment}</span> : null}
+                              {/* Отметка участника без прав администратора (#188): её правки и «Дубль» на карточку не
+                                  легли, видно их здесь. */}
+                              {block.proposed_title ? <span>Предлагает заголовок: {block.proposed_title}</span> : null}
+                              {block.proposed_thesis ? <span>Предлагает суть: {block.proposed_thesis}</span> : null}
+                              {block.duplicate_of_signal_id ? (
+                                <span>Предлагает главную: №{block.duplicate_of_signal_id}</span>
+                              ) : null}
                             </li>
                           ))}
                         </ul>
                       </div>
                     ) : null}
 
-                    {/* Форма ОС, в обеих витринах (#130): у находки судьи радара вне бизнес-ленты: полная, у
-                        остальных: блок ОС (оценка, причина и комментарий). */}
+                    {/* Форма ОС (#188): одна, как в технологическом радаре, у любой карточки обеих витрин и в
+                        «Отклонённых». */}
                     {isFeedbackOpen ? (
-                      // Форма ОС (документ заказчика 19.09: «сделать поприятнее оформление»):
-                      // на десктопе две колонки: пары полей одной высоты, подписи как в
-                      // остальных формах, «Отмена» и «Сохранить» справа.
-                      <div className="signalFeedbackBox">
-                        <div className="signalFeedbackGrid">
-                          <label className="field">
-                            <span>Оценка сигнала</span>
-                            <select
-                              value={draftOf(signal.id).verdict}
-                              onChange={(event) =>
-                                updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
-                              }
-                            >
-                              {verdictOptions(signal).map((item) => (
-                                <option value={item.value} key={item.value || "empty"}>{item.label}</option>
-                              ))}
-                            </select>
-                          </label>
-                          {judgeFeedback(signal) ? (
-                            <label className="field signalFeedbackDuplicate">
-                              <span>ID дубля</span>
-                              <input
-                                inputMode="numeric"
-                                value={draftOf(signal.id).duplicateOfSignalId}
-                                onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
-                                placeholder="номер главной карточки, если это дубль"
-                              />
-                            </label>
-                          ) : null}
-                          <label className="field">
-                            <span>Обоснование оценки</span>
-                            <input
-                              value={draftOf(signal.id).reason}
-                              onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
-                              placeholder="чем обоснована оценка"
-                            />
-                          </label>
-                          {judgeFeedback(signal) ? (
-                            <>
-                              <label className="field">
-                                <span>Рекомендуемый заголовок</span>
-                                <input
-                                  value={draftOf(signal.id).correctedTitle}
-                                  onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
-                                  placeholder="если нужно переименовать карточку"
-                                />
-                              </label>
-                              <label className="field">
-                                <span>Рекомендуемая формулировка сути</span>
-                                <textarea
-                                  value={draftOf(signal.id).correctedThesis}
-                                  onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
-                                  placeholder="эталонная формулировка сути сигнала"
-                                />
-                              </label>
-                            </>
-                          ) : null}
-                          <label className="field">
-                            <span>{judgeFeedback(signal) ? "Рекомендации AI-агенту" : "Комментарий"}</span>
-                            <textarea
-                              value={draftOf(signal.id).comment}
-                              onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                              placeholder={judgeFeedback(signal) ? "термины, поисковый угол, сильный источник..." : "что важно знать о сигнале"}
-                            />
-                          </label>
-                        </div>
-                        <div className="signalFeedbackActions">
-                          <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>
-                          <div className="signalFeedbackButtons">
-                            <button type="button" className="ghostButton" disabled={savingThis} onClick={() => cancelFeedback(signal.id)}>
-                              Отмена
-                            </button>
-                            <button type="button" className="primaryButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
-                              Сохранить
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                      <SignalFeedbackForm
+                        signal={signal}
+                        draft={draftOf(signal.id)}
+                        saving={savingThis}
+                        onChange={(patch) => updateFeedbackDraft(signal.id, patch)}
+                        onCancel={() => cancelFeedback(signal.id)}
+                        onSubmit={() => void submitFeedback(signal)}
+                      />
                     ) : (
                       <div className="signalFeedbackCollapsed">
                         <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>

@@ -259,15 +259,19 @@ def test_third_publication_from_dedup_confirms_a_strong_signal(user, contour, pi
     assert after["maturity"] == "proven"
 
 
-def test_wrong_block_changes_the_category_at_once_and_reruns_only_the_scores(user, pipeline, monkeypatch):
+def test_wrong_block_changes_the_category_at_once_and_reruns_only_the_scores(user, admin, pipeline, monkeypatch):
     accepted(monkeypatch, {CONTRACT: answer(industry="oilfield_services")}, {CONTRACT: CONTRACT_TEXT})
     card_model = fill_cards(monkeypatch, {CONTRACT: card_answer(maturity="пилот/ОПИ")})
     run_scores(monkeypatch, {CONTRACT: scores(even("business", 70))})
     signal_id = showcase(user)[CONTRACT]["id"]
     model = ScoresModel({CONTRACT: scores(even("tech_radar", 85), named_customer=True)})
     monkeypatch.setattr(signal_scores, "make_client", lambda: model)
-
+    # «Не тот блок» участника без прав администратора только записан (#188): карточка на месте, баллы прежние.
     api_send("POST", "/api/signals/feedback", user, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
+    kept = showcase(user)[CONTRACT]
+    assert (kept["signal_category"], kept["scores_stale_since"]) == ("business", None)
+
+    api_send("POST", "/api/signals/feedback", admin, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
 
     # Категория, сразу: карточка уже в другой витрине, а баллы до ответа второго вызова «пересчитываются».
     assert CONTRACT not in showcase(user)
@@ -288,11 +292,11 @@ def test_wrong_block_changes_the_category_at_once_and_reruns_only_the_scores(use
 
 
 def test_wrong_block_before_the_card_changes_the_category_and_the_scores_come_by_the_new_profile(
-        user, pipeline, monkeypatch):
+        user, admin, pipeline, monkeypatch):
     accepted(monkeypatch, {CONTRACT: answer(industry="oilfield_services")}, {CONTRACT: CONTRACT_TEXT})
     signal_id = showcase(user)[CONTRACT]["id"]
 
-    api_send("POST", "/api/signals/feedback", user, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
+    api_send("POST", "/api/signals/feedback", admin, {"signal_id": signal_id, "verdict": "wrong_block", "comment": ""})
 
     # Карточки ещё нет: категория всё равно сразу другая, а «пересчитывать» нечего: баллов не было.
     moved = showcase(user, "technology")[CONTRACT]
