@@ -77,7 +77,7 @@
 
 ```mermaid
 flowchart LR
-  SRC["источники"] --> PARSE["сбор: rss, request, playwright, telegram"]
+  SRC["источники"] --> PARSE["сбор: rss, request, playwright, telegram, linkedin"]
   PARSE --> PREF["предфильтр"]
   PREF --> ART[("articles")]
   ART --> FULL["полный текст и страж принадлежности"]
@@ -102,7 +102,14 @@ flowchart LR
 - `playwright`: [`playwright_parser.parse_source()`](../oiltech_digest/ingestion/playwright_parser.py) для сайтов,
   которые рисуют листинг скриптами;
 - `telegram`: открытые каналы через страницу предпросмотра `t.me/s/<канал>`
-  ([`telegram_parser.py`](../oiltech_digest/ingestion/telegram_parser.py)).
+  ([`telegram_parser.py`](../oiltech_digest/ingestion/telegram_parser.py));
+- `linkedin`: публичная страница компании `linkedin.com/company/<имя>/` без входа, только через NL
+  ([`linkedin_parser.py`](../oiltech_digest/ingestion/linkedin_parser.py)). Один рендер на компанию: последние 10 постов
+  берутся из разметки schema.org (полный текст и дата), посты по одному не открываются, репосты чужих авторов
+  отбрасываются. LinkedIn закрывает частые заходы с одного адреса, поэтому компанию ставят не чаще
+  `LINKEDIN_MIN_INTERVAL_HOURS`, за цикл не больше `LINKEDIN_SOURCES_PER_CYCLE`, задачи разнесены на
+  `LINKEDIN_SPACING_MINUTES`. Стена входа или проверка Cloudflare дают `blocked:…` в итоге задачи и паузу всем компаниям
+  на `LINKEDIN_BLOCK_COOLDOWN_HOURS` (`sources.external_cooldown_until`). Заводит компанию `add-linkedin-source`.
 
 Источник с `network_region='external'` собирает воркер NL (шаг `enqueue-external-scrape` при
 `FETCH_EXTERNAL_ENABLED=1`); ядро кладёт в задачу последние адреса сайта (`known_urls`), чтобы воркер не качал

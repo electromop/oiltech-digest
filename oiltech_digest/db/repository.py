@@ -114,7 +114,7 @@ def get_sources_for_discovery(only_missing: bool = True,
     discover-rss (RUN_DISCOVER_ON_START=1), то есть откат случился бы до первого парса.
     """
     query = ("SELECT * FROM sources WHERE enabled = TRUE "
-             "AND parse_strategy NOT IN ('telegram', 'playwright') "
+             "AND parse_strategy NOT IN ('telegram', 'playwright', 'linkedin') "
              "AND (listing_url IS NULL OR listing_url = '')")
     params: list = []
     if only_missing:
@@ -211,6 +211,29 @@ def touch_last_parsed(source_id: int) -> None:
             "UPDATE sources SET last_parsed_at = now() WHERE id = %s", (source_id,)
         )
         conn.commit()
+
+
+def pause_strategy_sources(strategy: str, *, hours: float) -> int:
+    """Пауза сбора всем источникам стратегии (external_cooldown_until): блок LinkedIn по адресу NL."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET external_cooldown_until = now() + make_interval(secs => %s) "
+            "WHERE parse_strategy = %s",
+            (float(hours) * 3600, strategy),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def scrape_job_pending(source_id: int) -> bool:
+    """Задача сбора источника уже стоит или идёт: вторую не ставим."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM background_jobs WHERE kind = 'scrape_source' AND status IN ('queued', 'running', 'finalizing') "
+            "AND payload_json->>'source_id' = %s LIMIT 1",
+            (str(int(source_id)),),
+        ).fetchone()
+    return row is not None
 
 
 def set_sources_network_region(ids: list[int], region: str) -> int:
@@ -2811,6 +2834,7 @@ def create_background_job(
     capability: str | None = None,
     max_attempts: int = 3,
     agent_run_id: int | None = None,
+    delay_seconds: float = 0,
 ) -> dict:
     # Агентные задачи: в свою полосу, как бы их ни назвал вызывающий код (lanes.route).
     queue_name = lanes.route(queue_name, kind)
@@ -2822,9 +2846,9 @@ def create_background_job(
             """
             INSERT INTO background_jobs (
                 user_id, kind, queue_name, execution_region, capability,
-                agent_run_id, status, progress, max_attempts, payload_json
+                agent_run_id, status, progress, max_attempts, payload_json, run_after
             )
-            VALUES (%s, %s, %s, %s, %s, %s, 'queued', 0, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, 'queued', 0, %s, %s, now() + make_interval(secs => %s))
             RETURNING *
             """,
             (
@@ -2836,6 +2860,7 @@ def create_background_job(
                 agent_run_id,
                 max_attempts,
                 Json(_jsonable(payload or {})),
+                float(delay_seconds),
             ),
         )
         job = cur.fetchone()
@@ -4559,6 +4584,8 @@ def external_refetch_candidates(limit: int = 200) -> list[dict]:
             WHERE a.url IS NOT NULL
               AND s.network_region = 'external'
               AND s.archived_at IS NULL
+              -- Пост LinkedIn приходит целиком, а страница поста без входа ничего не добавит.
+              AND s.parse_strategy IS DISTINCT FROM 'linkedin'
               AND (
                 a.full_text_status IS NULL
                 -- Повтор после неудачи — но НЕ каждый цикл. Статусы failed/too_short

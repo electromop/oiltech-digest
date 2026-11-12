@@ -7,6 +7,7 @@ import {
   lastLoadLabel,
   sourceProblem,
   sourceState,
+  strategyLabel,
 } from "./sourceUtils";
 
 const baseSource: Source = {
@@ -180,5 +181,11 @@ describe("source states on the sources screen", () => {
 
     expect(triage.key).toBe("archived");
     expect(triage.label).toBe("в архиве");
+  });
+});
+
+describe("source kind label", () => {
+  it("names LinkedIn company pages", () => {
+    expect(strategyLabel("linkedin")).toBe("LinkedIn");
   });
 });

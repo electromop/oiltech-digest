@@ -40,7 +40,7 @@ def route_source_task(source: dict[str, Any], *, task_kind: str) -> ExecutionDec
     strategy = str(source.get("parse_strategy") or "").strip().lower()
     network_region = str(source.get("network_region") or "auto").strip().lower()
     network_profile = str(source.get("network_profile") or "direct").strip().lower()
-    capability = "playwright" if strategy == "playwright" or network_profile == "browser" else "http_fetch"
+    capability = "playwright" if strategy in {"playwright", "linkedin"} or network_profile == "browser" else "http_fetch"
 
     wants_external = network_region == "external"
     can_use_external = config.EXTERNAL_WORKERS_ENABLED and config.FETCH_EXTERNAL_ENABLED

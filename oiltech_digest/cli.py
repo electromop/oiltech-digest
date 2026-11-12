@@ -1064,14 +1064,25 @@ def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
               "(нужны EXTERNAL_WORKERS_ENABLED=1 и FETCH_EXTERNAL_ENABLED=1) — пропуск")
         return
 
-    sources = [
+    from datetime import datetime, timezone
+
+    from oiltech_digest.ingestion import linkedin_parser
+
+    external = [
         s for s in repository.get_enabled_sources()
         if str(s.get("network_region") or "auto").strip().lower() == "external"
-        and s.get("parse_strategy") in {"request", "playwright", "rss"}
     ]
-    enq = 0
+    sources = [s for s in external if s.get("parse_strategy") in {"request", "playwright", "rss"}]
+    # LinkedIn: не каждый цикл и не все сразу (linkedin_parser): частые заходы с адреса NL он закрывает.
+    linkedin = [s for s in external if s.get("parse_strategy") == linkedin_parser.STRATEGY
+                and not repository.scrape_job_pending(s["id"])]
+    sources += linkedin_parser.due_sources(
+        linkedin, now=datetime.now(timezone.utc), interval_hours=config.LINKEDIN_MIN_INTERVAL_HOURS,
+        per_cycle=config.LINKEDIN_SOURCES_PER_CYCLE)
+    enq = linkedin_enq = 0
     queues: dict[str, int] = {}
     for source in sources:
+        is_linkedin = source.get("parse_strategy") == linkedin_parser.STRATEGY
         decision = network_policy.route_source_task(source, task_kind="scrape")
         if decision.execution_region != "external":
             continue
@@ -1081,11 +1092,37 @@ def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
+            # LinkedIn: компании цикла не подряд, а через LINKEDIN_SPACING_MINUTES; повтор: лишний заход на ту же
+            # страницу, а следующий придёт через сутки и так.
+            **({"max_attempts": 1, "delay_seconds": linkedin_enq * config.LINKEDIN_SPACING_MINUTES * 60}
+               if is_linkedin else {}),
         )
+        linkedin_enq += int(is_linkedin)
         enq += 1
         queues[decision.queue_name] = queues.get(decision.queue_name, 0) + 1
     detail = ", ".join(f"{q}={n}" for q, n in sorted(queues.items())) or "—"
     print(f"enqueue-external-scrape: external-источников={len(sources)}, задач={enq} ({detail})")
+
+
+def cmd_add_linkedin_source(args: argparse.Namespace) -> None:
+    """Завести компанию LinkedIn источником: страница компании, сбор только через NL.
+
+    Имя или адрес страницы (`halliburton`, `https://www.linkedin.com/company/slbglobal/`). Повтор
+    обновляет тот же источник: ключ, (имя, тип «LinkedIn»)."""
+    from oiltech_digest import config
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion import linkedin_parser
+
+    url = linkedin_parser.company_url(args.company)
+    if url is None:
+        raise SystemExit(f"не похоже на страницу компании LinkedIn: {args.company!r}")
+    name = args.name or f"{linkedin_parser.company_slug(url)} (LinkedIn)"
+    source_id = repository.add_rss_source(name=name, rss_url="", source_type="LinkedIn", url=url,
+                                          priority=args.priority, category=args.category,
+                                          parse_strategy=linkedin_parser.STRATEGY)
+    repository.set_source_collection(source_id, listing_url=url, network_region="external", enabled=True)
+    print(f"add-linkedin-source: #{source_id} {name} → {url} (через NL, не чаще раза в "
+          f"{config.LINKEDIN_MIN_INTERVAL_HOURS:g} ч)")
 
 
 def cmd_set_source_region(args: argparse.Namespace) -> None:
@@ -2915,6 +2952,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_external = sub.add_parser("enqueue-external-scrape", help="фетч источников network_region=external через зарубежный воркер (no-op без FETCH_EXTERNAL_ENABLED)")
     p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
     p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
+
+    p_add_linkedin = sub.add_parser("add-linkedin-source",
+                                    help="завести страницу компании LinkedIn источником (сбор только через NL)")
+    p_add_linkedin.add_argument("company", help="имя компании в адресе (halliburton) или адрес её страницы")
+    p_add_linkedin.add_argument("--name", default=None, help="имя источника; по умолчанию «<имя> (LinkedIn)»")
+    p_add_linkedin.add_argument("--priority", type=float, default=1.0)
+    p_add_linkedin.add_argument("--category", default=None)
+    p_add_linkedin.set_defaults(func=cmd_add_linkedin_source)
 
     p_repr_list = sub.add_parser("reprints", help="показать помеченные перепечатки или снять пометку")
     p_repr_list.add_argument("--limit", type=int, default=20)

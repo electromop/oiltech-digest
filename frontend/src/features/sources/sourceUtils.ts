@@ -130,6 +130,7 @@ export function strategyLabel(strategy?: string | null) {
       request: "Разбор страницы",
       playwright: "Браузер",
       telegram: "Telegram",
+      linkedin: "LinkedIn",
     }[strategy || ""] || "Не задан"
   );
 }
@@ -206,6 +207,8 @@ function defaultActionForStrategy(strategy?: string | null) {
   if (strategy === "playwright") return "Проверьте рендер listing/article и при необходимости прокси для hard-WAF.";
   if (strategy === "rss") return "Проверьте RSS URL и наличие свежих entries.";
   if (strategy === "telegram") return "Проверьте URL канала и доступность preview.";
+  if (strategy === "linkedin")
+    return "Откройте страницу компании без входа с NL: стена входа или проверка — пауза сбора на сутки, адрес — linkedin.com/company/<имя>/.";
   return "Запустите диагностику и проверьте настройки источника.";
 }
 

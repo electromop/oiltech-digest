@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -19,6 +19,12 @@ def build_scrape_source_payload(source_id: int, payload: dict[str, Any]) -> dict
     source = repository.get_source(source_id)
     if source is None:
         raise ValueError("Source not found")
+    paused = dates.as_utc(source.get("external_cooldown_until"))
+    if source.get("parse_strategy") == "linkedin" and paused is not None and paused > datetime.now(timezone.utc):
+        # Задача поставлена до блока и ждала своей очереди (run_after): заход сейчас упрётся в ту же стену.
+        from oiltech_digest.processing.external_ai import InvalidJobPayload
+
+        raise InvalidJobPayload(f"LinkedIn на паузе после блока до {paused.isoformat(timespec='minutes')}")
     return {
         "kind": "scrape_source",
         "source": _jsonable_dict(source),
@@ -54,6 +60,8 @@ def _process_source(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
         return _process_request(source, payload, heartbeat=heartbeat)
     if strategy == "rss":
         return _process_rss(source, payload, heartbeat=heartbeat)
+    if strategy == "linkedin":
+        return _process_linkedin(source, payload, heartbeat=heartbeat)
     raise ValueError(f"Unsupported external scrape strategy: {strategy}")
 
 
@@ -80,7 +88,15 @@ def apply_scrape_result(result: dict[str, Any]) -> dict[str, Any]:
         last_seen_published_at=result.get("last_seen_published_at"),
         last_listing_hash=result.get("last_listing_hash"),
     )
-    return {"inserted": inserted, "duplicates": duplicates, "skipped_before_start": before_start, "source_id": source_id}
+    listing = str((result.get("stats") or {}).get("listing") or "")
+    cooldown = 0
+    if result.get("strategy") == "linkedin" and listing.startswith("blocked"):
+        # Блок по адресу NL, а не по компании: следующая компания получила бы ту же стену.
+        cooldown = repository.pause_strategy_sources("linkedin", hours=config.LINKEDIN_BLOCK_COOLDOWN_HOURS)
+        logger.warning("LinkedIn: %s на источнике %s, пауза всем (%s) на %s ч",
+                       listing, source_id, cooldown, config.LINKEDIN_BLOCK_COOLDOWN_HOURS)
+    return {"inserted": inserted, "duplicates": duplicates, "skipped_before_start": before_start, "source_id": source_id,
+            **({"paused_sources": cooldown} if cooldown else {})}
 
 
 def _process_request(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
@@ -156,6 +172,51 @@ def _process_playwright(source: dict[str, Any], payload: dict[str, Any], heartbe
 
         listing = last_fetch_status() or "no_candidates"
     return _with_listing_report(result, listing, len(candidates))
+
+
+def _process_linkedin(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
+    """Публичная страница компании в LinkedIn: один рендер, посты из разметки schema.org
+    (linkedin_parser). Посты по одному не открываем: на странице уже полный текст и дата."""
+    from oiltech_digest.ingestion import linkedin_parser
+    from oiltech_digest.ingestion.playwright_parser import fetch_rendered, last_fetch_status
+
+    slug = linkedin_parser.company_slug(source.get("listing_url") or source.get("url"))
+    url = linkedin_parser.company_url(slug)
+    if heartbeat is not None:
+        heartbeat()
+    content = fetch_rendered(url) if url else None
+    status = linkedin_parser.page_status(content) if content else (last_fetch_status() or "fetch_failed")
+    posts = linkedin_parser.extract_posts(content, slug) if status == "ok" else []
+
+    cutoff = verdicts.old_cutoff(source, payload.get("max_age_days"))
+    known = set(payload.get("known_urls") or [])
+    stats = {"attempted": 0, "skipped_old": 0, "skipped_irrelevant": 0, "failed_fetch": 0, "skipped_known": 0}
+    articles: list[dict[str, Any]] = []
+    for post in posts:
+        if post.url in known:
+            stats["skipped_known"] += 1
+            continue
+        if cutoff is not None and post.published_at and post.published_at < cutoff:
+            stats["skipped_old"] += 1
+            continue
+        if not should_keep_article(post.title, post.text, source).keep:
+            stats["skipped_irrelevant"] += 1
+            continue
+        stats["attempted"] += 1
+        articles.append(_jsonable_dict(linkedin_parser.post_record(post)))
+    result = {
+        "external_fetch": True,
+        "kind": "scrape_source",
+        "source_id": int(source["id"]),
+        "strategy": linkedin_parser.STRATEGY,
+        "stats": stats,
+        "articles": articles,
+        "last_seen_article_url": posts[0].url if posts else None,
+        "last_seen_published_at": _jsonable(posts[0].published_at) if posts else None,
+        "last_listing_hash": linkedin_parser.listing_hash(posts),
+    }
+    listing = "no_listing_url" if not url else ("ok" if status == "ok" else status)
+    return _with_listing_report(result, listing, len(posts))
 
 
 def _with_listing_report(result: dict[str, Any], listing: str, candidates: int) -> dict[str, Any]:

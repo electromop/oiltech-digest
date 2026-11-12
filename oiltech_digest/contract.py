@@ -50,6 +50,8 @@
    supplied»), а на прежнем звала бы гейт, тег и балл, которые ядро больше не пишет: задача process_articles любой
    формы ей не выдаётся. Задача, выданная ей до выката ядра, приходит с ответами гейта, тега и балла: ядро их не
    пишет, но расход записывает (external_ai.RETIRED_STAGES). Вид задачи recheck_relevance (перепроверка гейтом) снят.
+   12: сбор страниц компаний LinkedIn (parse_strategy linkedin у scrape_source, 12.11): сборка контракта 11 такой
+   источник не знает и упала бы «Unsupported external scrape strategy» уже после захода; задача ей не выдаётся.
    Совместимые добавки номер не меняют, старая сторона их молча пропускает: 28.09: поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002): profile у критериев в payload и profile + criteria_snapshot в
@@ -74,7 +76,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 11
+CONTRACT = 12
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
@@ -89,7 +91,7 @@ def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     формы нужен контракт 8: схема ответа со странами у неё всегда (#137). Прогону радара (не офлайн) любой формы нужен
     контракт 11: путь «Отбора» без поля otbor в задаче (снятие старой цепочки 08.11), широкий промпт и модель поиска из
     задачи (#138), сверка находок с лентой в «Дедупе» (04.11). Пакету статей ленты любой формы тоже 11: суть и перевод
-    без гейта, тега и балла (снятие старой цепочки 08.11). 0: подойдёт любая сборка, в том числе без заголовка
+    без гейта, тега и балла (снятие старой цепочки 08.11). Сбору страницы компании LinkedIn: 12 (12.11). 0: подойдёт любая сборка, в том числе без заголовка
     контракта, прежние формы задач номера не требуют."""
     if kind == "process_articles":
         return 11
@@ -102,6 +104,8 @@ def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     config = worker_payload.get("config") or {}
     if kind == "signal_discovery" and not config.get("offline"):
         return 11
+    if kind == "scrape_source" and (worker_payload.get("source") or {}).get("parse_strategy") == "linkedin":
+        return 12
     return 0
 
 

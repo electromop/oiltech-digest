@@ -80,6 +80,16 @@ AI_EXECUTION_REGION = os.environ.get("AI_EXECUTION_REGION", "ru").strip().lower(
 # воркер этой очереди, иначе задачи будут ждать (сторож очередей это покажет).
 AI_BULK_LANE_ENABLED = os.environ.get("AI_BULK_LANE_ENABLED", "0").lower() in {"1", "true", "yes"}
 FETCH_EXTERNAL_ENABLED = os.environ.get("FETCH_EXTERNAL_ENABLED", "0").lower() in {"1", "true", "yes"}
+# Страницы компаний в LinkedIn (parse_strategy='linkedin', только через NL): LinkedIn закрывает частые
+# заходы с одного адреса (12.11: шестой за две минуты: стена входа). Компания: не чаще раза в
+# LINKEDIN_MIN_INTERVAL_HOURS, за цикл планировщика: не больше LINKEDIN_SOURCES_PER_CYCLE компаний;
+# стена входа или проверка: пауза всем компаниям на LINKEDIN_BLOCK_COOLDOWN_HOURS.
+# Браузерный воркер NL один поток: задачи компаний цикла разнесены на LINKEDIN_SPACING_MINUTES (run_after),
+# а не идут подряд. Цикл 6 ч: 8 компаний за цикл, 32 захода в сутки.
+LINKEDIN_MIN_INTERVAL_HOURS = float(os.environ.get("LINKEDIN_MIN_INTERVAL_HOURS", "20"))
+LINKEDIN_SOURCES_PER_CYCLE = int(os.environ.get("LINKEDIN_SOURCES_PER_CYCLE", "8"))
+LINKEDIN_SPACING_MINUTES = float(os.environ.get("LINKEDIN_SPACING_MINUTES", "10"))
+LINKEDIN_BLOCK_COOLDOWN_HOURS = float(os.environ.get("LINKEDIN_BLOCK_COOLDOWN_HOURS", "24"))
 EXTERNAL_WORKER_TOKEN_HASH = os.environ.get("EXTERNAL_WORKER_TOKEN_HASH", "").strip()
 EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS = int(os.environ.get("EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS", "600"))
 CORE_API_URL = os.environ.get("CORE_API_URL", "").strip().rstrip("/")

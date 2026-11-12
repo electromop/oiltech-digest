@@ -19,7 +19,7 @@ OilTech Digest собирает публикации о нефтесервисе
 
 ```text
 источники
-  → discover-rss, parse (rss, request, playwright, telegram)
+  → discover-rss, parse (rss, request, playwright, telegram, linkedin через NL)
   → предфильтр шума, до записи в базу
   → articles
   → fetch-full-text
@@ -158,7 +158,7 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 - Сбор: `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
   `enqueue-external-scrape`, `enqueue-external-refetch`, `source-retry`, `stats`.
 - Источники: `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
-  `set-source-region`, `apply-source-overrides`, `source-audit`, `source-diagnose`, `source-probe`,
+  `set-source-region`, `add-linkedin-source`, `apply-source-overrides`, `source-audit`, `source-diagnose`, `source-probe`,
   `source-dump-listing`.
 - Суть и перевод ленты: `process`, `process-full`, `process-articles`, `enqueue-process`, `summarize`,
   `translate-titles`, `enqueue-translate`, `enqueue-resummarize`, `enqueue-title-edit`.
