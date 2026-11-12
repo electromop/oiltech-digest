@@ -46,34 +46,36 @@ def test_radar_run_keeps_page_titles_and_takes_no_feedback_memory_to_the_worker(
 
 
 # 27 переводов терминов из правил замен (разбор 53 правил 12.11, замечания эксперта 13.09) с чисткой пяти огрехов
-# разбора: пояснение внутри перевода, обрывок термина, хвост следующего пункта.
+# разбора: пояснение внутри перевода, обрывок термина, хвост следующего пункта. Перевод: один термин, как у остальных
+# строк словаря; второй вариант эксперта и сокращение лежат в пояснении (note): скобок, косой черты и «по контексту» в
+# переводе нет, их бракует правило русского заголовка.
 EXPERT_TERMS = {
     "within-stage adjustment": "корректировка параметров непосредственно в ходе стадии",
     "dynamic design optimization": "динамическая корректировка дизайна ГРП",
     "treatment execution": "выполнение обработки",
     "fleet execution": "управление исполнением операций флотом ГРП",
-    "fracture outcomes": "результаты / параметры проведения ГРП, по контексту",
+    "fracture outcomes": "результаты проведения ГРП",
     "subsurface feedback": "обратная связь по фактическому отклику пласта",
     "autonomous pumping": "автономное управление закачкой",
     "closed feedback loop": "замкнутый контур обратной связи",
     "closed-loop fracturing": "ГРП с замкнутым контуром управления",
     "narrow operating margin": "узкое окно допустимых давлений",
-    "drill floor control": "управление оборудованием буровой площадки / бурового пола",
-    "tripping": "спуско-подъёмные операции (СПО)",
+    "drill floor control": "управление оборудованием буровой площадки",
+    "tripping": "спуско-подъёмные операции",
     "downhole hydraulics": "внутрискважинная гидравлика",
-    "automated well placement": "автоматизированное управление проводкой/траекторией скважины",
+    "automated well placement": "автоматизированное управление проводкой скважины",
     "closed-loop rig automation": "автоматизация буровой с замкнутым контуром управления",
     "well delivery efficiency": "эффективность строительства скважин",
     "predictive maintenance": "предиктивное техническое обслуживание",
     "integrated data systems": "интегрированные системы сбора и анализа данных",
     "ai-enabled monitoring": "мониторинг с применением ИИ",
-    "automated pipe handling": "автоматизированные спуско-подъёмные / трубные операции",
+    "automated pipe handling": "автоматизированные спуско-подъёмные операции",
     "walking capability": "возможность перемещения между скважинами без демонтажа",
     "walking island rig": "шагающая буровая для искусственных островов",
     "well control": "контроль скважины",
     "full rig automation": "комплексная автоматизация буровой",
-    "managed pressure drilling": "бурение с управляемым давлением (MPD)",
-    "closed-loop control": "управление с замкнутым контуром / замкнутый контур управления",
+    "managed pressure drilling": "бурение с управляемым давлением",
+    "closed-loop control": "управление с замкнутым контуром",
     "fully automated rig": "полностью автоматизированная буровая",
 }
 
@@ -86,11 +88,14 @@ def test_expert_term_translations_are_in_the_dictionary_of_summary_and_translati
     found = {source: term.preferred_ru for term in domain_glossary.GLOSSARY for source in term.source_terms}
 
     assert {source: found.get(source) for source in EXPERT_TERMS} == EXPERT_TERMS
-    # Пояснения эксперта: запрет и оговорка, а не текст перевода.
+    # Пояснения эксперта: запрет, оговорка, второй вариант и сокращение, а не текст перевода.
+    notes = {source: term.note for term in domain_glossary.GLOSSARY for source in term.source_terms}
     [well_control] = [term for term in domain_glossary.GLOSSARY if "well control" in term.source_terms]
     assert well_control.forbidden_ru == ("управление скважиной",)
-    [rig] = [term for term in domain_glossary.GLOSSARY if "fully automated rig" in term.source_terms]
-    assert "автономная буровая" in rig.note
+    assert "автономная буровая" in notes["fully automated rig"]
+    assert "параметры проведения ГРП" in notes["fracture outcomes"]
+    assert "замкнутый контур управления" in notes["closed-loop control"]
+    assert "СПО" in notes["tripping"] and "MPD" in notes["managed pressure drilling"]
     assert domain_glossary.validate_glossary() == []
 
 
@@ -101,6 +106,7 @@ def test_translation_of_a_finding_gets_the_expert_terms_in_its_input(user, conto
     model = summarize(monkeypatch, {RIG_TITLE: ("Оператор автоматизировал СПО на буровой", "Суть")})
 
     [translation] = [call for call in model.calls if call["schema"] == "article_title_translation"]
-    assert "- source: tripping -> preferred_ru: спуско-подъёмные операции (СПО)" in translation["input"]
+    assert ("- source: tripping -> preferred_ru: спуско-подъёмные операции | note: Сокращение СПО"
+            in translation["input"])
     assert ("- source: well control -> preferred_ru: контроль скважины | forbidden_ru: управление скважиной"
             in translation["input"])

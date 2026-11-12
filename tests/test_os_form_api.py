@@ -254,3 +254,54 @@ def test_admin_edits_and_merges_a_colleague_material_like_any_other_card(user, a
     assert merged["merged"] is True
     shown = {card["id"]: card for card in api_get("/api/signals", user, showcase="business")}
     assert (material in shown, shown[main]["merged_count"]) == (False, 1)
+
+
+def _material_notices() -> list[dict]:
+    """Итоги «Отбора», которые бот материалов ещё не доставил авторам (#131)."""
+    response = TestClient(api.app).get("/api/external-worker/materials/notices", headers=BOT)
+    assert response.status_code == 200, response.text
+    return response.json()["notices"]
+
+
+def test_removal_by_people_and_its_return_tell_the_material_author_nothing(user, admin, contour, monkeypatch):
+    """Итог «Отбора» автору материала уходит в Telegram (#131). Уборка людьми не итог «Отбора»: автор о ней не узнаёт,
+    и «Вернуть» второго сообщения не шлёт."""
+    material = _colleague_material(user, monkeypatch)
+    [notice] = _material_notices()
+    delivered = TestClient(api.app).post("/api/external-worker/materials/notices", headers=BOT,
+                                         json={"material_id": notice["material_id"], "outcome": notice["outcome"]})
+    assert delivered.status_code == 200, delivered.text
+
+    api_send("POST", "/api/signals/feedback", admin, {"signal_id": material, "verdict": "wrong_domain",
+                                                      "reason": "Вне интересов Компании", "comment": ""})
+    assert _material_notices() == []
+    api_send("POST", f"/api/signals/{material}/restore", admin, {})
+    assert _material_notices() == []
+
+
+def test_return_brings_back_a_card_decided_before_otbor_as_it_was(issue):
+    """Карточка до «Отбора» (статья решена гейтом ленты): «Вернуть» возвращает её в витрину с прежним «Решением
+    платформы», а не с «отклонено», которое поставила уборка."""
+    admin, analyst, a = issue["admin"], issue["analyst"], issue["a"]
+    signal_id = _business(a["hi"])
+    set_card(signal_id, maturity="shortlist")
+
+    assert _mark(admin, signal_id, verdict="wrong_domain", reason="Вне интересов")["removed"] is True
+    assert signal_id not in _cards(analyst, "business")
+    assert admin.post(f"/api/signals/{signal_id}/restore").status_code == 200
+
+    back = _cards(analyst, "business")[signal_id]
+    assert (back["maturity"], back["otbor_decision"], back["human_removal"]) == ("shortlist", None, None)
+
+
+def test_admin_wrong_block_says_why_a_card_not_accepted_by_otbor_keeps_its_category(issue):
+    admin, a = issue["admin"], issue["a"]
+    signal_id = _business(a["hi"])
+
+    saved = _mark(admin, signal_id, verdict="wrong_block")
+
+    assert "recategorized" not in saved
+    assert saved["recategorize_refused"] == (
+        "«Не тот блок» сразу меняет категорию только у карточки, принятой «Отбором» в бизнес-ленту или технологический "
+        "радар")
+    assert _cards(admin, "business")[signal_id]["signal_category"] == "business"

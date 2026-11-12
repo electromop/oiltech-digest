@@ -33,7 +33,7 @@ import {
   ARRIVAL_FILTER_LABEL, CompanyGroupHint, EMPTY_CARD_FILTERS, FEEDBACK_FILTER, SignalCardFilters, arrivalPeriod,
 } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
-import { EMPTY_FEEDBACK_DRAFT, SignalFeedbackForm, duplicateOf, verdictName } from "./SignalFeedbackForm";
+import { EMPTY_FEEDBACK_DRAFT, SignalFeedbackForm, duplicateMainId, verdictName } from "./SignalFeedbackForm";
 import type { FeedbackDraft } from "./SignalFeedbackForm";
 import { SignalReturnForm } from "./SignalReturnForm";
 
@@ -573,7 +573,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     const reason = draft.reason.trim();
     const correctedTitle = draft.correctedTitle.trim();
     const correctedThesis = draft.correctedThesis.trim();
-    const duplicate = duplicateOf(draft);
+    const duplicate = duplicateMainId(draft);
     if (duplicate === "words") {
       showToast("Выберите главную карточку из подсказок или впишите её номер", "error");
       return;
@@ -625,6 +625,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         // витрине, баллы там пересчитываются по профилю новой категории.
         const target = result.recategorized === "technology" ? "технологический радар" : "бизнес-ленту";
         showToast(`Отметка сохранена: карточка перешла в ${target}, баллы пересчитываются`);
+      } else if (result.recategorize_refused) {
+        showToast(`Отметка сохранена, категория не сменилась: ${result.recategorize_refused}`);
       } else if (result.merged) {
         showToast("Отметка сохранена: карточка склеена с главной, её ссылки в главной карточке");
       } else if (result.merge_refused) {

@@ -36,14 +36,20 @@ FEEDBACK_MEMORY_TYPES = {
 WRONG_BLOCK = "wrong_block"
 DUPLICATE = "merge_duplicate"
 NOT_RELEVANT = "wrong_domain"
+# Почему «Не тот блок» администратора не сменил категорию (signal_scores.wrong_block, #132): как сейчас, только у
+# принятого «Отбором» бизнеса или технологии.
+NOT_RECATEGORIZED = ("«Не тот блок» сразу меняет категорию только у карточки, принятой «Отбором» в бизнес-ленту или "
+                     "технологический радар")
 
 
-def record_mark(fields: dict[str, Any], *, user_id: int | None, author: str | None, applies: bool) -> dict[str, Any]:
+def record_feedback(fields: dict[str, Any], *, user_id: int | None, author: str | None,
+                    applies: bool) -> dict[str, Any]:
     """Записать отметку ОС одним путём для любой карточки. applies: у отметки есть право на явные действия (отметка
     администратора); без него отметка только записывается, её правки заголовка и сути лежат в её блоке.
 
     Возвращает номер записи журнала, applied и итог явного действия, если оно было: recategorized (новая категория
-    после «Не тот блок»), merged и merge_refused (почему не склеено), removed и remove_refused (почему не убрано).
+    после «Не тот блок») или recategorize_refused (почему категория прежняя), merged и merge_refused (почему не
+    склеено), removed и remove_refused (почему не убрано).
     ValueError: пустая отметка или нет карточки, к которой она."""
     comment = str(fields.get("comment") or "").strip()
     verdict = _normalize_verdict(fields.get("verdict"))
@@ -89,7 +95,7 @@ def _explicit_action(signal_id: int, verdict: str | None, duplicate_of: int | No
         from oiltech_digest import signal_scores
 
         category = signal_scores.wrong_block(signal_id, author)
-        return {"recategorized": category} if category else {}
+        return {"recategorized": category} if category else {"recategorize_refused": NOT_RECATEGORIZED}
     if verdict == DUPLICATE and duplicate_of is not None:
         refusal = repository.merge_refusal(signal_id, duplicate_of)
         merge_reason = f"обратная связь: дубль #{duplicate_of}" + (f": {reason}" if reason else "")
@@ -98,19 +104,15 @@ def _explicit_action(signal_id: int, verdict: str | None, duplicate_of: int | No
             refusal = "карточка изменилась, пока сохранялась отметка: обновите витрину"
         return {"merged": refusal is None, **({"merge_refused": refusal} if refusal else {})}
     if verdict == NOT_RELEVANT:
-        from oiltech_digest.db import otbor_store
+        from oiltech_digest.db import removed_by_people
 
-        outcome = otbor_store.human_remove(signal_id, author=author, reason=reason)
-        refusal = {otbor_store.KEPT_IN_DIGEST: ("карточка выбрана «в дайджест»: выбранную не убирает ничто; сначала "
-                                                "уберите её из дайджеста"),
-                   otbor_store.ALREADY_REMOVED: "карточка уже в «Убрано людьми»",
-                   None: f"карточки №{int(signal_id)} нет"}.get(outcome)
-        return {"removed": outcome == otbor_store.REMOVED, **({"remove_refused": refusal} if refusal else {})}
+        refusal = removed_by_people.remove(signal_id, author=author, reason=reason)
+        return {"removed": refusal is None, **({"remove_refused": refusal} if refusal else {})}
     return {}
 
 
 def import_signal_feedback_csv(path: str | Path, *, user_id: int | None = None, dry_run: bool = False) -> dict[str, Any]:
-    """Отзывы из таблицы заказчика (CSV, строка с комментарием: отзыв) в журнал ОС тем же путём, что форма."""
+    """ОС из таблицы заказчика (CSV): строка с комментарием ложится в журнал ОС тем же путём, что форма."""
     rows = _read_feedback_csv(path)
     events = 0
     for row in rows:
@@ -120,8 +122,8 @@ def import_signal_feedback_csv(path: str | Path, *, user_id: int | None = None, 
         events += 1
         if dry_run:
             continue
-        record_mark({"comment": comment, "signal_title": row.get("Сигнал"), "source_url": row.get("URL")},
-                    user_id=user_id, author=None, applies=True)
+        record_feedback({"comment": comment, "signal_title": row.get("Сигнал"), "source_url": row.get("URL")},
+                        user_id=user_id, author=None, applies=True)
     return {"rows": len(rows), "feedback_events": events, "dry_run": dry_run}
 
 

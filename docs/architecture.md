@@ -282,7 +282,9 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
 - Настройки: `tags` (13 тематик заказчика и подтеги), `scoring_criteria` (профили business и tech_radar),
   `company_parents` (дочерние общества для фильтра «всё про компанию»), `company_descriptions`.
 - Отметки и обратная связь: `article_marks` и `signal_marks` (общие для всех учёток, через `db/marks.py`),
-  `signal_feedback_events`, `feedback_entries`, `signal_agent_memory` (память радара: отзывы людей и эталон заказчика),
+  `signal_feedback_events` (журнал отметок ОС; `applied`: явные действия применены, отметка администратора),
+  `feedback_entries`, `signal_agent_memory` (прежняя память радара: история отзывов до #188, отметки её больше не пишут, и
+  эталон заказчика),
   `signal_training_examples` (снимки решений для выгрузок); личные `user_article_states` и `user_signal_states`
   остались архивом.
 - Выпуск: `monthly_digests` (общий черновик на месяц), `monthly_digest_items`, `issue_highlights` («Главное в

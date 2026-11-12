@@ -11,8 +11,9 @@ export type FeedbackDraft = {
   reason: string;
   correctedTitle: string;
   correctedThesis: string;
-  // Поле главной карточки «Дубля»: номер или слова её заголовка; выбранная из подсказок: номер и заголовок.
-  duplicateOf: string;
+  // Поле главной карточки «Дубля»: что вписано (номер или слова её заголовка); выбранная из подсказок: номер и
+  // заголовок.
+  duplicateText: string;
   duplicatePick: DuplicateChoice | null;
   comment: string;
 };
@@ -24,7 +25,7 @@ export const EMPTY_FEEDBACK_DRAFT: FeedbackDraft = {
   reason: "",
   correctedTitle: "",
   correctedThesis: "",
-  duplicateOf: "",
+  duplicateText: "",
   duplicatePick: null,
   comment: "",
 };
@@ -64,9 +65,9 @@ export function verdictName(verdict: string | null): string {
 // Номер главной карточки, вписанный рукой: «9002», «#9002», «№ 9002». Слова заголовка номером не считаются.
 const NUMBER_ONLY = /^\s*[#№]?\s*(\d{1,18})\s*$/;
 
-// Главная карточка «Дубля» из поля формы: число; null: поле пусто; "words": вписаны слова, а главная не выбрана.
-export function duplicateOf(draft: FeedbackDraft): number | null | "words" {
-  const text = draft.duplicateOf.trim();
+// Номер главной карточки «Дубля» из поля формы: число; null: поле пусто; "words": вписаны слова, а главная не выбрана.
+export function duplicateMainId(draft: FeedbackDraft): number | null | "words" {
+  const text = draft.duplicateText.trim();
   if (!text) return null;
   const typed = NUMBER_ONLY.exec(text);
   if (typed) return Number(typed[1]);
@@ -91,7 +92,7 @@ function DuplicateField({ signal, draft, onChange }: {
   const pickedId = useId();
   const hintsId = useId();
   const [hints, setHints] = useState<Hint[]>([]);
-  const words = draft.duplicateOf.trim();
+  const words = draft.duplicateText.trim();
   const searchable = !draft.duplicatePick && words.length >= HINT_MIN_CHARS && !NUMBER_ONLY.test(words);
 
   useEffect(() => {
@@ -131,10 +132,10 @@ function DuplicateField({ signal, draft, onChange }: {
       <span id={labelId}>ID дубля</span>
       <input
         aria-labelledby={labelId}
-        value={draft.duplicateOf}
+        value={draft.duplicateText}
         aria-describedby={draft.duplicatePick ? pickedId : undefined}
         aria-controls={hints.length ? hintsId : undefined}
-        onChange={(event) => onChange({ duplicateOf: event.target.value, duplicatePick: null })}
+        onChange={(event) => onChange({ duplicateText: event.target.value, duplicatePick: null })}
         placeholder="номер главной карточки или слова её заголовка"
       />
       {draft.duplicatePick ? (
@@ -149,7 +150,7 @@ function DuplicateField({ signal, draft, onChange }: {
               <button
                 type="button"
                 className="ghostButton compactButton"
-                onClick={() => onChange({ duplicateOf: String(hint.id), duplicatePick: { id: hint.id, title: hint.title } })}
+                onClick={() => onChange({ duplicateText: String(hint.id), duplicatePick: { id: hint.id, title: hint.title } })}
               >
                 {`№${hint.id} · ${hint.title} · ${SHOWCASE_NAMES[hint.showcase]}`}
               </button>

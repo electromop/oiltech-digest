@@ -263,6 +263,23 @@ describe("кто меняет карточку (#188)", () => {
     expect(within(card).getByText("Суть эксперта.")).toBeInTheDocument();
   });
 
+  it("«Не тот блок» администратора у карточки не после «Отбора»: экран говорит, почему категория прежняя", async () => {
+    serve({ business: [contract] });
+    vi.mocked(createSignalFeedback).mockResolvedValue({
+      ok: true, event_id: 7, applied: true, block: null,
+      recategorize_refused: "«Не тот блок» сразу меняет категорию только у карточки, принятой «Отбором»",
+    });
+    renderShowcase("business", true);
+    const { box } = openForm(await cardOf(contract.title_ru as string));
+    fireEvent.change(within(box).getByLabelText("Оценка сигнала"), { target: { value: "wrong_block" } });
+
+    fireEvent.click(within(box).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(
+      "Отметка сохранена, категория не сменилась: «Не тот блок» сразу меняет категорию только у карточки, принятой «Отбором»"));
+    expect(await cardOf(contract.title_ru as string)).toBeInTheDocument();
+  });
+
   it("«Не релевантно» администратора уводит карточку в «Убрано людьми»", async () => {
     serve({ business: [contract] });
     vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 6, applied: true, removed: true, block: null });

@@ -1,6 +1,6 @@
 """Отметка ОС администратора на радаре (#188): «Дубль» прячет карточку в главную, правки заголовка и сути лежат поверх
 текста модели и переживают повторную находку. Проверяется на настоящей базе путём записи отметки
-(signal_feedback.record_mark), тем же, что у формы. Память агента отметка не пишет (#188).
+(signal_feedback.record_feedback), тем же, что у формы. Память агента отметка не пишет (#188).
 """
 
 from oiltech_digest import signal_feedback
@@ -25,7 +25,7 @@ def _signal(key, title, *, url=None, score=70):
 
 def _admin_mark(admin, fields):
     """Отметка администратора: её явные действия применяются сразу."""
-    return signal_feedback.record_mark({"comment": "", **fields}, user_id=admin, author="admin@example.test",
+    return signal_feedback.record_feedback({"comment": "", **fields}, user_id=admin, author="admin@example.test",
                                        applies=True)
 
 
@@ -33,7 +33,7 @@ def test_duplicate_verdict_hides_the_card_although_it_was_reviewed(isolated_db):
     admin = _user("admin")
     main = _signal("main", "ZenaTech: дроны для инспекции", url="https://example.com/a")
     dup = _signal("dup", "ZenaTech дроны для инспекций трубопроводов", url="https://example.com/b")
-    signal_feedback.record_mark({"signal_id": dup, "verdict": "approved", "comment": "Разобрана"},
+    signal_feedback.record_feedback({"signal_id": dup, "verdict": "approved", "comment": "Разобрана"},
                                 user_id=_user(), author="colleague@example.test", applies=False)
 
     result = _admin_mark(admin, {"signal_id": dup, "signal_title": "ZenaTech дроны", "verdict": "merge_duplicate",

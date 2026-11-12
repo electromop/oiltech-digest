@@ -193,7 +193,8 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 - Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
   `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,
-  `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `/api/feedback`.
+  `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `POST /api/signals/{id}/restore` (вернуть убранное
+  людьми, админ), `/api/feedback`.
 - Выпуск: `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
   `POST /api/jobs/digest-export`, `/api/monthly-digests`, `PUT /api/issue-highlights/{month}`,
   `PATCH /api/signals/{id}/issue-material`, `/api/digest-branding`.

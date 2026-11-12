@@ -1566,12 +1566,12 @@ def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
 def restore_removed_signal(signal_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """«Вернуть» в разделе «Убрано людьми» (#188, спека #187): прежнее решение «Отбора», каким оно было до «Не
     релевантно» администратора, и карточка снова там, где была. Только админ: разделы отклонённого видит только он."""
-    from oiltech_digest.db import otbor_store
+    from oiltech_digest.db import removed_by_people
 
-    done = otbor_store.human_restore(signal_id, author=user.get("email"))
+    done = removed_by_people.restore(signal_id, author=user.get("email"))
     if done is None:
         raise HTTPException(status_code=404, detail="Signal not found")
-    if done == otbor_store.NOT_REMOVED:
+    if done == removed_by_people.NOT_REMOVED:
         raise HTTPException(status_code=409, detail="Так возвращается только убранное людьми")
     return {"ok": True}
 
@@ -1581,11 +1581,12 @@ def restore_removed_signal(signal_id: int, user: dict[str, Any] = Depends(requir
 # релевантно») сразу применяет только отметка администратора; отметка остальных только записывается и видна блоком.
 @app.post("/api/signals/feedback")
 def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    from oiltech_digest.signal_feedback import record_mark
+    from oiltech_digest.signal_feedback import record_feedback
 
     applies = (user.get("role") or "user") == "admin"
     try:
-        result = record_mark(payload.model_dump(), user_id=int(user["id"]), author=user.get("email"), applies=applies)
+        result = record_feedback(payload.model_dump(), user_id=int(user["id"]), author=user.get("email"),
+                                 applies=applies)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, **result, "block": _feedback_block(result["event_id"], payload, user, applied=applies)}
