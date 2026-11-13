@@ -59,7 +59,8 @@
    правил агента; воркер дописывает к инструкции правила своего шага и категории и возвращает номер версии набора.
    Сборка контракта 12 блок молча пропустила бы, и согласованное правило не действовало бы: задачу с правилами ядро
    ей не выдаёт; без правил (набор пуст) задача прежняя и годится любой сборке. Вид задачи rule_check (автопроверка
-   правила на эталоне ОС) сборке 12 незнаком: ядро ей его не выдаёт.
+   правила на эталоне ОС) сборке 12 незнаком: ядро ей его не выдаёт. Разбор ОС с вызовом о правилах (поле rules_review)
+   сборка 12 исполнила бы без него, молча: такой задачи ядро ей тоже не выдаёт.
    Совместимые добавки номер не меняют, старая сторона их молча пропускает: 28.09: поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002): profile у критериев в payload и profile + criteria_snapshot в
@@ -108,7 +109,10 @@ def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     from oiltech_digest import expert_rules
 
     needed = _required(kind, worker_payload)
-    if kind == "rule_check" or expert_rules.has_rules(worker_payload.get("expert_rules")):
+    # Разбор ОС с вызовом о правилах (#190): сборка 12 поле rules_review молча пропустила бы, и срез прошёл бы без
+    # предложений правил.
+    if (kind == "rule_check" or expert_rules.has_rules(worker_payload.get("expert_rules"))
+            or (kind == "feedback_review" and worker_payload.get("rules_review"))):
         return max(needed, 13)
     return needed
 
@@ -237,6 +241,9 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
                            "feedback_review": "reviews"}[kind]) or []
         answered = {str(row.get("signal_id")) for row in rows if isinstance(row, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
+        if not left and kind == "feedback_review" and result.get("rules_pending"):
+            # Сигналы разобраны, вызов о правилах эксперта (#190) не сделан: задача возвращается только за ним.
+            return {**rest, "signal_ids": []}
         return {**rest, "signal_ids": left} if left else None
     if kind == "otbor":
         answered = {str(item.get("ref")) for item in result.get("decisions") or [] if isinstance(item, dict)}

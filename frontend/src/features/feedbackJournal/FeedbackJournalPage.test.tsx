@@ -77,6 +77,7 @@ function serveJournal(entries: JournalEntry[], extra: Partial<JournalOverview> =
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (url.startsWith("/api/feedback-journal/overview")) return Promise.resolve(json({ ...overview, ...extra }));
+    if (url.startsWith("/api/feedback-journal/rules")) return Promise.resolve(json({ agents: [], limit: 20, can_rollback: false }));
     if (url.startsWith("/api/feedback-journal/settings")) {
       return Promise.resolve(json(method === "PUT" ? { ...settings, values: JSON.parse(String(init?.body)).values } : settings));
     }

@@ -1,12 +1,12 @@
 """Агент «Разбор ОС» (#189, спека #187): сводит отметки всех участников по каждому сигналу в одно улучшение карточки.
 
-Новый вид задачи на внешнем воркере, как у остальных агентов (контракт 12). Ядро собирает самодостаточный пакет при
-выдаче: сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно похожих отметок (без имён авторов:
-только роль), поля карточки, текст главной публикации и справочники значений. Воркер без базы зовёт модель из настроек
-контура (gpt-6-sol по умолчанию) по сигналу. Ядро проверяет ответ кодом: поле из списка, значение из справочника,
-номера отметок из пакета, цитата дословно из текста этих отметок; не прошедшее не пишется. Прошедшее ложится в журнал
-ОС предложением по сигналу (ждёт решения администратора); новое предложение по тому же сигналу заменяет прежнее
-нерешённое. Сам разбор карточку не меняет (решения владельца 11 и 12.11). Расход: своей стадией в учёте расхода ИИ.
+Вид задачи на внешнем воркере (контракт 12; с вызовом о правилах эксперта, #190: 13). Ядро собирает пакет при выдаче:
+сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно похожих отметок (без имён авторов: только
+роль), поля карточки, текст главной публикации и справочники. Воркер без базы зовёт модель из настроек контура
+(gpt-6-sol) по сигналу, затем один раз о правилах (feedback_review_rules). Ядро проверяет ответ кодом: поле из списка,
+значение из справочника, номера отметок из пакета, цитата дословно из текста этих отметок; не прошедшее не пишется.
+Прошедшее ложится в журнал ОС предложением (ждёт решения администратора); новое по тому же сигналу заменяет прежнее
+нерешённое. Сам разбор ничего не меняет (решения владельца 11 и 12.11). Расход: своей стадией в учёте расхода ИИ.
 """
 
 from __future__ import annotations
@@ -173,11 +173,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             continue
         rows.append({**row, "answer": response.data, "model": response.model,
                      "input_tokens": response.input_tokens, "output_tokens": response.output_tokens})
-    if payload.get("rules_review") and not result.get("partial"):
-        if heartbeat:
-            heartbeat(result)
-        result["rules"] = feedback_review_rules.call(client, payload["rules_review"], model=model,
-                                                     reasoning=payload.get("reasoning"))
+    feedback_review_rules.run(client, payload, result, heartbeat, model=model)
     return result
 
 
@@ -420,8 +416,7 @@ def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, 
 
 
 def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """«Изменить»: новая формулировка полей предложения от администратора, проверенная так же, как ответ модели (цитаты
-    не нужно: это слова администратора). JournalRefused: неверное значение или поля нет в предложении."""
+    """«Изменить»: формулировка администратора, проверенная как ответ модели (без цитаты). JournalRefused: не так."""
     from oiltech_digest.feedback_journal import JournalRefused
 
     by_field = {change["field"]: change for change in proposed}
@@ -498,5 +493,4 @@ def _usage(row: dict[str, Any]) -> dict[str, Any] | None:
             "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
 
 
-def _moment(value: Any) -> datetime:
-    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+_moment = feedback_review_rules._moment

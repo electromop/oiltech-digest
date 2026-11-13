@@ -199,6 +199,10 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
   `GET /api/feedback-journal/overview` (срезы, расход, потолок), `POST /api/feedback-journal/slices` («собрать
   сейчас», админ), `POST /api/feedback-journal/proposals/{id}/decision`, `POST /api/feedback-journal/actions/{id}/undo`,
   `POST /api/feedback-journal/tasks/{id}/close` (админ), `GET`/`PUT /api/feedback-journal/settings` (правит админ).
+- Правила эксперта: `GET /api/feedback-journal/rules` (наборы правил агентов и версии), решение по предложению правила
+  тем же `POST /api/feedback-journal/proposals/{id}/decision` (`text`: новая формулировка, `confirm`: отдельное
+  подтверждение), `POST /api/feedback-journal/proposals/{id}/rollback` (откат версии), `POST
+  /api/feedback-journal/proposals/{id}/check` (автопроверка заново), всё кроме чтения: админ.
 - Выпуск: `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
   `POST /api/jobs/digest-export`, `/api/monthly-digests`, `PUT /api/issue-highlights/{month}`,
   `PATCH /api/signals/{id}/issue-material`, `/api/digest-branding`.

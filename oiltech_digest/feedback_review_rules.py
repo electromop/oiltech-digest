@@ -195,6 +195,24 @@ def model_input(item: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def run(client: Any, payload: dict[str, Any], result: dict[str, Any], heartbeat: Any, *, model: str) -> None:
+    """Сторона воркера, после сигналов: вызов о правилах в итог задачи. Воркер остановили раньше: пометка
+    rules_pending, и задача вернётся без сигналов, только за правилами (contract.remaining_after_partial)."""
+    from oiltech_digest.processing.external_ai import StopRequested
+
+    if not payload.get("rules_review"):
+        return
+    try:
+        if heartbeat and not result.get("partial"):
+            heartbeat(result)
+    except StopRequested:
+        result["partial"] = True
+    if result.get("partial"):
+        result["rules_pending"] = True
+        return
+    result["rules"] = call(client, payload["rules_review"], model=model, reasoning=payload.get("reasoning"))
+
+
 def call(client: Any, item: dict[str, Any], *, model: str, reasoning: Any) -> dict[str, Any]:
     """Сторона воркера: один вызов модели о правилах; ответ как есть. Сбой вызова не губит разбор сигналов."""
     from oiltech_digest.processing.external_ai import StopRequested

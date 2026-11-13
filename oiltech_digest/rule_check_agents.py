@@ -59,7 +59,7 @@ def shared(agent: str, spec: dict[str, Any]) -> dict[str, Any]:
         from oiltech_digest import signal_discovery
 
         settings = signal_discovery.research_settings(days=int(spec.get("days") or 7))
-        return {"topic": spec.get("topic"), "days": int(spec.get("days") or 7), "model": settings["research_model"],
+        return {"days": int(spec.get("days") or 7), "model": settings["research_model"],
                 "reasoning": settings["research_reasoning"], "limit": settings["research_limit"]}
     return {}
 
