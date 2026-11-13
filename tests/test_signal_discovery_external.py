@@ -1,13 +1,11 @@
-"""Радар через внешний воркер: снимок на ядре → прогон без базы → запись на ядре.
-
-И память ОС заказчика: чему отзыв учит (подсказки поиска пишутся как история), что не
-возвращаем повторно."""
+"""Радар через внешний воркер: снимок на ядре → прогон без базы → запись на ядре. Памяти ОС в снимке нет (#188):
+словарь замен снят, разобранное человеком повторно не возвращается."""
 
 import json
 
 import pytest
 
-from oiltech_digest import background_jobs, external_worker, signal_discovery, signal_feedback, signal_research
+from oiltech_digest import background_jobs, external_worker, signal_discovery, signal_research
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.signal_research import PAGE_NOT_FETCHED
@@ -38,26 +36,10 @@ TAGS = [
     },
 ]
 
-CHEMISTRY = "Химия, материалы, вода и извлечение ценных компонентов"
-MEMORY = {
-    "signal_query_hint": [
-        {"subject": "2026 closed-loop drilling automation oil gas", "score": 65,
-         "facts_json": {"verdict": "approved", "topic": DRILLING}},
-        {"subject": "2026 lithium brine extraction oil gas", "score": 65,
-         "facts_json": {"verdict": "approved", "topic": CHEMISTRY}},
-    ],
-}
-
-
 @pytest.fixture
 def core_repository(monkeypatch):
     monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RADAR_TOPIC_SOURCE", "tags")
     monkeypatch.setattr(repository, "list_enabled_tags", lambda: TAGS)
-    monkeypatch.setattr(
-        repository,
-        "list_signal_agent_memory",
-        lambda memory_type=None, status="active", limit=50: MEMORY.get(memory_type, [])[:limit],
-    )
     monkeypatch.setattr(repository, "list_reviewed_signal_urls", lambda: ["https://known.example/old/"])
     monkeypatch.setattr(repository, "list_signals_for_dedup", lambda: [])
     monkeypatch.setattr(repository, "list_feed_signals_for_dedup", lambda **kwargs: [])
@@ -102,7 +84,7 @@ class _Search:
                           model="gpt-6.1-sol", input_tokens=100, output_tokens=10)
 
 
-def test_worker_run_gets_tags_memory_and_reviewed_urls_from_snapshot(monkeypatch, core_repository):
+def test_worker_run_gets_tags_and_reviewed_urls_from_snapshot(monkeypatch, core_repository):
     payload = signal_discovery.build_external_payload({"offline": False})
     json.dumps(payload)  # уезжает воркеру по HTTP
 
@@ -120,10 +102,10 @@ def test_worker_run_gets_tags_memory_and_reviewed_urls_from_snapshot(monkeypatch
     result = signal_discovery.process_external_payload(payload, heartbeat=lambda: beats.append(1))
 
     json.dumps(result)  # уходит ядру по HTTP
-    # Ключи тематики из снимка тегов попали в промпт поиска, ОС экспертов не попала (граница данных О-7).
+    # Ключи тематики из снимка тегов попали в промпт поиска; памяти ОС в снимке нет (#188, граница данных О-7).
     [prompt] = search.prompts
     assert "Ключевые слова: бурение, closed-loop drilling" in prompt
-    assert "2026 closed-loop drilling automation oil gas" not in prompt
+    assert not payload["snapshot"]["memory"]
     topic = result["run"]["topics"][0]
     # Разобранная человеком ссылка (известна ядру по снимку) находкой не становится.
     assert topic["skipped_reviewed"] == 1
@@ -243,29 +225,6 @@ def test_topic_tag_context_takes_exactly_the_named_tag():
 
     # Общее слово «оборудование» больше не притягивает «Добычу».
     assert [tag["id"] for tag in selected] == [20, 41]
-
-
-# --- обучение на ОС ---------------------------------------------------------
-
-_LITHIUM = {
-    "Комментарий": "Школьный проект «Больших вызовов», промышленного внедрения нет",
-    "Сигнал": "Добыча лития из попутно добываемой воды",
-    "URL": "https://example.com/lithium",
-    "reason": "Образовательный проект, не сигнал",
-}
-
-
-@pytest.mark.parametrize("verdict", ["reject", "wrong_domain", "too_generic", "merge_duplicate"])
-def test_rejected_feedback_does_not_become_search_hint(verdict):
-    memories = signal_feedback.extract_feedback_memories({**_LITHIUM, "verdict": verdict})
-
-    assert [m for m in memories if m["memory_type"] == "signal_query_hint"] == []
-
-
-def test_approved_feedback_still_becomes_search_hint():
-    memories = signal_feedback.extract_feedback_memories({**_LITHIUM, "verdict": "approved"})
-
-    assert [m["subject"] for m in memories if m["memory_type"] == "signal_query_hint"]
 
 
 def test_failed_daily_radar_is_not_requeued_the_same_day(isolated_db, monkeypatch):

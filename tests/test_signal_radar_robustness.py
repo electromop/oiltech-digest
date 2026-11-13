@@ -45,7 +45,7 @@ def test_empty_page_in_fulltext_falls_back_to_snippet(monkeypatch):
         "ok": True, "error": None, "raw_text": "", "title": "", "published_at": None})
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/empty")], "Бурение"
+        [_web_item("https://example.com/empty")]
     )
 
     assert stats["too_short"] == 1
@@ -60,7 +60,7 @@ def test_any_page_error_keeps_candidate_with_snippet(monkeypatch):
     monkeypatch.setattr(signal_discovery, "_fetch_full_text", boom)
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/broken")], "Бурение"
+        [_web_item("https://example.com/broken")]
     )
 
     assert stats == {"attempted": 1, "fetched": 0, "too_short": 0, "failed": 1,
@@ -98,7 +98,6 @@ def test_fulltext_beats_before_every_page(monkeypatch):
 
     signal_discovery._enrich_web_evidence_with_full_text(
         [_web_item(f"https://example.com/{index}") for index in range(3)],
-        "Бурение",
         heartbeat=lambda: beats.append(1),
     )
 
@@ -112,7 +111,7 @@ def test_fulltext_fetches_the_page_of_every_finding(monkeypatch):
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "timeout", "raw_text": ""})
 
     evidence, stats = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item(f"https://example.com/{index}") for index in range(5)], "Бурение")
+        [_web_item(f"https://example.com/{index}") for index in range(5)])
 
     assert (stats["attempted"], stats["failed"]) == (5, 5)
     assert len(evidence) == 5
@@ -293,7 +292,7 @@ def test_fetched_page_date_travels_as_iso_string(monkeypatch):
     )
 
     evidence, _ = signal_discovery._enrich_web_evidence_with_full_text(
-        [_web_item("https://example.com/a")], "Бурение"
+        [_web_item("https://example.com/a")]
     )
 
     assert evidence[0]["published_at"] == "2026-09-01T00:00:00+00:00"

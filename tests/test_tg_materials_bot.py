@@ -430,8 +430,8 @@ def test_help_lists_whole_scale(env):
 
 
 def test_scale_is_the_radar_screen_scale():
-    """«Идентично оценке платформы»: те же девять пунктов и подписи, что на экране радара."""
-    source = (ROOT / "frontend/src/features/signals/SignalRadarPage.tsx").read_text(encoding="utf-8")
+    """«Идентично оценке платформы»: те же девять пунктов и подписи, что в форме ОС обеих витрин (#188)."""
+    source = (ROOT / "frontend/src/features/signals/SignalFeedbackForm.tsx").read_text(encoding="utf-8")
     block = source.split("const VERDICT_LABELS", 1)[1].split("\n];", 1)[0]
     screen = [(v, label) for v, label in re.findall(r'value: "([a-z_]*)", label: "([^"]+)"', block) if v]
 

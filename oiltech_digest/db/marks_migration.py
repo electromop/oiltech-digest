@@ -26,7 +26,9 @@ from psycopg.types.json import Json
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection, repository
 from oiltech_digest.feed_window import period_month_sql, signal_month_sql
-from oiltech_digest.signal_feedback import DIGEST_SELECTION_ORIGIN
+
+# Происхождение строк прежней памяти агента «выбран в дайджест» (их писала отметка до #188, теперь не пишет ничто).
+DIGEST_SELECTION_ORIGIN = "digest_selection"
 
 
 def _legacy_composition(conn, month: str, base_user_id: int) -> dict[str, list[int]]:

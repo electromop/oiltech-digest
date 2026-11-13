@@ -272,7 +272,11 @@ def record_signal_feedback_event(
     corrected_title: str | None = None,
     corrected_thesis: str | None = None,
     duplicate_of_signal_id: int | None = None,
+    applied: bool = True,
 ) -> int:
+    """Запись журнала ОС. applied (#188): явные действия отметки применены сразу (отметка администратора, правка
+    материала выпуска); False: отметка участника без прав администратора: записана и видна блоком, а её правки
+    заголовка и сути на карточку не ложатся (_SIGNAL_CORRECTIONS_LATERAL)."""
     if event_type not in SIGNAL_FEEDBACK_EVENTS:
         raise ValueError(f"Unknown signal feedback event_type: {event_type}")
     if article_id is None and signal_id is None and not source_url:
@@ -283,8 +287,8 @@ def record_signal_feedback_event(
             INSERT INTO signal_feedback_events
               (article_id, signal_id, signal_evidence_id, source_url, signal_title,
                user_id, event_type, old_value, new_value, comment,
-               verdict, reason, corrected_title, corrected_thesis, duplicate_of_signal_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               verdict, reason, corrected_title, corrected_thesis, duplicate_of_signal_id, applied)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -303,6 +307,7 @@ def record_signal_feedback_event(
                 corrected_title,
                 corrected_thesis,
                 duplicate_of_signal_id,
+                applied,
             ),
         )
         event_id = int(cur.fetchone()[0])
@@ -703,10 +708,11 @@ _SIGNAL_IN_DIGEST_SQL = marks.signal_marked_sql("{alias}.id", "digest")
 SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation",
                             "overrated")
 # Одобрена человеком: последний вердикт: положительный. Отказ, «не тот блок», «шум» или
-# комментарий без вердикта карточку одобренной не делают.
+# комментарий без вердикта карточку одобренной не делают. Только применённые отметки (#188): оценка участника без прав
+# администратора карточку не прячет и не возвращает.
 _SIGNAL_APPROVED_SQL = (
     "COALESCE((SELECT sfe_a.verdict FROM signal_feedback_events sfe_a"
-    " WHERE sfe_a.signal_id = {alias}.id AND COALESCE(sfe_a.verdict, '') <> ''"
+    " WHERE sfe_a.signal_id = {alias}.id AND sfe_a.applied AND COALESCE(sfe_a.verdict, '') <> ''"
     " ORDER BY sfe_a.created_at DESC, sfe_a.id DESC LIMIT 1), '') IN ("
     + ", ".join(f"'{verdict}'" for verdict in SIGNAL_POSITIVE_VERDICTS)
     + ")"
@@ -847,6 +853,31 @@ def resolve_signal_merge_root(signal_id: int) -> int | None:
     return None
 
 
+def merge_refusal(signal_id: int, into_signal_id: int) -> str | None:
+    """Почему «Дубль» администратора не склеит карточку с главной (#188), словами для ответа; None: склеит. Склейка
+    идёт к корню группы главной (mark_signal_merged); выбранную «в дайджест» не склеивает ничто: она исчезла бы из
+    витрины и осталась бы в выпуске без способа её оттуда убрать."""
+    root = resolve_signal_merge_root(into_signal_id)
+    if root is None:
+        return f"главной карточки №{int(into_signal_id)} нет"
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT s.merged_into_signal_id, {signal_digest_sql('s')} FROM signals s WHERE s.id = %s",
+            (int(signal_id),),
+        ).fetchone()
+    if row is None:
+        return f"карточки №{int(signal_id)} нет"
+    merged_into, chosen = row
+    if root == int(signal_id):
+        return f"№{int(into_signal_id)} уже склеена с этой карточкой: главная в группе она сама"
+    if merged_into is not None:
+        return f"карточка уже склеена с №{int(merged_into)}"
+    if chosen:
+        return ("карточка выбрана «в дайджест»: склейка убрала бы её из витрины, а в выпуске она осталась бы; "
+                "сначала уберите её из дайджеста")
+    return None
+
+
 def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *, respect_review: bool = True) -> bool:
     """Скрыть карточку-дубль со ссылкой на главную. Не удаляет: пометку снимает UPDATE.
 
@@ -861,8 +892,9 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
         review_clause = "AND NOT " + _SIGNAL_REVIEWED_SQL.format(alias="signals")
     else:
         # Решение человека прячет и разобранную карточку, но не выбранную в дайджест: иначе она
-        # исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать.
-        review_clause = "AND NOT " + marks.signal_marked_sql("signals.id", "digest")
+        # исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать. У сигнала ленты «в дайджест»
+        # отметка его статьи (#130, signal_digest_sql), а не карточки.
+        review_clause = "AND NOT " + signal_digest_sql("signals")
     with get_connection() as conn:
         row = conn.execute(
             f"""
@@ -1414,15 +1446,16 @@ def list_signal_training_examples(
 
 # Исправления из обратной связи («Рекомендуемый заголовок», «…формулировка сути»):
 # последнее непустое по карточке. Накладываются при чтении: текст модели в signals не
-# затирается, и повторная находка той же карточки прогоном радара правку не перепишет.
+# затирается, и повторная находка той же карточки прогоном радара правку не перепишет. Только применённые (#188):
+# правка администратора и правка материала выпуска; правка участника без прав администратора лежит в его блоке ОС.
 _SIGNAL_CORRECTIONS_LATERAL = """
 LEFT JOIN LATERAL (
   SELECT
     (SELECT e.corrected_title FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}
+     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_title,
     (SELECT e.corrected_thesis FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}
+     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
 ) corr ON TRUE
 """
@@ -1734,19 +1767,31 @@ _FEEDBACK_OF_SIGNAL_SQL = f"""(
         AND {_FEEDBACK_SAME_ORIGIN_SQL}))"""
 # Запись блока ОС (#130): оценка, причина или комментарий человека из блока «Обратная связь» карточки. «В дайджест»
 # и смена статуса пишутся тем же журналом, но не в этом блоке (решение владельца 03.11): по записям блока считают
-# фильтр «Наличие ОС», плашка «С обратной связью» и счётчик «Обратная связь: N».
+# фильтр «Наличие ОС», плашка «С обратной связью» и счётчик «Обратная связь: N». Отметка участника без прав
+# администратора (#188) запись блока и с одной правкой заголовка или сути либо «Дублем»: на карточку они не легли,
+# видно их только в блоке. Применённая правка без оценки, причины и комментария не блок: она уже на карточке.
+_NOT_APPLIED_PROPOSAL_SQL = (
+    "(NOT sfe.applied AND (btrim(COALESCE(sfe.corrected_title, '')) <> ''"
+    " OR btrim(COALESCE(sfe.corrected_thesis, '')) <> '' OR sfe.duplicate_of_signal_id IS NOT NULL))"
+)
 _FEEDBACK_IS_BLOCK_SQL = (
     "(sfe.event_type = 'comment_added'"
-    " AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"
+    " AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''"
+    f" OR {_NOT_APPLIED_PROPOSAL_SQL}))"
 )
 # Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
 # комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор: почта
-# учётки (другого имени у неё нет); у оценки автора материала коллеги (#131) учётки нет: его имя в Telegram.
+# учётки (другого имени у неё нет); у оценки автора материала коллеги (#131) учётки нет: его имя в Telegram. У
+# отметки участника без прав администратора (#188) её неприменённые правки и «Дубль»: proposed_title,
+# proposed_thesis, duplicate_of_signal_id; applied: применены ли явные действия отметки.
 _FEEDBACK_BLOCKS_SQL = f"""(
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
            'id', sfe.id, 'author', COALESCE(u.email, sfe.author), 'verdict', NULLIF(sfe.verdict, ''),
-           'reason', NULLIF(sfe.reason, ''),
-           'comment', NULLIF(sfe.comment, ''), 'created_at', sfe.created_at) ORDER BY sfe.created_at, sfe.id),
+           'reason', NULLIF(sfe.reason, ''), 'comment', NULLIF(sfe.comment, ''),
+           'proposed_title', CASE WHEN NOT sfe.applied THEN NULLIF(btrim(sfe.corrected_title), '') END,
+           'proposed_thesis', CASE WHEN NOT sfe.applied THEN NULLIF(btrim(sfe.corrected_thesis), '') END,
+           'duplicate_of_signal_id', CASE WHEN NOT sfe.applied THEN sfe.duplicate_of_signal_id END,
+           'applied', sfe.applied, 'created_at', sfe.created_at) ORDER BY sfe.created_at, sfe.id),
          '[]'::jsonb)
   FROM signal_feedback_events sfe
   LEFT JOIN users u ON u.id = sfe.user_id
@@ -2175,84 +2220,6 @@ def list_signal_agent_memory(
         return cur.fetchall()
 
 
-def list_signal_verdict_memory_balanced(*, limit_each: int = 60) -> list[dict]:
-    """Вердикты ОС для судьи: сильнейшие одобрения и сильнейшие отказы: поровну.
-
-    Общая выдача памяти идёт по весу (score DESC), а у отказов вес −80: как только
-    одобрений наберётся больше лимита, до судьи не дошёл бы ни один отказ: а это как раз
-    то, чего заказчик просит не приносить."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            (SELECT * FROM signal_agent_memory
-             WHERE memory_type = 'signal_verdict' AND status = 'active' AND score >= 0
-             ORDER BY score DESC, updated_at DESC LIMIT %s)
-            UNION ALL
-            (SELECT * FROM signal_agent_memory
-             WHERE memory_type = 'signal_verdict' AND status = 'active' AND score < 0
-             ORDER BY score ASC, updated_at DESC LIMIT %s)
-            """,
-            (limit_each, limit_each),
-        )
-        rows = cur.fetchall()
-    return sorted(rows, key=lambda row: (float(row.get("score") or 0), str(row.get("updated_at") or "")), reverse=True)
-
-
-def get_signal_brief(signal_id: int) -> dict | None:
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, title, title_ru, theme FROM signals WHERE id = %s", (int(signal_id),))
-        return cur.fetchone()
-
-
-def signal_memory_exists(*, signal_id: int, origin: str) -> bool:
-    """Есть ли у карточки активная память этого происхождения (по номеру карточки в фактах)."""
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM signal_agent_memory WHERE status = 'active'"
-            " AND facts_json->>'signal_id' = %s AND facts_json->>'origin' = %s)",
-            (str(int(signal_id)), origin),
-        ).fetchone()[0]
-
-
-def supersede_signal_feedback_memory(
-    *,
-    signal_id: int,
-    memory_types: tuple[str, ...],
-    origin: str | None = None,
-) -> list[dict]:
-    """Погасить активную память ОС по карточке (статус 'superseded', строки не удаляются).
-
-    Карточка узнаётся только по своему номеру: signal_id в фактах (строки с 28.09) или отзыв,
-    из которого строка выросла (строки до 28.09: у всех есть feedback_event_id). По заголовку
-    не сравниваем: у двух карточек он бывает одинаковым, и «Дубль» на одной гасил бы память
-    другой. `origin`: сузить до этого происхождения.
-    Возвращает погашенные строки."""
-    clauses = [
-        "status = 'active'",
-        "memory_type = ANY(%s)",
-        """(facts_json->>'signal_id' = %s
-            OR (facts_json->>'signal_id' IS NULL
-                AND (facts_json->>'feedback_event_id') IN
-                    (SELECT e.id::text FROM signal_feedback_events e WHERE e.signal_id = %s)))""",
-    ]
-    params: list = [list(memory_types), str(int(signal_id)), int(signal_id)]
-    if origin:
-        clauses.append("facts_json->>'origin' = %s")
-        params.append(origin)
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"UPDATE signal_agent_memory SET status = 'superseded', updated_at = now()"
-            f" WHERE {' AND '.join(clauses)} RETURNING id, memory_type, subject, facts_json",
-            params,
-        )
-        rows = cur.fetchall()
-        conn.commit()
-        return rows
-
-
 def unmerge_signal(signal_id: int) -> bool:
     """Снять пометку дубля (ошибочный «Дубль #ID»): карточка снова видна."""
     with get_connection() as conn:
@@ -2263,12 +2230,6 @@ def unmerge_signal(signal_id: int) -> bool:
         ).fetchone()
         conn.commit()
         return row is not None
-
-
-def get_signal_theme(signal_id: int) -> str | None:
-    with get_connection() as conn:
-        row = conn.execute("SELECT theme FROM signals WHERE id = %s", (signal_id,)).fetchone()
-        return str(row[0]) if row and row[0] else None
 
 
 def signal_issue_month_sql(alias: str = "s") -> str:
@@ -2320,16 +2281,6 @@ def signal_digest_refusal(signal_id: int) -> str | None:
     if row[0] == feed_window.OTBOR_REJECT:
         return "публикацию отклонил «Отбор»"
     return "«Отбор» не дал решения" if row[0] is None and row[1] else None
-
-
-def judge_learns_from(signal_id: int) -> bool:
-    """Учит ли отзыв о сигнале судью радара (#130): только отзыв о его находке (происхождение «радар») вне бизнес-
-    ленты. Иначе отзыв: блок ОС и только хранится (решение владельца 22.10: учить агентов будет сервис ОС):
-    «Не тот блок» в бизнес-ленте значит «это технология», а судья читает его как «это бизнес», и одобрение
-    бизнес-находки стало бы для него примером технологического сигнала. Сигнала нет: прежний путь."""
-    with get_connection() as conn:
-        row = conn.execute("SELECT origin, signal_category FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
-    return row is None or (row[0] == SIGNAL_ORIGIN_RADAR and row[1] != "business")
 
 
 def collected_url_keys_since(*, since: date | datetime) -> list[str]:

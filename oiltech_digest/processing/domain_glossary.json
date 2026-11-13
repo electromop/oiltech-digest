@@ -68,7 +68,8 @@
     },
     {
       "source_terms": ["managed pressure drilling", "mpd"],
-      "preferred_ru": "бурение с управляемым давлением"
+      "preferred_ru": "бурение с управляемым давлением",
+      "note": "Аббревиатуру MPD сохранять (замечание эксперта 13.09)."
     },
     {
       "source_terms": ["measurement while drilling", "mwd"],
@@ -208,7 +209,7 @@
     },
     {
       "source_terms": ["predictive maintenance"],
-      "preferred_ru": "предиктивное обслуживание"
+      "preferred_ru": "предиктивное техническое обслуживание"
     },
     {
       "source_terms": ["condition monitoring"],
@@ -262,6 +263,114 @@
       "preferred_ru": "металлорганические каркасы",
       "source_warn_patterns": ["\\bMOFs?\\b"],
       "note": "MOF (metal-organic frameworks) — металлорганические каркасы; сокращение MOF в заголовок и суть не переносить (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["within-stage adjustment"],
+      "preferred_ru": "корректировка параметров непосредственно в ходе стадии"
+    },
+    {
+      "source_terms": ["dynamic design optimization"],
+      "preferred_ru": "динамическая корректировка дизайна ГРП"
+    },
+    {
+      "source_terms": ["treatment execution"],
+      "preferred_ru": "выполнение обработки"
+    },
+    {
+      "source_terms": ["fleet execution"],
+      "preferred_ru": "управление исполнением операций флотом ГРП"
+    },
+    {
+      "source_terms": ["fracture outcomes"],
+      "preferred_ru": "результаты проведения ГРП",
+      "note": "Или «параметры проведения ГРП», по контексту (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["subsurface feedback"],
+      "preferred_ru": "обратная связь по фактическому отклику пласта"
+    },
+    {
+      "source_terms": ["autonomous pumping"],
+      "preferred_ru": "автономное управление закачкой"
+    },
+    {
+      "source_terms": ["closed feedback loop"],
+      "preferred_ru": "замкнутый контур обратной связи"
+    },
+    {
+      "source_terms": ["closed-loop fracturing"],
+      "preferred_ru": "ГРП с замкнутым контуром управления"
+    },
+    {
+      "source_terms": ["narrow operating margin"],
+      "preferred_ru": "узкое окно допустимых давлений"
+    },
+    {
+      "source_terms": ["drill floor control"],
+      "preferred_ru": "управление оборудованием буровой площадки",
+      "note": "Или «управление оборудованием бурового пола» (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["tripping"],
+      "preferred_ru": "спуско-подъёмные операции",
+      "note": "Сокращение СПО (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["downhole hydraulics"],
+      "preferred_ru": "внутрискважинная гидравлика"
+    },
+    {
+      "source_terms": ["automated well placement"],
+      "preferred_ru": "автоматизированное управление проводкой скважины",
+      "note": "Или «автоматизированное управление траекторией скважины» (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["closed-loop rig automation"],
+      "preferred_ru": "автоматизация буровой с замкнутым контуром управления"
+    },
+    {
+      "source_terms": ["well delivery efficiency"],
+      "preferred_ru": "эффективность строительства скважин"
+    },
+    {
+      "source_terms": ["integrated data systems"],
+      "preferred_ru": "интегрированные системы сбора и анализа данных"
+    },
+    {
+      "source_terms": ["ai-enabled monitoring"],
+      "preferred_ru": "мониторинг с применением ИИ"
+    },
+    {
+      "source_terms": ["automated pipe handling"],
+      "preferred_ru": "автоматизированные спуско-подъёмные операции",
+      "note": "Или «автоматизированные трубные операции» (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["walking capability"],
+      "preferred_ru": "возможность перемещения между скважинами без демонтажа"
+    },
+    {
+      "source_terms": ["walking island rig"],
+      "preferred_ru": "шагающая буровая для искусственных островов"
+    },
+    {
+      "source_terms": ["well control"],
+      "preferred_ru": "контроль скважины",
+      "forbidden_ru": ["управление скважиной"]
+    },
+    {
+      "source_terms": ["full rig automation"],
+      "preferred_ru": "комплексная автоматизация буровой"
+    },
+    {
+      "source_terms": ["closed-loop control"],
+      "preferred_ru": "управление с замкнутым контуром",
+      "note": "Или «замкнутый контур управления» (замечание эксперта 13.09)."
+    },
+    {
+      "source_terms": ["fully automated rig"],
+      "preferred_ru": "полностью автоматизированная буровая",
+      "note": "Не переводить как «автономная буровая» без отдельного подтверждения в тексте (замечание эксперта 13.09)."
     }
   ],
   "mixed_script_allow": ["PROНЕФТЬ", "PROНефть", "Farш", "Dostaевский", "Dостаевский"],

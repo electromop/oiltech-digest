@@ -103,9 +103,9 @@ describe("бизнес-лента", () => {
   });
 
 
-  it("блок ОС в ленте: оценка, причина и комментарий; блок добавляется в список на карточке (#130)", async () => {
+  it("форма ОС в ленте та же, что на радаре; сохранённый блок добавляется в список на карточке (#130, #188)", async () => {
     vi.mocked(createSignalFeedback).mockResolvedValue({
-      ok: true, event_id: 7, memory_ids: [], memories: 0,
+      ok: true, event_id: 7, applied: false,
       block: { id: 7, author: "analyst@example.test", verdict: "approved", reason: "Меняет спрос на бурение",
                comment: "Взять в выпуск", created_at: "2026-10-23T09:00:00Z" },
     });
@@ -114,15 +114,15 @@ describe("бизнес-лента", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
 
-    // Блок ОС, оценка, причина, комментарий: правок карточки и «дубля» в ленте нет.
-    expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
-    expect(within(card).queryByLabelText("Рекомендуемый заголовок")).not.toBeInTheDocument();
+    // Форма та же, что на радаре (#188): правки карточки и «Дубль» есть и в ленте.
+    expect(within(card).getByLabelText("ID дубля")).toBeInTheDocument();
+    expect(within(card).getByLabelText("Рекомендуемый заголовок")).toBeInTheDocument();
     const verdicts = within(within(card).getByLabelText("Оценка сигнала")).getAllByRole("option").map((item) => item.textContent);
     expect(verdicts).toContain("Не тот блок — технологический сигнал, а не бизнес");
-    expect(verdicts.some((label) => label?.startsWith("Дубль"))).toBe(false);
+    expect(verdicts.some((label) => label?.startsWith("Дубль"))).toBe(true);
     fireEvent.change(within(card).getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
     fireEvent.change(within(card).getByLabelText("Обоснование оценки"), { target: { value: "Меняет спрос на бурение" } });
-    fireEvent.change(within(card).getByLabelText("Комментарий"), { target: { value: "Взять в выпуск" } });
+    fireEvent.change(within(card).getByLabelText("Рекомендации AI-агенту"), { target: { value: "Взять в выпуск" } });
     fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
 
     await waitFor(() => expect(createSignalFeedback).toHaveBeenCalledWith(expect.objectContaining({
@@ -134,17 +134,18 @@ describe("бизнес-лента", () => {
     expect(within(blocks).getByText("Полезный сигнал")).toBeInTheDocument();
   });
 
-  it("у находки радара в ленте отзыв — тоже блок ОС: судью радара он не учит (#130)", async () => {
+  it("у находки радара в ленте та же полная форма (#188)", async () => {
     const radarDeal: Signal = { ...contract, id: 9011, signal_key: "zena", origin: "radar",
                                 title_ru: "ZenaTech купила Velocity Geomatics", evidence: [publication(8, {})] };
     serve([radarDeal]);
-    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0 });
+    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, applied: true });
     renderFeed();
     const card = await cardOf("ZenaTech купила Velocity Geomatics");
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
 
-    expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
+    expect(within(card).getByLabelText("ID дубля")).toBeInTheDocument();
+    expect(within(card).getByLabelText("Рекомендуемая формулировка сути")).toBeInTheDocument();
     const verdicts = within(within(card).getByLabelText("Оценка сигнала")).getAllByRole("option").map((item) => item.textContent);
     expect(verdicts).toContain("Не тот блок — технологический сигнал, а не бизнес");
   });

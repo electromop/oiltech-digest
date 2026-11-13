@@ -216,14 +216,15 @@ def test_issue_of_only_articles_without_date_and_image(issue):
 #  5. Карточки радара: правки ОС, дубли, оценка модели, месяц
 # ---------------------------------------------------------------------------
 
-def test_colleague_corrections_of_a_radar_card_reach_the_issue(issue):
-    """Правки заголовка и сути из ОС коллег накладываются при чтении (#77): и в выпуске."""
-    analyst, colleague, s = issue["analyst"], issue["colleague"], issue["s"]
+def test_admin_corrections_of_a_radar_card_reach_the_issue_and_a_participant_one_does_not(issue):
+    """Правки заголовка и сути накладываются при чтении (#77), и в выпуске. Сразу применяет их только администратор
+    (#188): правка участника без прав администратора лежит в его блоке ОС и текст карточки не перекрывает."""
+    analyst, colleague, admin, s = issue["analyst"], issue["colleague"], issue["admin"], issue["s"]
     analyst.mark_signal(s["sep"])
 
     for person, title, thesis in (
+        (admin, "Правка администратора", "Суть администратора."),
         (colleague, "Правленый заголовок коллеги", "Правленая суть коллеги."),
-        (analyst, "Последняя правка заголовка", "Последняя правка сути."),
     ):
         response = person.post("/api/signals/feedback", json={
             "signal_id": s["sep"], "corrected_title": title, "corrected_thesis": thesis,
@@ -231,17 +232,15 @@ def test_colleague_corrections_of_a_radar_card_reach_the_issue(issue):
         assert response.status_code == 200, response.text
 
     [item] = analyst.issue_items()
-    # Последнее слово: у последней правки, чья бы она ни была.
-    assert item["title"] == "Последняя правка заголовка"
-    assert item["summary"] == "Последняя правка сути."
+    assert (item["title"], item["summary"]) == ("Правка администратора", "Суть администратора.")
 
 
 def test_human_duplicate_verdict_does_not_take_a_chosen_card_out_of_the_issue(issue):
-    analyst, colleague, s = issue["analyst"], issue["colleague"], issue["s"]
+    analyst, admin, s = issue["analyst"], issue["admin"], issue["s"]
     main = add_signal("main", first_seen=msk(2026, 9, 14, 0, 20), evidence_published=utc(2026, 9, 13, 9))
     analyst.mark_signal(s["sep"])
 
-    response = colleague.post("/api/signals/feedback", json={
+    response = admin.post("/api/signals/feedback", json={
         "signal_id": s["sep"], "verdict": "merge_duplicate", "duplicate_of_signal_id": main,
     })
     assert response.status_code == 200, response.text

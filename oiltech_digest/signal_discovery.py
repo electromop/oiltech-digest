@@ -27,12 +27,7 @@ from oiltech_digest.ingestion.normalize import url_key as article_url_key
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.signal_card_pack import TEXT_LIMIT
-from oiltech_digest.signal_feedback import (
-    apply_feedback_glossary,
-    known_titles_block,
-    memory_snapshot_rows,
-    use_memory_snapshot,
-)
+from oiltech_digest.signal_feedback import known_titles_block
 
 logger = logging.getLogger(__name__)
 
@@ -454,21 +449,19 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         except Exception:  # noqa: BLE001 - без тегов разведка беднее, но работает
             tags = []
         snapshot["tags"] = [{key: tag.get(key) for key in _TAG_SNAPSHOT_FIELDS} for tag in tags]
-        # Память ОС на воркере нужна глоссарию: русский заголовок и суть докачанной страницы (_enforce_glossary).
-        snapshot["memory"] = memory_snapshot_rows()
+        # Память ОС в прогон радара не едет (#188): словарь замен из «Рекомендаций AI-агенту» снят, заголовки страниц
+        # он больше не правит. Пустой снимок только для сборки NL до #188: без поля она читала бы память из базы,
+        # которой на NL нет, а с пустым ничего не заменяет; новая сборка поле не читает. Снять со сменой контракта.
+        snapshot["memory"] = {}
     return _jsonable(snapshot)
 
 
 @contextmanager
 def use_discovery_snapshot(snapshot: dict[str, Any]) -> Iterator[None]:
-    """Включить теги и память ОС из снимка, если они в нём есть."""
+    """Включить теги из снимка, если они в нём есть."""
     tags_token = _TAGS_SNAPSHOT.set(snapshot["tags"]) if snapshot.get("tags") is not None else None
     try:
-        if snapshot.get("memory") is not None:
-            with use_memory_snapshot(snapshot["memory"]):
-                yield
-        else:
-            yield
+        yield
     finally:
         if tags_token is not None:
             _TAGS_SNAPSHOT.reset(tags_token)
@@ -1430,7 +1423,7 @@ def _topic_web_evidence(
     # браузер; порядок цикла владельца 04.11), до дедупа прогона.
     events, already = _split_collected(research.pop("evidence"), collected)
     research["already_collected"] = already
-    found, fulltext = _enrich_web_evidence_with_full_text(events, topic_name, heartbeat=heartbeat)
+    found, fulltext = _enrich_web_evidence_with_full_text(events, heartbeat=heartbeat)
     verified, unverified = signal_research.verify_research_evidence(found)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
     _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
@@ -1630,7 +1623,6 @@ def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None 
 
 def _enrich_web_evidence_with_full_text(
     evidence: list[dict[str, Any]],
-    topic: str,
     *,
     heartbeat: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1682,13 +1674,13 @@ def _enrich_web_evidence_with_full_text(
         enriched.append({
             **item,
             "title": title,
-            "title_ru": _enforce_glossary(title, context, topic),
+            "title_ru": enforce_glossary_text(title, context),
             # Строкой ISO, как все даты снимка: объект datetime ронял отправку итога
             # воркера ядру (проверка 4712, 21.09): тот же класс, что сбор 18.09.
             "published_at": _iso(fetched.get("published_at")) or item.get("published_at"),
             "evidence_type": _evidence_type(f"{title} {fact}"),
             "extracted_fact": fact,
-            "summary_ru": _enforce_glossary(fact, context, topic),
+            "summary_ru": enforce_glossary_text(fact, context),
             "raw_payload": {
                 **(item.get("raw_payload") or {}),
                 "full_text_fetched": True,
@@ -1748,10 +1740,6 @@ def _normalize_event_date(value: Any) -> str | None:
     if parsed > datetime.now(RADAR_TZ).date() + timedelta(days=1):
         return None
     return parsed.isoformat()
-
-
-def _enforce_glossary(text: str, context: dict[str, Any], topic: str | None = None) -> str:
-    return apply_feedback_glossary(enforce_glossary_text(text, context), topic)
 
 
 def _signal_key(evidence: list[dict[str, Any]]) -> str:

@@ -169,26 +169,36 @@ export function getSignalSearchHealth() {
   return apiFetch<{ search_health: SignalSearchHealth | null }>("/api/signals/search-health");
 }
 
+// Итог отметки ОС (#188): одна форма у любой карточки, один путь записи. applied: явные действия применены сразу
+// (отметка администратора); у остальных отметка только записана и видна блоком.
+export type SignalFeedbackResult = {
+  ok: boolean;
+  event_id: number;
+  applied: boolean;
+  // Сохранённый блок ОС (#130): экран добавляет его в список на карточке, не перечитывая витрину. Применённая правка без
+  // оценки, причины и комментария не блок: null, счётчик ОС не растёт (03.11).
+  block?: SignalFeedbackBlock | null;
+  // «Не тот блок» (#132): новая категория сигнала: он уже в другой витрине, баллы пересчитываются; не сменилась: почему.
+  recategorized?: string;
+  recategorize_refused?: string;
+  // «Дубль»: склеена ли карточка с главной; не склеена: почему (выбрана «в дайджест», главной нет).
+  merged?: boolean;
+  merge_refused?: string;
+  // «Не релевантно»: убрана ли карточка в «Убрано людьми»; не убрана: почему.
+  removed?: boolean;
+  remove_refused?: string;
+};
+
 export function createSignalFeedback(payload: SignalFeedbackPayload) {
-  return apiFetch<{
-    ok: boolean;
-    event_id: number;
-    memory_ids: number[];
-    memories: number;
-    // Сколько прежних вердиктов по карточке погашено и скрыта ли она как дубль («Дубль #ID»).
-    superseded?: number;
-    merged?: boolean;
-    // «Дубль» не скрыл карточку: она выбрана в дайджест или главной с таким номером нет.
-    merge_skipped?: boolean;
-    // Сохранённый блок ОС (#130): экран добавляет его в список на карточке, не перечитывая витрину. Запись без оценки,
-    // причины и комментария (только правка заголовка, сути или «дубль») не блок: null, счётчик ОС не растёт (03.11).
-    block?: SignalFeedbackBlock | null;
-    // «Не тот блок» (#132): новая категория сигнала: он уже в другой витрине, баллы пересчитываются.
-    recategorized?: string;
-  }>("/api/signals/feedback", {
+  return apiFetch<SignalFeedbackResult>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+// «Вернуть» в «Убрано людьми» (#188): прежнее решение «Отбора»; только админу.
+export function restoreSignal(signalId: number) {
+  return apiFetch<{ ok: boolean }>(`/api/signals/${signalId}/restore`, { method: "POST" });
 }
 
 // Правка полей материала выпуска (#162, ADR 0006): с экрана «Дайджест» и с карточки сигнала. Поля живут на сигнале

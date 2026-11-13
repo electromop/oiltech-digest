@@ -17,6 +17,8 @@ type ToastWriter = (text: string, tone?: "default" | "error") => void;
 type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
+  // Материал выпуска правит только администратор (#188): у участника «Править» нет.
+  isAdmin?: boolean;
 };
 
 const DIGEST_PREVIEW_LIMIT = 500;
@@ -28,7 +30,7 @@ const NO_ARTICLES: Article[] = [];
 // Месячный дайджест (пересмотр 23-24.10): «Сборка выпуска», всегда выпуск, который собирается сейчас: слева состав,
 // справа тот же выпуск в PDF и действия с ним. Прошлые выпуски: только во вкладке «Архив выпусков» и только на
 // просмотр (решение владельца 24.10). Оформление выпуска с экрана убрано: шапка и подвал: из сохранённого на сервере.
-export function DigestPage({ onUnauthorized, showToast }: Props) {
+export function DigestPage({ onUnauthorized, showToast, isAdmin = false }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -491,6 +493,7 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
             onRemoveSignal={(signalId) => void removeSignalFromDigest(signalId)}
             onAdd={addToIssue}
             materials={materials}
+            canEdit={isAdmin}
             editing={editing}
             onEdit={setEditing}
             onSaveMaterial={(material, patch) => void saveMaterial(material, patch)}

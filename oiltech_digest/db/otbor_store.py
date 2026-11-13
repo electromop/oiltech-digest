@@ -36,8 +36,9 @@ FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено: публикацию выбрали «в дайджест», а повтор «Отбора» решения людей не
 # перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»); не изменено: решение человека (#132).
 DECIDED, KEPT_IN_DIGEST, KEPT_BY_HUMAN = "decided", "kept_in_digest", "kept_by_human"
-# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего.
-RETURNED, NOT_REJECTED = "returned", "not_rejected"
+# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего; убрано людьми
+# (#188): его возвращает «Вернуть» раздела «Убрано людьми» прежним решением (removed_by_people.restore).
+RETURNED, NOT_REJECTED, REMOVED_BY_PEOPLE = "returned", "not_rejected", "removed_by_people"
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение: в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
 
@@ -384,11 +385,13 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
 
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by FROM signals"
-                    " WHERE id = %s FOR UPDATE", (int(signal_id),))
+        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by, human_removal"
+                    " FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
         row = cur.fetchone()
         if row is None:
             return None
+        if row["human_removal"] is not None:
+            return REMOVED_BY_PEOPLE
         if row["otbor_decision"] != OTBOR_REJECT:
             return NOT_REJECTED
         disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
@@ -414,10 +417,15 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
         )
         refresh_platform_decisions([row["id"]], conn=conn)
         conn.commit()
-    if row["origin"] == SIGNAL_ORIGIN_FEED and row["origin_article_id"]:
-        # Принятая статья: снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
-        feed_signals.sync_quietly([int(row["origin_article_id"])])
+    # Принятая статья: снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
+    sync_feed_article(row)
     return RETURNED
+
+
+def sync_feed_article(row: dict[str, Any]) -> None:
+    """Сигнал ленты: решение его статьи сменилось, мост «лента → сигнал» сверяет её публикацию с ним."""
+    if row["origin"] == SIGNAL_ORIGIN_FEED and row["origin_article_id"]:
+        feed_signals.sync_quietly([int(row["origin_article_id"])])
 
 
 def _write_failure(cur, row: dict[str, Any], kind: str, reason: str, log: list[dict[str, str]]) -> None:

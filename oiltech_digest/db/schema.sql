@@ -1294,3 +1294,11 @@ DO $$ BEGIN
     CHECK ((article_id IS NULL) <> (signal_id IS NULL));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Контур ОС (#188): одна форма ОС у любой карточки обеих витрин. applied: явные действия отметки применены сразу
+-- (отметка администратора, правка материала с экранов «Дайджест» и «Материалы»): её правки заголовка и сути лежат поверх
+-- текста модели. FALSE: отметка участника без прав администратора: записана и видна блоком, карточку не меняет.
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS applied BOOLEAN NOT NULL DEFAULT TRUE;
+-- «Убрано людьми» (#188): администратор убрал карточку оценкой «Не релевантно». Прежнее решение «Отбора» (его
+-- возвращает «вернуть»), кто, когда и почему; NULL: людьми не убрана.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS human_removal JSONB;

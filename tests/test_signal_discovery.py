@@ -6,8 +6,7 @@ from oiltech_digest import signal_discovery
 
 
 @pytest.fixture(autouse=True)
-def no_signal_feedback_memory(monkeypatch):
-    monkeypatch.setattr(signal_discovery, "apply_feedback_glossary", lambda text, topic=None: text)
+def topics_from_the_table(monkeypatch):
     # Темы: из таблицы, которую тесты подменяют; фильтр разобранного: пустой.
     # Иначе разведка пошла бы в настоящую локальную базу за тегами и адресами.
     monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RADAR_TOPIC_SOURCE", "table")

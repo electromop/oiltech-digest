@@ -118,7 +118,7 @@ function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
           comment: payload.comment || null, created_at: "2026-11-03T10:00:00Z" }
       : null;
     if (card && block) card.feedback_count = Number(card.feedback_count || 0) + 1;
-    return { ok: true, event_id: 1, memory_ids: [], memories: 0, block };
+    return { ok: true, event_id: 1, applied: true, block };
   });
 }
 
@@ -382,7 +382,7 @@ describe("SignalRadarPage", () => {
       const callsBefore = vi.mocked(listSignals).mock.calls.length;
 
       await act(async () => {
-        finishSave({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+        finishSave({ ok: true, event_id: 9, applied: true, merged: true });
       });
 
       await waitFor(() => expect(vi.mocked(listSignals).mock.calls.length).toBeGreaterThan(callsBefore));
@@ -400,7 +400,7 @@ describe("SignalRadarPage", () => {
         signal_key: `k${1000 + index}`,
         title_ru: `Сигнал номер ${index + 1}`,
       })));
-      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, applied: true, merged: true });
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" }));
       await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`);
@@ -696,7 +696,7 @@ describe("SignalRadarPage", () => {
         "Рекомендуемая формулировка сути",
         "Рекомендации AI-агенту",
       ]) {
-        expect(screen.getByText(label).closest("label")).toHaveClass("field");
+        expect(screen.getByText(label).closest(".field")).toBeInTheDocument();
       }
       const buttons = screen.getByRole("button", { name: "Сохранить" }).parentElement!;
       expect(buttons).toHaveClass("signalFeedbackButtons");
@@ -1106,7 +1106,7 @@ describe("качество радара на экране (эксперт зак
       }],
     }], []);
     vi.mocked(createSignalFeedback).mockResolvedValue({
-      ok: true, event_id: 2, memory_ids: [], memories: 0,
+      ok: true, event_id: 2, applied: false,
       block: { id: 2, author: "colleague@example.test", verdict: null, reason: null, comment: "Уже было в сентябре",
                created_at: "2026-10-23T09:00:00Z" },
     });
@@ -1134,23 +1134,23 @@ describe("качество радара на экране (эксперт зак
     expect([lastListQuery().hidden, lastListQuery().section]).toEqual([undefined, undefined]);
   });
 
-  // Статья сбора (#130) и материал коллеги (#131) на радаре: отзыв о них судью не учит (repository.judge_learns_from).
-  it.each(["feed", "material"])("у сигнала происхождения %s на радаре отзыв — блок ОС: без правок карточки и «дубля»",
+  // Статья сбора (#130) и материал коллеги (#131) на радаре: та же полная форма, что у находки поиска (#188).
+  it.each(["feed", "material"])("у сигнала происхождения %s на радаре та же полная форма с правками и «Дублем»",
     async (origin) => {
     serveWithHidden([{ ...scored, origin, signal_category: "technology", otbor_decision: "accept" }], []);
     const toasts: string[] = [];
-    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 3, memory_ids: [], memories: 0 });
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} />);
+    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 3, applied: true });
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} isAdmin />);
     const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
 
-    expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
-    expect(within(card).queryByLabelText("Рекомендуемый заголовок")).not.toBeInTheDocument();
-    fireEvent.change(within(card).getByLabelText("Комментарий"), { target: { value: "Уже было" } });
+    expect(within(card).getByLabelText("ID дубля")).toBeInTheDocument();
+    expect(within(card).getByLabelText("Рекомендуемый заголовок")).toBeInTheDocument();
+    fireEvent.change(within(card).getByLabelText("Рекомендации AI-агенту"), { target: { value: "Уже было" } });
     fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
 
-    await waitFor(() => expect(toasts).toContain("Отзыв сохранён"));
+    await waitFor(() => expect(toasts).toContain("Отметка сохранена"));
   });
 
   // Варианты формы возврата берутся из справочника «Отбора» с сервера: экран своих кодов и подписей не держит.
@@ -1273,7 +1273,7 @@ describe("качество радара на экране (эксперт зак
   it("«не тот блок» у сигнала после «Отбора» переносит карточку в другую витрину (#132)", async () => {
     serveWithHidden([{ ...scored, origin: "feed", otbor_decision: "accept" }], []);
     vi.mocked(createSignalFeedback).mockResolvedValue({
-      ok: true, event_id: 4, memory_ids: [], memories: 0, recategorized: "business" });
+      ok: true, event_id: 4, applied: true, recategorized: "business" });
     const toasts: string[] = [];
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} />);
     const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
@@ -1283,7 +1283,7 @@ describe("качество радара на экране (эксперт зак
     fireEvent.change(within(card).getByLabelText("Оценка сигнала"), { target: { value: "wrong_block" } });
     fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
 
-    await waitFor(() => expect(toasts).toContain("Отзыв сохранён: карточка перешла в бизнес-ленту, баллы пересчитываются"));
+    await waitFor(() => expect(toasts).toContain("Отметка сохранена: карточка перешла в бизнес-ленту, баллы пересчитываются"));
   });
 });
 
@@ -1388,7 +1388,7 @@ describe("«Гипотеза для Компании» на карточке (#1
     return card;
   }
 
-  it("стоит сразу после «Применения», показывает, кто и когда поставил, и правится там же", async () => {
+  it("стоит сразу после «Применения», показывает, кто и когда поставил, и администратор правит её там же", async () => {
     vi.mocked(editIssueMaterial).mockResolvedValue({ ok: true, author: "editor@example.test" });
     serve([
       { ...baseSignal, id: 801, signal_key: "k801", title_ru: "Буровая с гипотезой", selected_for_digest: true,
@@ -1400,7 +1400,7 @@ describe("«Гипотеза для Компании» на карточке (#1
       { ...baseSignal, id: 804, signal_key: "k804", title_ru: "Закрытый месяц", selected_for_digest: true,
         digest_locked: true, hypothesis: "Изучить опыт закрытого месяца." },
     ]);
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin />);
 
     const card = await openCard("Буровая с гипотезой");
     const facts = card.querySelector(".signalRadarFacts") as HTMLElement;
@@ -1425,5 +1425,20 @@ describe("«Гипотеза для Компании» на карточке (#1
     const locked = await openCard("Закрытый месяц");
     expect(within(locked).getByText("Изучить опыт закрытого месяца.")).toBeInTheDocument();
     expect(within(locked).queryByRole("button", { name: /гипотезу/ })).not.toBeInTheDocument();
+  });
+
+  it("у участника без прав администратора гипотеза видна, а правки нет (#188)", async () => {
+    serve([
+      { ...baseSignal, id: 811, signal_key: "k811", title_ru: "Буровая с гипотезой", selected_for_digest: true,
+        hypothesis: "Оценить применение буровой на месторождениях Компании." },
+      { ...baseSignal, id: 812, signal_key: "k812", title_ru: "Выбранная без гипотезы", selected_for_digest: true },
+    ]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    const card = await openCard("Буровая с гипотезой");
+    expect(within(card).getByText("Оценить применение буровой на месторождениях Компании.")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Править гипотезу" })).not.toBeInTheDocument();
+    const empty = await openCard("Выбранная без гипотезы");
+    expect(within(empty).queryByRole("button", { name: "Написать гипотезу" })).not.toBeInTheDocument();
   });
 });

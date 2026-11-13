@@ -156,6 +156,9 @@ export type Signal = {
   otbor_failure_reason?: string | null;
   // Короткая причина публикации в разделе отклонённого «кто убрал → причина» (только админу).
   section_reason?: string | null;
+  // «Убрано людьми» (#188): администратор убрал карточку оценкой «Не релевантно»; кто, когда и почему. «Вернуть»
+  // восстанавливает прежнее решение «Отбора».
+  human_removal?: { author?: string | null; reason?: string | null; at?: string | null } | null;
   // Второй вызов «Карточки» (#132): ступень балла (её подпись: score_label), баллы «пересчитываются» после
   // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
   score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
@@ -165,7 +168,7 @@ export type Signal = {
   scores_recipe?: Record<string, unknown> | null;
   otbor_returns?: number;
   // Блоки ОС: каждый человек добавляет свой (оценка, причина, комментарий), чужие не перезаписываются;
-  // на отбор и показ они не влияют.
+  // на отбор и показ они не влияют. Явные действия применяет только отметка администратора (#188).
   feedback_blocks?: SignalFeedbackBlock[];
   evidence?: SignalEvidence[];
   // Поля материала выпуска на сигнале (#162, ADR 0006): «Гипотеза для Компании» (кто поставил: card_set_by.hypothesis,
@@ -192,6 +195,12 @@ export type SignalFeedbackBlock = {
   reason: string | null;
   comment: string | null;
   created_at: string | null;
+  // Отметка участника без прав администратора (#188): её правки и «Дубль» на карточку не легли, видно их только в
+  // блоке. applied: явные действия отметки применены сразу (отметка администратора).
+  proposed_title?: string | null;
+  proposed_thesis?: string | null;
+  duplicate_of_signal_id?: number | null;
+  applied?: boolean;
 };
 
 export type SignalScoreItem = {

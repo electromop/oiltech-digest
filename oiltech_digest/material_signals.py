@@ -254,9 +254,12 @@ def convert_accumulated(*, apply: bool, silent: bool = False) -> dict[str, Any]:
 # --- Итог «Отбора» автору (бот на NL) ------------------------------------------------------------
 
 # Итог сигнала материала ключом: принят и куда, отклонён и почему, решения нет (ответ не по правилам; технический
-# сбой, только когда попытки кончились или срок шага вышел: до того «Отбор» ещё повторит).
+# сбой, только когда попытки кончились или срок шага вышел: до того «Отбор» ещё повторит). Уборка людьми (#188) не итог
+# «Отбора»: пока карточка в «Убрано людьми», итога нет, и автору ничего не уходит; «Вернуть» возвращает прежний итог,
+# уже доставленный автору.
 _OUTCOME_SQL = f"""
 CASE
+  WHEN s.human_removal IS NOT NULL THEN NULL
   WHEN s.otbor_decision = '{OTBOR_ACCEPT}' THEN 'accept:' || COALESCE(s.signal_category, '')
   WHEN s.otbor_decision = '{OTBOR_REJECT}' THEN 'reject:' || COALESCE(s.reject_reason, '')
   WHEN s.otbor_failure = '{otbor_store.FAILURE_INVALID}' THEN 'failed:{otbor_store.FAILURE_INVALID}'

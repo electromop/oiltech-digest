@@ -4,6 +4,8 @@ import type { Signal } from "../../api/types";
 type Props = {
   signal: Signal;
   saving: boolean;
+  // Правит гипотезу только администратор (#188): у участника она видна без правки.
+  editable: boolean;
   onSave: (text: string) => void;
 };
 
@@ -20,8 +22,8 @@ export function hypothesisAuthorship(setBy: string | null | undefined, author: s
 
 // «Гипотеза для Компании» на карточке сигнала, сразу после «Применения» (#162): та же, что в выпуске, с правкой. Блок
 // есть у сигнала с гипотезой и у отмеченного «в дайджест» (агент пишет черновик только им). В закрытом месяце правки
-// нет: выпуск того месяца только на просмотр (сервер отвечает 409).
-export function SignalHypothesis({ signal, saving, onSave }: Props) {
+// нет: выпуск того месяца только на просмотр (сервер отвечает 409); у участника без прав администратора тоже (#188).
+export function SignalHypothesis({ signal, saving, editable, onSave }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const text = signal.hypothesis ?? "";
@@ -62,7 +64,7 @@ export function SignalHypothesis({ signal, saving, onSave }: Props) {
       ) : (
         <>
           <p>{text || "Гипотезы пока нет."}</p>
-          {locked ? null : (
+          {locked || !editable ? null : (
             <button
               type="button"
               className="ghostButton compactButton"
