@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from oiltech_digest import contract
-from oiltech_digest.db import repository
+from oiltech_digest import contract, expert_rules
+from oiltech_digest.db import expert_rules_store, repository
 from oiltech_digest.processing import fulltext_recompute
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
@@ -56,6 +56,8 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         "limit": limit,
         "article_ids": article_ids,
         "articles": [_jsonable_dict(article) for article in articles],
+        # Правила эксперта «Сути и перевода» (#190): суть и заголовок статьи ленты, как у сигналов.
+        "expert_rules": expert_rules_store.payload_block("summary"),
     }
     if payload.get("only"):
         worker_payload["only"] = sorted(stages)
@@ -117,11 +119,13 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     """
     stages = stages_to_write(payload.get("only"))  # граница: битая пометка: до любого вызова модели
     client = make_client(bool(payload.get("offline", False)))
+    rules = payload.get("expert_rules")
     result: dict[str, Any] = {
         "external_ai": True,
         "kind": "process_articles",
         "stats": {"processed": 0, "summary": 0, "translated": 0, "errors": 0},
         "articles": [],
+        "expert_rules_version": expert_rules.version(rules),
     }
     # Пакет планировщика, ни списка статей, ни пометки only (#53): только недостающие стадии.
     # Статья без перевода получала бы новую суть на каждом проходе. Явный список (перекачка
@@ -148,6 +152,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         todo = _stages_left(article, stages, missing_only=scheduler_batch)
+        article = {**article, "expert_rules": rules}
         try:
             if "summary" in todo:
                 summary_resp = summarize_article(article, client)
@@ -189,16 +194,24 @@ def build_translate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "kind": "translate_titles",
         "article_ids": article_ids,
         "articles": [_jsonable_dict(article) for article in articles],
+        "expert_rules": expert_rules_store.payload_block("summary"),  # правила шага «заголовок» (#190)
     }
+
+
+def _rules_recipe(result: dict[str, Any]) -> dict[str, Any]:
+    """Версия набора правил эксперта «Сути и перевода» (#190): у статьи рецепта нет, версия в записи расхода."""
+    return {"expert_rules_version": expert_rules_store.known_version("summary", result.get("expert_rules_version", 0))}
 
 
 def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     client = make_client(bool(payload.get("offline", False)))
+    rules = payload.get("expert_rules")
     result: dict[str, Any] = {
         "translate_titles": True,
         "kind": "translate_titles",
         "stats": {"processed": 0, "translated": 0, "errors": 0},
         "articles": [],
+        "expert_rules_version": expert_rules.version(rules),
     }
     for article in payload.get("articles") or []:
         if heartbeat is not None:
@@ -218,7 +231,7 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., 
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         try:
-            title_ru, resp = title_ru_for_article(article, client)
+            title_ru, resp = title_ru_for_article({**article, "expert_rules": rules}, client)
             if title_ru is not None:
                 if resp is not None:
                     item["translation"] = _response_payload(resp, {"title_ru": title_ru})
@@ -276,7 +289,7 @@ def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None)
         if translation and translation.get("title_ru"):
             repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
             if translation.get("provider") != "offline" or translation.get("model"):
-                _insert_run(article_id, "translation", translation, job_id=job_id)
+                _insert_run(article_id, "translation", translation, job_id=job_id, recipe=_rules_recipe(result))
             stats["translation"] += 1
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
@@ -342,6 +355,7 @@ def apply_process_result(
     write = stages_to_write(only)
     stats = {"articles": 0, "summary": 0, "translation": 0, "errors": 0}
     contexts = _glossary_contexts(result)
+    recipe = _rules_recipe(result)
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
@@ -354,7 +368,7 @@ def apply_process_result(
                 stats[stage] += 1
             # Перевод русского заголовка, копия без модели: такой вызов не оплачен.
             if stage != "translation" or payload.get("provider") != "offline" or payload.get("model"):
-                _insert_run(article_id, stage, payload, job_id=job_id)
+                _insert_run(article_id, stage, payload, job_id=job_id, recipe=recipe)
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
     return stats
@@ -372,9 +386,11 @@ def _response_payload(response: AIResponse, data: dict[str, Any]) -> dict[str, A
     }
 
 
-def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id: int | None = None) -> None:
+def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id: int | None = None,
+                recipe: dict[str, Any] | None = None) -> None:
     repository.insert_ai_run(
         {
+            "recipe": recipe,
             "job_id": job_id,
             "article_id": article_id,
             "stage": stage,
@@ -423,7 +439,9 @@ def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "a": _compact_article_for_reprint(left),
             "b": _compact_article_for_reprint(right),
         })
-    return {"kind": "reprint_review", "pairs": packed, "dry_run": bool(payload.get("dry_run"))}
+    # Правила эксперта «Дедупа» (#190): судья перепечаток отвечает на тот же вопрос «одно ли событие».
+    return {"kind": "reprint_review", "pairs": packed, "dry_run": bool(payload.get("dry_run")),
+            "expert_rules": expert_rules_store.payload_block("dedup")}
 
 
 def _compact_article_for_reprint(article: dict[str, Any]) -> dict[str, Any]:
@@ -446,10 +464,12 @@ def process_reprint_review_payload(payload: dict[str, Any],
 
     configured_model()  # без модели: сбой задачи с причиной, а не «разные события» у каждой пары
     client = make_client()
+    rules = payload.get("expert_rules")
     result: dict[str, Any] = {
         "reprint_review": True,
         "kind": "reprint_review",
         "dry_run": bool(payload.get("dry_run")),
+        "expert_rules_version": expert_rules.version(rules),
         "verdicts": [],
     }
     verdicts: list[dict[str, Any]] = result["verdicts"]
@@ -462,7 +482,7 @@ def process_reprint_review_payload(payload: dict[str, Any],
                 break
         left, right = pair["a"], pair["b"]
         try:
-            response = judge_pair(left, right, client)
+            response = judge_pair(left, right, client, rules)
             verdicts.append({
                 "a_id": left["id"], "b_id": right["id"], "overlap": pair.get("overlap"),
                 "same_event": bool(response.data.get("same_event")),
@@ -495,7 +515,8 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
         # показа заказчику перед тем, как что-то схлопывать. Расход тоже, как у радара
         # (signal_discovery.apply_discovery): токены остаются в итоге задачи.
         return {"applied": 0, "dry_run": True}
-    repository.record_reprint_usage(job_id, result.get("verdicts") or [])
+    repository.record_reprint_usage(job_id, result.get("verdicts") or [], recipe={
+        "expert_rules_version": expert_rules_store.known_version("dedup", result.get("expert_rules_version", 0))})
 
     applied = 0
     skipped = 0

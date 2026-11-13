@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Callable
 
-from oiltech_digest import config, contract
-from oiltech_digest.db import otbor_inputs, otbor_shadow_store, otbor_store, repository
+from oiltech_digest import config, contract, expert_rules
+from oiltech_digest.db import expert_rules_store, otbor_inputs, otbor_shadow_store, otbor_store, repository
 from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
@@ -34,6 +34,8 @@ from oiltech_digest.signal_card import CHARS_PER_TOKEN
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = otbor_store.KIND
+# Агент в правилах эксперта (#190, expert_rules.AGENTS).
+AGENT = "otbor"
 # Версия инструкции (и таблицы конфликтов, otbor_answer), в рецепте решения: другая инструкция: другие решения.
 PROMPT_VERSION = "2026-10-26.2"
 _OUTPUT_TOKENS = 600
@@ -123,10 +125,10 @@ def configured_model() -> str:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации (статьи, находки, материалы), справочники, приёмщик
-    ОС."""
+    ОС: действующие правила эксперта агента (#190)."""
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
-        "dictionaries": load_dictionaries(),
+        "dictionaries": load_dictionaries(), "expert_rules": expert_rules_store.payload_block(AGENT),
         "items": [*(_item(row) for row in otbor_inputs.article_inputs(job_payload.get("article_ids") or [])),
                   *(_signal_item(row) for row in otbor_inputs.signal_inputs(job_payload.get("signal_ids") or []))],
     }
@@ -188,12 +190,14 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         # Клиент без модели взял бы OPENAI_MODEL ленты: тихий откат, которого быть не должно.
         raise ValueError("otbor: в задаче нет модели (OTBOR_MODEL на ядре) — модель ленты агент не берёт")
     dictionaries = payload.get("dictionaries") or {}
-    instructions = _instructions(dictionaries)
+    rules = payload.get("expert_rules")
+    instructions = instructions_with_rules(dictionaries, rules)
     schema = answer_schema(dictionaries)
     client = make_client()
     decisions: list[dict[str, Any]] = []
     result = {"otbor": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
-              "dictionaries_version": dictionaries.get("version"), "decisions": decisions}
+              "dictionaries_version": dictionaries.get("version"), "expert_rules_version": expert_rules.version(rules),
+              "decisions": decisions}
     for item in payload.get("items") or []:
         if heartbeat:
             try:
@@ -253,6 +257,12 @@ _TASK = """Ты решаешь, брать ли публикацию на пла
 следует. «Ссылки находки» — публикации, собранные в эту находку (заголовок, издатель, дата); «нет» — публикация
 одна. Похожие сигналы, оценённые людьми, и оценки людей — справка о том, как люди оценивали похожее, а не
 правило."""
+
+
+def instructions_with_rules(dictionaries: dict[str, Any], rules_block: Any = None) -> str:
+    """Инструкция со справочниками и правилами эксперта (#190): все правила агента, у правила категории с её пометкой:
+    категорию решает сам «Отбор». Правил нет: инструкция прежняя."""
+    return expert_rules.with_rules(_instructions(dictionaries), rules_block, every_category=True)
 
 
 def _instructions(dictionaries: dict[str, Any]) -> str:
@@ -328,7 +338,8 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
                                         if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
-              "dictionaries_version": dictionaries.get("version"), "job_id": job_id}
+              "dictionaries_version": dictionaries.get("version"), "job_id": job_id,
+              "expert_rules_version": expert_rules_store.known_version(AGENT, result.get("expert_rules_version", 0))}
     applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "kept_by_human": 0, "errors": []}
     for decision in decisions:
         article_id, signal_id = _publication(decision, expected)

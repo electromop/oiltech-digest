@@ -2402,3 +2402,26 @@
 .journalOverview p {
   margin: 0 0 var(--ot-space-02);
 }
+
+/* Правила эксперта (#190): правило предложения, итог автопроверки и набор правил агента на вкладке. */
+.ruleSummary p,
+.ruleCheck p {
+  margin: 0 0 var(--ot-space-02);
+}
+
+.ruleText {
+  font-weight: var(--ot-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.ruleCheck {
+  margin-top: var(--ot-space-03);
+}
+
+.ruleAgent {
+  margin-top: var(--ot-space-04);
+}
+
+.ruleAgent ol {
+  margin-bottom: var(--ot-space-02);
+}

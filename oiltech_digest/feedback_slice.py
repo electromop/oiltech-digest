@@ -14,13 +14,13 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from oiltech_digest import feedback_journal, feedback_review, feedback_settings
+from oiltech_digest import feedback_journal, feedback_review, feedback_settings, rule_check
 from oiltech_digest.db import feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, SAMPLE_TASK
 from oiltech_digest.feed_window import MSK
 
-# Стадии расхода контура ОС под потолком: разбор ОС (автопроверка правил эксперта добавится своей стадией).
-STAGES = (feedback_review.STAGE,)
+# Стадии расхода контура ОС под потолком: разбор ОС и автопроверка правил эксперта (#190).
+STAGES = (feedback_review.STAGE, rule_check.STAGE)
 SLICE_AUTHOR = "Недельный срез"
 _SAMPLE_POOL_DAYS = 31
 
@@ -40,13 +40,16 @@ def scheduler_step(now: datetime | None = None) -> dict[str, Any]:
     settings = feedback_settings.current()
     result: dict[str, Any] = {"expired": feedback_journal.expire_stale()}
     local = now.astimezone(MSK)
-    if not _due(local, settings):
-        return result
-    week = local.date() - timedelta(days=local.isoweekday() - 1)
-    if not feedback_store.scheduled_this_week(week):
-        result["slice"] = run(trigger="schedule", author=None, now=now, week_start=week, settings=settings)
-    if local.day <= 7:
-        result["sample"] = sample_task(now, settings)
+    due = _due(local, settings)
+    if due:
+        week = local.date() - timedelta(days=local.isoweekday() - 1)
+        if not feedback_store.scheduled_this_week(week):
+            result["slice"] = run(trigger="schedule", author=None, now=now, week_start=week, settings=settings)
+        if local.day <= 7:
+            result["sample"] = sample_task(now, settings)
+    # Автопроверки правил эксперта (#190): каждый цикл: предложения без проверки; в первый срез месяца: проверка
+    # всего набора правил каждого агента против голой инструкции.
+    result["checks"] = rule_check.scheduler_step(now, monthly=due and local.day <= 7)
     return result
 
 
@@ -87,7 +90,7 @@ def run(*, trigger: str, author: str | None, now: datetime, settings: dict[str, 
         return {"skipped": "срез этой недели уже есть"}
     try:
         job = feedback_review.enqueue(slice_id, signal_ids, since=window_to - timedelta(days=days), until=window_to,
-                                      model=str(settings["review_model"]))
+                                      model=str(settings["review_model"]), window_from=window_from)
     except Exception as exc:
         # Срез без задачи не держит следующие: не выполнен, его окно возьмёт следующий.
         feedback_store.finish_slice(slice_id, status="failed", note=f"задача разбора ОС не поставлена: {exc}"[:500])

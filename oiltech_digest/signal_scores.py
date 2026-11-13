@@ -18,7 +18,7 @@ import json
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
-from oiltech_digest import config, event_dates, signal_scoring
+from oiltech_digest import config, event_dates, expert_rules, signal_scoring
 from oiltech_digest.db import repository, signal_scores_store
 from oiltech_digest.otbor_answer import code_label
 from oiltech_digest.otbor_pack_format import load_dictionaries as otbor_dictionaries
@@ -31,6 +31,8 @@ from oiltech_digest.signal_card import EXPERT_RULES
 from oiltech_digest.signal_card_pack import CATEGORY_RU, UNDEFINED, publication_day, publication_text
 
 KIND = signal_scores_store.KIND
+# Агент в правилах эксперта (#190, expert_rules.AGENTS).
+AGENT = "scores"
 # Версия инструкции, в рецепте баллов: другая инструкция: другие баллы.
 PROMPT_VERSION = "2026-10-25.1"
 # Шаг этапа в «Ходе решения» сигнала.
@@ -129,9 +131,12 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
         if round(total, 6) != 100:
             raise InvalidJobPayload(f"сумма весов профиля {profile} равна {total:g}, а не 100: баллы не считаются")
         profiles[profile] = model_criteria(criteria, rubrics, profile)
+    from oiltech_digest.db import expert_rules_store
+
     return {"kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
             "rubrics_version": rubrics["version"], "profiles": profiles,
             "criteria_fingerprints": {profile: _fingerprint(seen) for profile, seen in profiles.items()},
+            "expert_rules": expert_rules_store.payload_block(AGENT),
             "items": [payload_item(one) for one in contexts]}
 
 
@@ -188,6 +193,13 @@ def model_criteria(criteria: list[dict[str, Any]], rubrics: dict[str, Any], prof
     return found
 
 
+def criteria_fingerprints(rubrics: dict[str, Any]) -> dict[str, str]:
+    """Отпечатки критериев профилей, как их сейчас видит модель: по ним автопроверка правил (#190) решает, годится ли
+    принятый балл как ответ «без правила»."""
+    return {profile: _fingerprint(model_criteria(repository.list_enabled_scoring_criteria(profile), rubrics, profile))
+            for profile in signal_scores_store.PROFILES.values()}
+
+
 def _fingerprint(seen: list[dict[str, Any]]) -> str:
     """Отпечаток критериев так, как их видит модель (model_criteria): имена, описания критериев без линейки, линейки.
     Веса, ключевые слова и описания критериев с линейкой в него не входят: модель их не видит."""
@@ -206,11 +218,13 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         raise ValueError("signal_scores: в задаче нет модели (SIGNAL_SCORES_MODEL на ядре), а модель ленты этап "
                          "не берёт")
     profiles = payload.get("profiles") or {}
+    rules = payload.get("expert_rules")
     client = make_client()
     rows: list[dict[str, Any]] = []
     result = {"signal_scores": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
               "rubrics_version": payload.get("rubrics_version"),
-              "criteria_fingerprints": payload.get("criteria_fingerprints"), "scores": rows}
+              "criteria_fingerprints": payload.get("criteria_fingerprints"),
+              "expert_rules_version": expert_rules.version(rules), "scores": rows}
     for item in payload.get("items") or []:
         if heartbeat:
             try:
@@ -223,7 +237,8 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         row = {"signal_id": item.get("signal_id"), "profile": item.get("profile"), "publication": item.get("publication")}
         try:
             response = client.complete_json(
-                instructions(criteria), model_input(item), answer_schema(criteria),
+                instructions(criteria, rules, category=profile_category(item.get("profile"))), model_input(item),
+                answer_schema(criteria),
                 max_output_tokens=output_budget(_OUTPUT_TOKENS, payload.get("reasoning")),
                 model=model, reasoning_effort=payload.get("reasoning"),
             )
@@ -243,7 +258,17 @@ _TASK = """Ты оцениваешь сигнал рынка нефтесерв�
 по-русски, почему такой балл; что линейка велит писать в «почему» раздельно (масштаб и эффект), пиши раздельно."""
 
 
-def instructions(criteria: list[dict[str, Any]]) -> str:
+def profile_category(profile: Any) -> str | None:
+    """Профиль баллов → категория сигнала (правила эксперта своей категории, #190)."""
+    return next((category for category, one in signal_scores_store.PROFILES.items() if one == profile), None)
+
+
+def instructions(criteria: list[dict[str, Any]], rules_block: Any = None, *, category: str | None = None) -> str:
+    """Инструкция с критериями профиля и правилами эксперта своей категории (#190); правил нет: прежняя."""
+    return expert_rules.with_rules(_base_instructions(criteria), rules_block, category=category)
+
+
+def _base_instructions(criteria: list[dict[str, Any]]) -> str:
     lines = [_TASK, "", EXPERT_RULES, "", "Критерии:"]
     for number, criterion in enumerate(criteria, start=1):
         lines.append(f"{number}. {criterion['name']}. {criterion['description']} {criterion['note']}".rstrip())
@@ -321,6 +346,9 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     sent = result.get("criteria_fingerprints") if isinstance(result.get("criteria_fingerprints"), dict) else {}
     changed = {profile for profile, current in criteria.items()
                if sent.get(profile) != _fingerprint(model_criteria(current, rubrics, profile))}
+    from oiltech_digest.db import expert_rules_store
+
+    rules_version = expert_rules_store.known_version(AGENT, result.get("expert_rules_version", 0))
     applied: dict[str, Any] = {"written": 0, "errors": []}
     for row in rows:
         signal_id = _signal_id(row, expected)
@@ -336,6 +364,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             applied["errors"].append({"signal_id": signal_id, "error": problem})
             continue
         recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
+                  "expert_rules_version": rules_version, "criteria_fingerprint": sent.get(item["profile"]),
                   "model": _model_name(row), "rubrics_version": rubrics["version"], "totals": values["totals"],
                   "keywords": bool(config.SIGNAL_SCORES_KEYWORDS), "named_customer": values["named_customer"],
                   "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id}

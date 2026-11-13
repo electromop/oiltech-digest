@@ -151,6 +151,7 @@ def research_topic(
     client_factory: Callable[[], Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
     feedback: str = "",
+    hints: str = "",
     model: str | None = None,
     reasoning: str | None = None,
 ) -> dict[str, Any]:
@@ -180,6 +181,8 @@ def research_topic(
         + (f"\nЧто входит в тему:\n{topic_context.strip()}\n" if topic_context.strip() else "")
         # Уже найденное и сайты сбора (граница данных О-7): ОС экспертов в промпт поиска не идёт.
         + (f"\n{feedback.strip()}\n" if feedback.strip() else "")
+        # Правила эксперта поиска (#190): только подсказки по теме, что искать ещё, без свободного текста (О-7).
+        + (f"\n{hints.strip()}\n" if hints.strip() else "")
     )
     client = (client_factory or (lambda: make_client(False)))()
     response = None

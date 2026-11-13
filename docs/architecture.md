@@ -59,8 +59,8 @@
 
 | Сервис | Очереди | Что исполняет | Потоков |
 |---|---|---|---|
-| `external-worker` | `external-ai` | поток дня: суть и перевод ленты, «Отбор», «Суть и перевод» сигналов, «Карточка» и её баллы, разбор ОС, судья перепечаток, разбор документов | 1 |
-| `external-worker-bulk` | `external-ai-bulk` | пересчёты и повторы названных публикаций (те же агенты, без документов и перепечаток); на ядре включается `AI_BULK_LANE_ENABLED=1` | 1 |
+| `external-worker` | `external-ai` | поток дня: суть и перевод ленты, «Отбор», «Суть и перевод» сигналов, «Карточка» и её баллы, разбор ОС, судья перепечаток, разбор документов; автопроверка правил эксперта, пока полоса пересчётов выключена | 1 |
+| `external-worker-bulk` | `external-ai-bulk` | пересчёты и повторы названных публикаций (те же агенты, без документов и перепечаток), автопроверка правил эксперта; на ядре включается `AI_BULK_LANE_ENABLED=1` | 1 |
 | `external-worker-fetch` | `external-fetch`, `external-notify` | сбор запросом, дозагрузка тел; отправка кода допуска в Telegram | 3 |
 | `external-worker-browser` | `external-playwright` | сбор браузером | 1 |
 | `external-worker-agents` | `external-agents` | прогон радара: поиск, добор страниц, «Дедуп» | 1 |
@@ -167,6 +167,7 @@ RSS часто отдаёт только анонс: статья ложится
   согласует администратор, применяет система ([`feedback_changes.py`](../oiltech_digest/feedback_changes.py)); любое
   явное действие администратора и применённое улучшение отменяются из журнала. Настройки контура (20 штук) в базе,
   правит администратор на вкладке «Обратная связь» ([`feedback_settings.py`](../oiltech_digest/feedback_settings.py)).
+  Правила эксперта агентам и их автопроверка (#190): [`expert_rules.py`](../oiltech_digest/expert_rules.py), [`rule_check.py`](../oiltech_digest/rule_check.py).
 
 Отклонённую публикацию обработка дальше не берёт, ждущую решения «Отбора» тоже. Статья, которую до 08.11 решил гейт
 ленты, живёт по его решению (`article_cards.relevant`); теги и баллы статей (`article_tags`, `article_scores`) с
@@ -257,7 +258,7 @@ RSS часто отдаёт только анонс: статья ложится
 Доступ по Bearer-токену; на ядре хранится только его SHA-256 (`EXTERNAL_WORKER_TOKEN_HASH`), сравнение через
 `hmac.compare_digest`. У каждой задачи свой `lease_token`.
 
-Договор сторон в [`contract.py`](../oiltech_digest/contract.py), сейчас контракт 12. Воркер в каждом запросе шлёт
+Договор сторон в [`contract.py`](../oiltech_digest/contract.py), сейчас контракт 13. Воркер в каждом запросе шлёт
 сборку (git SHA) и номер контракта (`X-Worker-Build`, `X-Worker-Contract`); ядро помнит их по контейнеру
 (`external_worker_consumers`), `check-lanes` поднимает тревогу при расхождении, а задачу, которую старая сборка
 исполнила бы неверно, ядро ей не выдаёт (`contract.required_contract`). Порядок выката: ядро, потом NL.
@@ -293,7 +294,7 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
   `signal_feedback_events` (журнал отметок ОС; `applied`: явные действия применены, отметка администратора;
   `correction_undone_at`: правка отменена из журнала ОС), `feedback_actions` (действия ОС: сразу, предложение по
   сигналу, решение, применение, отмена, задача выборки), `feedback_slices` (недельные срезы), `feedback_settings`
-  (настройки контура ОС), `signal_event_pairs` (пары «одно ли событие» от людей),
+  (настройки контура ОС), `signal_event_pairs` (пары «одно ли событие» от людей), `expert_rules`, `rule_checks`,
   `feedback_entries`, `signal_agent_memory` (прежняя память радара: история отзывов до #188, отметки её больше не пишут, и
   эталон заказчика),
   `signal_training_examples` (снимки решений для выгрузок); личные `user_article_states` и `user_signal_states`
@@ -354,7 +355,7 @@ enqueue-external-refetch        при FETCH_EXTERNAL_ENABLED=1: тела обр
 find-reprints --apply           раз в REPRINTS_INTERVAL_HOURS (12 ч) по времени прошлого прогона; 0 выключает
 enqueue-signal-cards            при SIGNAL_CARD_ENABLED=1: основной вызов «Карточки»
 enqueue-signal-scores           баллы «Карточки»
-feedback-slice                  недельный срез ОС в день и час из настроек контура; «устарело» у предложений
+feedback-slice                  недельный срез ОС; «устарело» у предложений; автопроверка правил
 enqueue-daily-signal-discovery  радар (раздел 3.6)
 check-lanes                     сторож полос: застой очереди, нет живого воркера, расхождение контракта
 stats

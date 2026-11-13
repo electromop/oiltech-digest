@@ -1,12 +1,12 @@
 """Агент «Разбор ОС» (#189, спека #187): сводит отметки всех участников по каждому сигналу в одно улучшение карточки.
 
-Новый вид задачи на внешнем воркере, как у остальных агентов (контракт 12). Ядро собирает самодостаточный пакет при
-выдаче: сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно похожих отметок (без имён авторов:
-только роль), поля карточки, текст главной публикации и справочники значений. Воркер без базы зовёт модель из настроек
-контура (gpt-6-sol по умолчанию) по сигналу. Ядро проверяет ответ кодом: поле из списка, значение из справочника,
-номера отметок из пакета, цитата дословно из текста этих отметок; не прошедшее не пишется. Прошедшее ложится в журнал
-ОС предложением по сигналу (ждёт решения администратора); новое предложение по тому же сигналу заменяет прежнее
-нерешённое. Сам разбор карточку не меняет (решения владельца 11 и 12.11). Расход: своей стадией в учёте расхода ИИ.
+Вид задачи на внешнем воркере (контракт 12; с вызовом о правилах эксперта, #190: 13). Ядро собирает пакет при выдаче:
+сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно похожих отметок (без имён авторов: только
+роль), поля карточки, текст главной публикации и справочники. Воркер без базы зовёт модель из настроек контура
+(gpt-6-sol) по сигналу, затем один раз о правилах (feedback_review_rules). Ядро проверяет ответ кодом: поле из списка,
+значение из справочника, номера отметок из пакета, цитата дословно из текста этих отметок; не прошедшее не пишется.
+Прошедшее ложится в журнал ОС предложением (ждёт решения администратора); новое по тому же сигналу заменяет прежнее
+нерешённое. Сам разбор ничего не меняет (решения владельца 11 и 12.11). Расход: своей стадией в учёте расхода ИИ.
 """
 
 from __future__ import annotations
@@ -15,8 +15,7 @@ import re
 from datetime import date, datetime
 from typing import Any, Callable
 
-from oiltech_digest import config, feedback_changes, feedback_settings
-from oiltech_digest.colleague_materials import VERDICTS
+from oiltech_digest import config, feedback_changes, feedback_review_rules, feedback_settings
 from oiltech_digest.db import connection, feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, PROPOSAL, STALE
 from oiltech_digest.processing.external_ai import StopRequested
@@ -35,7 +34,7 @@ _TEXT_CHARS = 4000
 _COMPANY_CHARS, _COMPANIES = 120, 10
 _DATE_RE = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?")
 # Оценка шкалы коротко, как в списке вердиктов материалов коллег (он сверен с формой ОС тестом).
-_VERDICT_RU = {code: short for code, short, _full in VERDICTS}
+_VERDICT_RU = feedback_review_rules.VERDICT_RU
 # Цитата: не короче стольких знаков. Подпись оценки («Наблюдать») цитатой служит только изменениям, которые от оценки и
 # идут: категория («Не тот блок»), «Дубль», уборка («Не релевантно»); прочим полям нужен текст отметки.
 _QUOTE_MIN = 4
@@ -47,14 +46,17 @@ _CATEGORY_CODES = {"бизнес": "business", "технология": "technolo
 # --- Постановка (ядро) ---------------------------------------------------------------------------
 
 
-def enqueue(slice_id: int, signal_ids: list[int], *, since: datetime, until: datetime, model: str) -> dict[str, Any]:
-    """Одна задача разбора на срез: сигналы с новыми отметками, окно похожих отметок, модель из настроек."""
+def enqueue(slice_id: int, signal_ids: list[int], *, since: datetime, until: datetime, model: str,
+            window_from: datetime | None = None) -> dict[str, Any]:
+    """Одна задача разбора на срез: сигналы с новыми отметками, окно похожих отметок, модель из настроек. window_from:
+    начало окна среза: отметки после него новые (правило эксперта стоит хоть на одной новой, #190)."""
     from oiltech_digest import network_policy
 
     route = network_policy.route_ai_processing()
     return repository.create_background_job(
         KIND, {"slice_id": int(slice_id), "signal_ids": [int(one) for one in signal_ids], "since": since.isoformat(),
-               "until": until.isoformat(), "model": model, "reasoning": config.FEEDBACK_REVIEW_REASONING},
+               "until": until.isoformat(), "model": model, "reasoning": config.FEEDBACK_REVIEW_REASONING,
+               **({"window_from": window_from.isoformat()} if window_from else {})},
         queue_name=route.queue_name, execution_region=route.execution_region, capability=route.capability,
     )
 
@@ -77,6 +79,8 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
         "prompt_version": PROMPT_VERSION, "choices": context["choices"],
         "items": [_item(cards[one], publications.get(one), marks.get(one) or []) for one in ids
                   if one in cards and marks.get(one)],
+        # Правила эксперта (#190): после сигналов один вызов по отметкам окна и действующим правилам агентов.
+        "rules_review": feedback_review_rules.payload(job_payload),
     }
 
 
@@ -168,6 +172,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             continue
         rows.append({**row, "answer": response.data, "model": response.model,
                      "input_tokens": response.input_tokens, "output_tokens": response.output_tokens})
+    feedback_review_rules.run(client, payload, result, heartbeat, model=model)
     return result
 
 
@@ -269,6 +274,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
         if changes:
             _write_proposal(signal_id, changes, slice_id=slice_id, model=str(row.get("model") or "")[:100] or None)
             applied["proposals"] += 1
+    if isinstance(result.get("rules"), dict):
+        found = feedback_review_rules.apply_result(result["rules"], job_id=job_id, job_payload=job_payload,
+                                                   slice_id=slice_id, stage=STAGE)
+        applied["rule_proposals"] = found["rule_proposals"]
+        applied["errors"] += [{"signal_id": None, "error": problem} for problem in found["rule_errors"]]
     if slice_id is not None and not result.get("partial"):
         note = f"не прошло проверку кодом: {len(applied['errors'])}" if applied["errors"] else None
         feedback_store.finish_slice(int(slice_id), status="done", note=note)
@@ -405,8 +415,7 @@ def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, 
 
 
 def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """«Изменить»: новая формулировка полей предложения от администратора, проверенная так же, как ответ модели (цитаты
-    не нужно: это слова администратора). JournalRefused: неверное значение или поля нет в предложении."""
+    """«Изменить»: формулировка администратора, проверенная как ответ модели (без цитаты). JournalRefused: не так."""
     from oiltech_digest.feedback_journal import JournalRefused
 
     by_field = {change["field"]: change for change in proposed}
@@ -463,9 +472,7 @@ def _mark_text(mark: dict[str, Any], *, verdict: bool) -> str:
         None if undone else mark.get("corrected_title"), None if undone else mark.get("corrected_thesis")) if part)
 
 
-def _plain(value: str) -> str:
-    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").replace("«", "\"").replace("»", "\"")
-                    .casefold().split())
+_plain = feedback_review_rules.plain
 
 
 def _usage(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -483,5 +490,4 @@ def _usage(row: dict[str, Any]) -> dict[str, Any] | None:
             "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
 
 
-def _moment(value: Any) -> datetime:
-    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+_moment = feedback_review_rules._moment

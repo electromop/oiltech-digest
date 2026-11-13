@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { JournalChange, JournalEntry, ProposalDecision } from "../../api/feedbackJournal";
+import type { JournalChange, JournalEntry, ProposalDecision, RuleDecisionExtra } from "../../api/feedbackJournal";
 import { verdictName } from "../signals/SignalFeedbackForm";
+import { CheckSummary, RuleSummary } from "./RuleProposalView";
 
 // Строка журнала ОС (#189): когда, кто, что пришло, что система сделала или предлагает, статус и путь действия.
 // Кнопки решений, отмены и закрытия задачи сервер разрешает только администратору: экран показывает их по флагам
@@ -23,6 +24,7 @@ export const AGENT_LABELS: Record<string, string> = {
   card: "«Карточка»",
   scores: "Баллы",
   dedup: "«Дедуп»",
+  search: "Поиск радара",
 };
 
 export const SHOWCASE_LABELS: Record<string, string> = {
@@ -36,6 +38,8 @@ const KIND_LABELS: Record<string, string> = {
   signal_proposal: "Предложение разбора ОС",
   sample_task: "Задача выборки",
   immediate: "Действие администратора",
+  rule_proposal: "Предложение правила",
+  set_check: "Проверка набора правил",
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -53,9 +57,12 @@ type Props = {
   entry: JournalEntry;
   highlighted: boolean;
   busy: boolean;
-  onDecide: (entry: JournalEntry, decision: ProposalDecision, changes?: Array<{ field: string; value: string }>) => void;
+  onDecide: (entry: JournalEntry, decision: ProposalDecision, changes?: Array<{ field: string; value: string }>,
+    extra?: RuleDecisionExtra) => void;
   onUndo: (entry: JournalEntry) => void;
   onClose: (entry: JournalEntry) => void;
+  onRollback?: (entry: JournalEntry) => void;
+  onRecheck?: (entry: JournalEntry) => void;
 };
 
 // Время по Москве, как на соседних экранах: срез и расписание считаются по МСК.
@@ -71,18 +78,45 @@ function statusLabel(entry: JournalEntry): string {
   return STATUS_LABELS[entry.status] ?? entry.status;
 }
 
-export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, onClose }: Props) {
+export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, onClose, onRollback, onRecheck }: Props) {
   const [editing, setEditing] = useState(false);
   const [wording, setWording] = useState<Record<string, string>>({});
+  // Предложение правила (#190): новая формулировка и шаг отдельного подтверждения (мало данных, перевес «от эталона»).
+  const [ruleText, setRuleText] = useState("");
+  const [confirming, setConfirming] = useState<null | { decision: ProposalDecision; text?: string }>(null);
+  const isRule = entry.kind === "rule_proposal";
+  const reasons = entry.confirm_reasons ?? [];
 
   function startEdit() {
-    setWording(Object.fromEntries((entry.changes ?? []).map((change) => [change.field, change.shown])));
+    if (isRule) setRuleText(entry.rule?.text ?? "");
+    else setWording(Object.fromEntries((entry.changes ?? []).map((change) => [change.field, change.shown])));
     setEditing(true);
   }
 
   function saveWording() {
-    onDecide(entry, "modify", Object.entries(wording).map(([field, value]) => ({ field, value })));
+    if (isRule) {
+      decideRule("modify", ruleText);
+    } else {
+      onDecide(entry, "modify", Object.entries(wording).map(([field, value]) => ({ field, value })));
+    }
     setEditing(false);
+  }
+
+  // Согласование правила без готовой проверки, с «мало данных» или с перевесом «от эталона», и новая формулировка (её
+  // проверка не мерила): сначала отдельное подтверждение (сервер без него отказывает).
+  function decideRule(decision: ProposalDecision, text?: string) {
+    if (decision === "modify" || (decision === "approve" && reasons.length)) {
+      setConfirming({ decision, text });
+      return;
+    }
+    onDecide(entry, decision, [], text === undefined ? {} : { text });
+  }
+
+  function confirm() {
+    if (!confirming) return;
+    onDecide(entry, confirming.decision, [], { ...(confirming.text === undefined ? {} : { text: confirming.text }),
+      confirm: true });
+    setConfirming(null);
   }
 
   return (
@@ -108,8 +142,15 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
           <Incoming entry={entry} />
         </section>
         <section aria-label="Что сделала система">
-          <h3 className="journalLabel">{entry.kind === "signal_proposal" ? "Что предлагает система" : "Что сделала система"}</h3>
-          {editing ? <Wording changes={entry.changes ?? []} wording={wording} onChange={setWording} /> : <System entry={entry} />}
+          <h3 className="journalLabel">
+            {entry.kind === "signal_proposal" || isRule ? "Что предлагает система" : "Что сделала система"}
+          </h3>
+          {editing && isRule ? (
+            <label className="field">
+              <span>Новая формулировка правила</span>
+              <textarea value={ruleText} rows={3} onChange={(event) => setRuleText(event.target.value)} />
+            </label>
+          ) : editing ? <Wording changes={entry.changes ?? []} wording={wording} onChange={setWording} /> : <System entry={entry} />}
         </section>
       </div>
       <ol className="journalPath" aria-label="Путь действия">
@@ -122,11 +163,23 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
           </li>
         ))}
       </ol>
+      {confirming ? (
+        <div className="documentAlert warn" role="alert">
+          Нужно отдельное подтверждение: {[...reasons, ...(confirming.decision === "modify"
+            ? ["новая формулировка не проходила автопроверку"] : [])].join("; ")}.
+          <div className="journalActions">
+            <button type="button" className="primaryButton compactButton" disabled={busy} onClick={confirm}>
+              Подтверждаю, согласовать
+            </button>
+            <button type="button" className="ghostButton compactButton" onClick={() => setConfirming(null)}>Отмена</button>
+          </div>
+        </div>
+      ) : null}
       <div className="journalActions">
-        {entry.can_decide && !editing ? (
+        {entry.can_decide && !editing && !confirming ? (
           <>
             <button type="button" className="primaryButton compactButton" disabled={busy}
-              onClick={() => onDecide(entry, "approve")}>Согласовать</button>
+              onClick={() => (isRule ? decideRule("approve") : onDecide(entry, "approve"))}>Согласовать</button>
             <button type="button" className="ghostButton compactButton" disabled={busy} onClick={startEdit}>Изменить</button>
             <button type="button" className="ghostButton compactButton" disabled={busy}
               onClick={() => onDecide(entry, "dismiss")}>Убрать</button>
@@ -148,6 +201,16 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
         {entry.can_close ? (
           <button type="button" className="ghostButton compactButton" disabled={busy} onClick={() => onClose(entry)}>
             Просмотрено
+          </button>
+        ) : null}
+        {entry.can_recheck && onRecheck && !editing && !confirming ? (
+          <button type="button" className="ghostButton compactButton" disabled={busy} onClick={() => onRecheck(entry)}>
+            Проверить снова
+          </button>
+        ) : null}
+        {entry.can_rollback && onRollback ? (
+          <button type="button" className="ghostButton compactButton" disabled={busy} onClick={() => onRollback(entry)}>
+            Откатить версию {entry.version}
           </button>
         ) : null}
       </div>
@@ -173,6 +236,12 @@ function Incoming({ entry }: { entry: JournalEntry }) {
   if (entry.kind === "immediate") {
     return <p>Кнопка «Вернуть» в «Отклонённых».</p>;
   }
+  if (entry.kind === "set_check") {
+    return <p>Первый понедельник месяца: весь набор правил агента {entry.set_agent_label} против голой инструкции.</p>;
+  }
+  if (entry.kind === "rule_proposal" && entry.seed) {
+    return <p>{entry.seed}{entry.quote ? <span className="journalQuote"> «{entry.quote}»</span> : null}</p>;
+  }
   return (
     <ul className="journalLines" aria-label="Основание">
       {(entry.basis ?? []).map((mark) => (
@@ -193,6 +262,17 @@ function System({ entry }: { entry: JournalEntry }) {
     return entry.system?.length
       ? <ul className="journalLines">{entry.system.map((line) => <li key={line}>{line}</li>)}</ul>
       : <p className="metaText">Записано, карточку не меняет.</p>;
+  }
+  if (entry.kind === "rule_proposal" && entry.rule) {
+    return (
+      <>
+        <RuleSummary rule={entry.rule} ruleKind={entry.rule_kind} replaced={entry.replaced} proposed={entry.proposed_rule} />
+        <CheckSummary check={entry.check} />
+      </>
+    );
+  }
+  if (entry.kind === "set_check") {
+    return <CheckSummary check={entry.check} />;
   }
   if (entry.kind === "sample_task") {
     return (

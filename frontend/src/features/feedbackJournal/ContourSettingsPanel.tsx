@@ -49,22 +49,13 @@ export function ContourSettingsPanel({ onError, showToast }: Props) {
     }
   }
 
-  const now = settings.fields.filter((field) => !field.later);
-  const later = settings.fields.filter((field) => field.later);
   return (
     <section className="panel" aria-label="Настройки контура">
       <div className="panelHeader">
         <h2>Настройки контура</h2>
       </div>
       <div className="settingsGrid">
-        {now.map((field) => (
-          <SettingInput key={field.key} field={field} value={draft[field.key]}
-            onChange={(value) => setDraft({ ...draft, [field.key]: value })} />
-        ))}
-      </div>
-      <p className="metaText">Вступят в силу вместе с правилами эксперта и автопроверкой:</p>
-      <div className="settingsGrid">
-        {later.map((field) => (
+        {settings.fields.map((field) => (
           <SettingInput key={field.key} field={field} value={draft[field.key]}
             onChange={(value) => setDraft({ ...draft, [field.key]: value })} />
         ))}
