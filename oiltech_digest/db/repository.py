@@ -244,6 +244,8 @@ SIGNAL_FEEDBACK_EVENTS = (
     "score_changed",
     "status_changed",
     "comment_added",
+    # Правка заголовка и сути по согласованному улучшению карточки из журнала ОС (#189, feedback_changes).
+    "proposal_applied",
 )
 
 
@@ -1448,14 +1450,15 @@ def list_signal_training_examples(
 # последнее непустое по карточке. Накладываются при чтении: текст модели в signals не
 # затирается, и повторная находка той же карточки прогоном радара правку не перепишет. Только применённые (#188):
 # правка администратора и правка материала выпуска; правка участника без прав администратора лежит в его блоке ОС.
+# Правка, отменённая из журнала ОС (#189), не ложится: снова текст модели или прежняя правка ({undone}).
 _SIGNAL_CORRECTIONS_LATERAL = """
 LEFT JOIN LATERAL (
   SELECT
     (SELECT e.corrected_title FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}
+     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}{undone}
      ORDER BY e.id DESC LIMIT 1) AS corrected_title,
     (SELECT e.corrected_thesis FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}
+     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}{undone}
      ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
 ) corr ON TRUE
 """
@@ -1469,11 +1472,15 @@ def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = No
     закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
     «архив только на просмотр»: и текст закрытого выпуска). Отзыв после закрытия принимается
     как раньше и виден на радаре: он нужен агенту для обучения, но выпуск не меняет.
-    `month_sql`: месяц выпуска материала, если он не месяц поступления карточки (у статьи ленты её месяц)."""
-    until = ""
+    `month_sql`: месяц выпуска материала, если он не месяц поступления карточки (у статьи ленты её месяц).
+    Отмена правки из журнала ОС (#189) так же: закрытый выпуск не видит отмену после закрытия."""
+    until, undone = "", " AND e.correction_undone_at IS NULL"
     if issue_window is not None:
-        until = " AND " + issue_window.before_close_sql(month_sql or signal_month_sql(alias), "e.created_at")
-    return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until)
+        month = month_sql or signal_month_sql(alias)
+        until = " AND " + issue_window.before_close_sql(month, "e.created_at")
+        undone = (" AND (e.correction_undone_at IS NULL OR NOT "
+                  + issue_window.before_close_sql(month, "e.correction_undone_at") + ")")
+    return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until, undone=undone)
 
 
 # Балла у сигнала нет (экран пишет «без баллов», а не 0): то же правило, что signal_scoring.unscored у витрин
@@ -1988,6 +1995,9 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    sm.updated_at AS user_status_updated_at,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
                    {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
+                   -- Предложение разбора ОС, которое ждёт решения в журнале ОС (#189): значок на карточке.
+                   (SELECT fa.id FROM feedback_actions fa WHERE fa.signal_id = s.id AND fa.kind = 'signal_proposal'
+                      AND fa.status = 'pending' ORDER BY fa.id DESC LIMIT 1) AS feedback_pending,
                    corr.corrected_title,
                    corr.corrected_thesis
             FROM signals s
@@ -4311,10 +4321,11 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
-                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агенты
-                   -- «Карточка сигнала» (#96), «Отбор» (#130) и баллы «Карточки» (#132) — своими.
+                   -- Радар: отдельной строкой от ленты той же модели (стадии radar_*), агенты
+                   -- «Карточка сигнала» (#96), «Отбор» (#130), баллы «Карточки» (#132) и разбор ОС (#189): своими.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores') THEN stage ELSE 'feed' END AS area,
+                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review') THEN stage
+                        ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs

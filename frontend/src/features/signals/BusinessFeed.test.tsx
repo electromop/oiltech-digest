@@ -271,4 +271,14 @@ describe("технологический радар", () => {
     await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
     expect([lastListQuery().technologyMaturity, lastListQuery().showcase]).toEqual([undefined, undefined]);
   });
+
+  it("карточка с предложением разбора ОС, ждущим решения, показывает значок со ссылкой на строку журнала (#189)", async () => {
+    serve([{ ...contract, feedback_pending: 77 }, fresh]);
+    renderFeed();
+
+    const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    const badge = within(card).getByRole("link", { name: "Ждёт решения в журнале" });
+    expect(badge).toHaveAttribute("href", `?screen=feedback-journal&signal=${contract.id}&action=77`);
+    expect(within(await cardOf("Новость без карточки")).queryByRole("link", { name: "Ждёт решения в журнале" })).toBeNull();
+  });
 });

@@ -83,32 +83,52 @@ def record_feedback(fields: dict[str, Any], *, user_id: int | None, author: str 
     repository.attach_feedback_to_signal_training_examples(event_id, signal_id=signal_id)
     result: dict[str, Any] = {"event_id": event_id, "applied": applies}
     if applies and signal_id is not None:
-        result.update(_explicit_action(signal_id, verdict, duplicate_of, author=author, reason=reason or comment))
+        from oiltech_digest import feedback_changes, feedback_journal
+
+        # Что применено сразу и каким было до него: строка «сразу» журнала ОС, по ней отмена (#189).
+        changes = [feedback_changes.correction_change(event_id, title=bool(corrected_title),
+                                                      summary=bool(corrected_thesis))] if (
+            corrected_title or corrected_thesis) else []
+        outcome, change = _explicit_action(signal_id, verdict, duplicate_of, author=author, reason=reason or comment)
+        result.update(outcome)
+        action_id = feedback_journal.record_immediate(event_id, signal_id, [*changes, change], author=author,
+                                                      user_id=user_id)
+        if action_id is not None:
+            result["action_id"] = action_id
     return result
 
 
 def _explicit_action(signal_id: int, verdict: str | None, duplicate_of: int | None, *, author: str | None,
-                     reason: str) -> dict[str, Any]:
-    """Явное действие отметки администратора по её оценке. Правки заголовка и сути отдельного действия не требуют:
-    применённая запись журнала ложится поверх текста модели при чтении."""
+                     reason: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Явное действие отметки администратора по её оценке: итог для ответа и запись изменения для журнала ОС (прежнее
+    состояние для отмены). Правки заголовка и сути отдельного действия не требуют: применённая запись журнала
+    ложится поверх текста модели при чтении."""
+    from oiltech_digest import feedback_changes
+
     if verdict == WRONG_BLOCK:
         from oiltech_digest import signal_scores
 
+        before = feedback_changes.category_snapshot(signal_id)
         category = signal_scores.wrong_block(signal_id, author)
-        return {"recategorized": category} if category else {"recategorize_refused": NOT_RECATEGORIZED}
+        if not category:
+            return {"recategorize_refused": NOT_RECATEGORIZED}, None
+        return {"recategorized": category}, feedback_changes.category_change(before, category)
     if verdict == DUPLICATE and duplicate_of is not None:
         refusal = repository.merge_refusal(signal_id, duplicate_of)
         merge_reason = f"обратная связь: дубль #{duplicate_of}" + (f": {reason}" if reason else "")
+        children = feedback_changes.merge_children(signal_id) if refusal is None else []
         if refusal is None and not repository.mark_signal_merged(signal_id, duplicate_of, reason=merge_reason,
                                                                  respect_review=False):
             refusal = "карточка изменилась, пока сохранялась отметка: обновите витрину"
-        return {"merged": refusal is None, **({"merge_refused": refusal} if refusal else {})}
+        change = feedback_changes.merge_change(signal_id, children) if refusal is None else None
+        return {"merged": refusal is None, **({"merge_refused": refusal} if refusal else {})}, change
     if verdict == NOT_RELEVANT:
         from oiltech_digest.db import removed_by_people
 
         refusal = removed_by_people.remove(signal_id, author=author, reason=reason)
-        return {"removed": refusal is None, **({"remove_refused": refusal} if refusal else {})}
-    return {}
+        change = feedback_changes.removal_change() if refusal is None else None
+        return {"removed": refusal is None, **({"remove_refused": refusal} if refusal else {})}, change
+    return {}, None
 
 
 def import_signal_feedback_csv(path: str | Path, *, user_id: int | None = None, dry_run: bool = False) -> dict[str, Any]:

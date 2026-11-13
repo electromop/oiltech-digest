@@ -1004,6 +1004,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     {signal.otbor_disputed ? (
                       <div className="signalCardStatus signalDisputed">Спорный сигнал: {disputedWhy(signal.otbor_disputed)}</div>
                     ) : null}
+                    {/* Предложение разбора ОС ждёт решения администратора (#189): значок ведёт на его строку журнала. */}
+                    {signal.feedback_pending ? (
+                      <a className="signalCardStatus journalBadge"
+                        href={`?screen=feedback-journal&signal=${signal.id}&action=${signal.feedback_pending}`}>
+                        Ждёт решения в журнале
+                      </a>
+                    ) : null}
                   </div>
                   <div className="articleCardMetrics signalCardMetrics">
                     {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}

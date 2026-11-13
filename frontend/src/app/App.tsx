@@ -5,6 +5,7 @@ import type { AuthResponse, User } from "../api/types";
 import { CompanyDescriptionPage } from "../features/companies/CompanyDescriptionPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
+import { FeedbackJournalPage } from "../features/feedbackJournal/FeedbackJournalPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { MaterialsPage } from "../features/materials/MaterialsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
@@ -17,7 +18,7 @@ import { UsersPage } from "../features/users/UsersPage";
 
 type ScreenId =
   | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "scoring" | "tags" | "users" | "jobs"
-  | "maintenance" | "company-parents" | "company-description" | "statistics";
+  | "maintenance" | "company-parents" | "company-description" | "statistics" | "feedback-journal";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 const ADMIN_SCREENS = new Set<ScreenId>([
@@ -56,6 +57,11 @@ const screens: ScreenDef[] = [
     id: "signal-radar",
     // «Радар сигналов» → «Технологический радар» по документу заказчика (19.09), как в MVP-1.
     label: "Технологический радар",
+  },
+  {
+    id: "feedback-journal",
+    // #189 (спека #187): журнал ОС обеих витрин, недельный срез, решения по предложениям и настройки контура.
+    label: "Обратная связь",
   },
   {
     id: "colleague-materials",
@@ -98,7 +104,7 @@ const screens: ScreenDef[] = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["business-feed", "signal-radar", "digest", "colleague-materials"],
+    screens: ["business-feed", "signal-radar", "digest", "colleague-materials", "feedback-journal"],
   },
   {
     label: "Настройки",
@@ -112,7 +118,9 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке).
 // ?screen=documents (прежний раздел документов) ведёт в «Материалы».
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "sources", "signal-radar", "business-feed", "digest", "colleague-materials"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "sources", "signal-radar", "business-feed", "digest", "colleague-materials",
+  // Значок «ждёт решения в журнале» на карточке ведёт сюда: ?screen=feedback-journal&signal=…&action=… (#189).
+  "feedback-journal"];
 
 // Первый экран: «Бизнес-лента».
 const DEFAULT_SCREEN: ScreenId = "business-feed";
@@ -206,6 +214,10 @@ export function App() {
 
   if (activeScreen === "digest") {
     currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
+  }
+
+  if (activeScreen === "feedback-journal") {
+    currentScreen = <FeedbackJournalPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "scoring") {
@@ -659,6 +671,16 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 12.5 6.2 8.5l2.2 2.2L13 5.5" />
         <path d="M10.5 5.5H13v2.5" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "feedback-journal") {
+    // Облачко реплики со строками журнала.
+    return (
+      <svg {...common}>
+        <path d="M3 3.5h10v7H7.5L4.5 13v-2.5H3z" strokeLinejoin="round" />
+        <path d="M5.5 6h5M5.5 8h3" />
       </svg>
     );
   }

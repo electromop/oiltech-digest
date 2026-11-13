@@ -49,7 +49,11 @@
    сняты, тегов и критериев в пакете нет. Сборка контракта 10 на таком пакете упала бы до первой статьи («No tags
    supplied»), а на прежнем звала бы гейт, тег и балл, которые ядро больше не пишет: задача process_articles любой
    формы ей не выдаётся. Задача, выданная ей до выката ядра, приходит с ответами гейта, тега и балла: ядро их не
-   пишет, но расход записывает (external_ai.RETIRED_STAGES). Вид задачи recheck_relevance (перепроверка гейтом) снят.
+   пишет, но расход записывает (external_ai.RETIRED_STAGES). Вид задачи recheck_relevance (перепроверка гейтом) снят;
+   12 (#189): вид задачи feedback_review, агент «Разбор ОС» недельного среза контура ОС. Сборка контракта 11 отказала
+   бы ему ошибкой «Unsupported external job kind» после выдачи: ядро ей задачу не выдаёт, а валит с причиной. Заодно из
+   задачи радара снят пустой снимок памяти ОС (поле memory, #188): сборки NL до #188 на воркерах нет с 13.11 (все на
+   39f23a3), а сборка после #188 поле не читает, поэтому прогону радара по-прежнему хватает контракта 11.
    Совместимые добавки номер не меняют, старая сторона их молча пропускает: 28.09: поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002): profile у критериев в payload и profile + criteria_snapshot в
@@ -64,7 +68,7 @@
    получает 404 и идёт дальше без ядра; в итоге прогона радара: счётчики via и pdf у
    research.fulltext и full_text_fetcher у ссылки: ядро до 04.11 их не читает; 12.11 (#188): снимок памяти ОС в
    задаче радара пустой (поле memory есть, строк нет): сборка NL до #188 с ним словарь замен не применяет и в базу за
-   памятью не ходит, новая поле не читает. Снять поле со следующей сменой контракта.
+   памятью не ходит, новая поле не читает. Поле снято со сменой контракта на 12 (#189).
 
 2. Что осталось задаче, возвращённой на остановке. Пересборка NL останавливает воркер
    посреди задачи (SIGTERM). Раньше такая задача висела до конца аренды (600 с), а
@@ -76,7 +80,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 11
+CONTRACT = 12
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
@@ -91,8 +95,11 @@ def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     формы нужен контракт 8: схема ответа со странами у неё всегда (#137). Прогону радара (не офлайн) любой формы нужен
     контракт 11: путь «Отбора» без поля otbor в задаче (снятие старой цепочки 08.11), широкий промпт и модель поиска из
     задачи (#138), сверка находок с лентой в «Дедупе» (04.11). Пакету статей ленты любой формы тоже 11: суть и перевод
-    без гейта, тега и балла (снятие старой цепочки 08.11). 0: подойдёт любая сборка, в том числе без заголовка
-    контракта, прежние формы задач номера не требуют."""
+    без гейта, тега и балла (снятие старой цепочки 08.11). Разбору ОС (#189) нужен контракт 12: сборка постарше
+    этого вида задачи не знает. 0: подойдёт любая сборка, в том числе без заголовка контракта, прежние формы задач
+    номера не требуют."""
+    if kind == "feedback_review":
+        return 12
     if kind == "process_articles":
         return 11
     if kind == "signal_card":
@@ -126,8 +133,9 @@ _ARTICLE_BATCHES = frozenset({"process_articles", "translate_titles"})
 # Виды, чей частичный итог ядро принимает. Сбор ИИ не зовёт: повторить его дёшево;
 # итог документа: одна карточка на весь файл, половина карточки не нужна никому. Карточки
 # сигналов (#96): по строке на сигнал, как статьи; решения «Отбора» (#130): по строке на публикацию;
-# «Суть и перевод» сигналов (#131) и баллы второго вызова «Карточки» (#132): по строке на сигнал.
-PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor", "signal_summary", "signal_scores"}
+# «Суть и перевод» сигналов (#131), баллы второго вызова «Карточки» (#132) и разбор ОС (#189): по строке на сигнал.
+PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor", "signal_summary", "signal_scores",
+                                    "feedback_review"}
 
 
 def accepts_partial(kind: str | None, result: dict[str, Any] | None,
@@ -150,11 +158,12 @@ def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def done_count(result: dict[str, Any] | None) -> int:
-    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов, решений «Отбора», сутей
-    или баллов сигналов."""
+    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов, решений «Отбора», сутей,
+    баллов сигналов или разборов ОС."""
     result = result or {}
     return len(result.get("articles") or result.get("verdicts") or result.get("cards")
-               or result.get("decisions") or result.get("summaries") or result.get("scores") or [])
+               or result.get("decisions") or result.get("summaries") or result.get("scores")
+               or result.get("reviews") or [])
 
 
 
@@ -201,14 +210,15 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
     - сигналы карточек, без тех, на которые модель уже ответила (в том числе ответом не по схеме:
       вызов оплачен);
     - публикации «Отбора»: без тех, о которых воркер вернул строку (ответ или сбой модели);
-    - сигналы «Суть и перевод» (#131) и баллов (#132): без тех, на которые модель уже ответила.
+    - сигналы «Суть и перевод» (#131), баллов (#132) и разбора ОС (#189): без тех, на которые модель уже ответила.
     """
     rest = without_reservation(payload)
     if not accepts_partial(kind, result, payload):
         return rest
     kind = str(kind)
-    if kind in ("signal_card", "signal_summary", "signal_scores"):
-        rows = result.get({"signal_card": "cards", "signal_summary": "summaries", "signal_scores": "scores"}[kind]) or []
+    if kind in ("signal_card", "signal_summary", "signal_scores", "feedback_review"):
+        rows = result.get({"signal_card": "cards", "signal_summary": "summaries", "signal_scores": "scores",
+                           "feedback_review": "reviews"}[kind]) or []
         answered = {str(row.get("signal_id")) for row in rows if isinstance(row, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
         return {**rest, "signal_ids": left} if left else None

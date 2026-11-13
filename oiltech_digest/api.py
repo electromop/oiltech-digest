@@ -28,8 +28,9 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, marks, rejected_sections, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import (contract, lanes, network_policy, otbor, signal_card, signal_card_filters, signal_scores,
-                            signal_scoring, signal_summary)
+from oiltech_digest import (contract, feedback_changes, feedback_journal, feedback_review, feedback_settings, lanes,
+                            network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
+                            signal_summary)
 from oiltech_digest import material_signals
 from oiltech_digest.processing.pipeline import (
     make_client,
@@ -1388,6 +1389,8 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
+    # Значок «ждёт решения в журнале» (#189) включает и выключает настройка контура ОС.
+    badge = bool(feedback_settings.current()["card_badge"])
     # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
@@ -1409,6 +1412,7 @@ def list_signals(
             "unscored": unscored,
             "digest_locked": not window.is_open(row["digest_month"]),
             "evidence": evidence.get(int(row["id"]), []),
+            "feedback_pending": row.get("feedback_pending") if badge else None,
         }))
     return rows
 
@@ -1457,8 +1461,14 @@ def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> di
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
-    if (filters.get("hidden") or filters.get("section") is not None) and user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
+    section = filters.get("section")
+    if user.get("role") == "admin" or not (filters.get("hidden") or section is not None):
+        return
+    # Раздел «Убрано людьми» участнику открывает настройка контура ОС (#189); остальные разделы только администратору.
+    if (not filters.get("hidden") and section.key == "people"
+            and feedback_settings.current()["removed_visible_to"] == "all"):
+        return
+    raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
 
 
 def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:
@@ -1573,6 +1583,8 @@ def restore_removed_signal(signal_id: int, user: dict[str, Any] = Depends(requir
         raise HTTPException(status_code=404, detail="Signal not found")
     if done == removed_by_people.NOT_REMOVED:
         raise HTTPException(status_code=409, detail="Так возвращается только убранное людьми")
+    # Уборка, которую вернули мимо журнала ОС, в журнале отменена (#189).
+    feedback_journal.after_restore(signal_id, author=user.get("email"), user_id=int(user["id"]))
     return {"ok": True}
 
 
@@ -1630,10 +1642,14 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
         raise HTTPException(status_code=409, detail="Заголовок и суть правятся у материала выпуска: "
                                                     "сначала отметьте его «в дайджест»")
     if title or summary:
-        repository.record_signal_feedback_event(
+        event_id = repository.record_signal_feedback_event(
             None, "comment_added", signal_id=signal_id, user_id=int(user["id"]),
             corrected_title=title or None, corrected_thesis=summary or None,
         )
+        # Правка видна в журнале ОС и отменяется из него, как правка в отметке ОС администратора (#189).
+        feedback_journal.record_immediate(
+            event_id, signal_id, [feedback_changes.correction_change(event_id, title=bool(title), summary=bool(summary))],
+            author=user.get("email"), user_id=int(user["id"]))
     issue_edits_store.set_material(
         signal_id,
         label=" ".join(patch.label.split()) if patch.label is not None else None,
@@ -2206,6 +2222,10 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         applied = signal_scores.apply_result(result, job_id=job_id,
                                              signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
         result = {"signal_scores": True, "applied": applied}
+    if job.get("kind") == feedback_review.KIND and result.get("feedback_review"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: предложения уже лежат в журнале ОС (#189).
+        applied = feedback_review.apply_result(result, job_id=job_id, job_payload=job.get("payload_json") or {})
+        result = {"feedback_review": True, "applied": applied}
     return result
 
 
@@ -2495,6 +2515,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "signal_summary": lambda payload, job_id: signal_summary.build_payload(payload),
     # Второй вызов «Карточки» (#132): публикации с полями по договорённости, критерии профилей с линейками.
     "signal_scores": lambda payload, job_id: signal_scores.build_payload(payload),
+    # «Разбор ОС» (#189): карточки, публикации, отметки без имён авторов и справочники: воркеру без базы.
+    "feedback_review": lambda payload, job_id: feedback_review.build_payload(payload),
 }
 
 
@@ -3024,3 +3046,7 @@ def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
         "fact_count": row.get("fact_count"),
         "created_at": row.get("created_at"),
     })
+
+
+# Журнал ОС, недельный срез и настройки контура (#189): маршруты в своём модуле, на этом же приложении.
+from oiltech_digest import feedback_journal_api  # noqa: E402,F401

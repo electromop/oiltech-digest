@@ -2060,6 +2060,27 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
         print(f"  пропущены (не приняты «Отбором», дубль или нет такого): {', '.join(map(str, result['skipped']))}")
 
 
+def cmd_feedback_slice(args: argparse.Namespace) -> None:
+    """Шаг планировщика «недельный срез» контура ОС (#189): в день и час из настроек контура срез этой недели, в первый
+    такой день месяца задача выборки отклонённого; заодно «устарело» у предложений без решения. С --now: срез сейчас,
+    как кнопка «собрать сейчас»."""
+    from oiltech_digest import feedback_slice
+
+    if args.now:
+        try:
+            result = {"slice": feedback_slice.collect_now(author="cli")}
+        except feedback_slice.SliceRefused as exc:
+            raise SystemExit(f"feedback-slice: {exc}") from exc
+    else:
+        result = feedback_slice.scheduler_step()
+    parts = [f"устарело {result['expired']}"] if "expired" in result else []
+    if result.get("slice"):
+        parts.append("срез: " + ", ".join(f"{key} {value}" for key, value in result["slice"].items()))
+    if result.get("sample"):
+        parts.append(f"выборка отклонённого: {result['sample']['publications']} из {result['sample']['pool']}")
+    print("feedback-slice: " + ("; ".join(parts) or "не время среза"))
+
+
 def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
     """Шаг планировщика «баллы», второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
     баллами, которые «пересчитываются» после «не тот блок», ставит в задачи по полосе ежедневной обработки. Модель:
@@ -3076,6 +3097,15 @@ def build_parser() -> argparse.ArgumentParser:
                                   help="повторить для названных сигналов (номера через запятую) по полосе "
                                        "пересчётов")
     p_enqueue_scores.set_defaults(func=cmd_enqueue_signal_scores)
+
+    p_feedback_slice = sub.add_parser(
+        "feedback-slice",
+        help="шаг планировщика «недельный срез» контура ОС: разбор ОС по отметкам с прошлого среза в день и час из "
+             "настроек контура",
+    )
+    p_feedback_slice.add_argument("--now", action="store_true",
+                                  help="срез сейчас, вне расписания (как кнопка «собрать сейчас»)")
+    p_feedback_slice.set_defaults(func=cmd_feedback_slice)
 
     p_otbor_materials = sub.add_parser(
         "otbor-materials",
