@@ -104,6 +104,12 @@ def category_code(value: Any) -> str | None:
     raise RuleProblem("категория: бизнес, технология или без категории")
 
 
+def category_of(value: Any) -> str | None:
+    """Категория сигнала (код или подпись во входе агента) → категория правила; другое или «не определено»: None."""
+    text = " ".join(str(value or "").split()).casefold()
+    return next((code for code, label in CATEGORIES.items() if text in (code, label)), None)
+
+
 def search_terms(text: str) -> list[str]:
     """Подсказка поиска: термины через «;», каждый: несколько слов без ссылок, сайтов, запретов и указаний.
     RuleProblem: свободный текст (граница О-7)."""

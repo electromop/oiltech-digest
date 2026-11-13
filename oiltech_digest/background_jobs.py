@@ -465,14 +465,11 @@ def _run_feedback_review(payload: dict[str, Any], job_id: int) -> dict[str, Any]
 
 
 def _run_rule_check(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
-    """Автопроверка правила эксперта (#190) в местном контуре: как разбор ОС."""
+    """Автопроверка правила эксперта (#190) в местном контуре."""
     from oiltech_digest import rule_check
 
-    repository.update_background_job_progress(job_id, 20)
     result = rule_check.process_payload(rule_check.build_payload(payload))
-    applied = rule_check.apply_result(result, job_id=job_id, job_payload=payload)
-    repository.update_background_job_progress(job_id, 95)
-    return {"rule_check": True, "applied": applied}
+    return {"rule_check": True, "applied": rule_check.apply_result(result, job_id=job_id, job_payload=payload)}
 
 
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:

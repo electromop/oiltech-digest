@@ -16,7 +16,6 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 from oiltech_digest import config, feedback_changes, feedback_review_rules, feedback_settings
-from oiltech_digest.colleague_materials import VERDICTS
 from oiltech_digest.db import connection, feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, PROPOSAL, STALE
 from oiltech_digest.processing.external_ai import StopRequested
@@ -35,7 +34,7 @@ _TEXT_CHARS = 4000
 _COMPANY_CHARS, _COMPANIES = 120, 10
 _DATE_RE = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?")
 # Оценка шкалы коротко, как в списке вердиктов материалов коллег (он сверен с формой ОС тестом).
-_VERDICT_RU = {code: short for code, short, _full in VERDICTS}
+_VERDICT_RU = feedback_review_rules.VERDICT_RU
 # Цитата: не короче стольких знаков. Подпись оценки («Наблюдать») цитатой служит только изменениям, которые от оценки и
 # идут: категория («Не тот блок»), «Дубль», уборка («Не релевантно»); прочим полям нужен текст отметки.
 _QUOTE_MIN = 4
@@ -473,9 +472,7 @@ def _mark_text(mark: dict[str, Any], *, verdict: bool) -> str:
         None if undone else mark.get("corrected_title"), None if undone else mark.get("corrected_thesis")) if part)
 
 
-def _plain(value: str) -> str:
-    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").replace("«", "\"").replace("»", "\"")
-                    .casefold().split())
+_plain = feedback_review_rules.plain
 
 
 def _usage(row: dict[str, Any]) -> dict[str, Any] | None:

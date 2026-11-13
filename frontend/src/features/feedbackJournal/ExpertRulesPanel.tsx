@@ -1,5 +1,6 @@
 import type { ExpertRulesOverview } from "../../api/feedbackJournal";
 import { formatMoment } from "./JournalEntryCard";
+import { ruleWhere } from "./RuleProposalView";
 
 // Правила эксперта по агентам (#190, ADR 0007): действующая версия набора каждого агента, её правила и прежние версии.
 // Видят все допущенные; откатить действующую версию к прежней может администратор (флаг can_rollback от сервера).
@@ -31,10 +32,7 @@ export function ExpertRulesPanel({ rules, busy, onRollback }: Props) {
             <ol className="journalLines">
               {agent.rules.map((rule) => (
                 <li key={rule.id}>
-                  <span className="metaText">
-                    {[rule.step_label, rule.category_label ? `категория «${rule.category_label}»` : null,
-                      rule.topic ? `тема «${rule.topic}»` : null].filter(Boolean).join(" · ")}:{" "}
-                  </span>
+                  <span className="metaText">{ruleWhere(rule)}: </span>
                   {rule.text}
                   <span className="metaText"> · №{rule.id}, {rule.approved_by ?? "без имени"}, {formatMoment(rule.approved_at)}</span>
                 </li>

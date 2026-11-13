@@ -60,13 +60,13 @@ const settings = {
   values: { slice_weekday: "1", slice_time: "09:00", card_badge: true, monthly_ceiling_usd: 50 },
   fields: [
     { key: "slice_weekday", label: "День недельного среза", kind: "choice", default: "1", low: null, high: null,
-      later: false, choices: [{ value: "1", label: "понедельник" }, { value: "2", label: "вторник" }] },
+      choices: [{ value: "1", label: "понедельник" }, { value: "2", label: "вторник" }] },
     { key: "slice_time", label: "Время недельного среза, МСК", kind: "time", default: "09:00", low: null, high: null,
-      later: false, choices: [] },
+      choices: [] },
     { key: "card_badge", label: "Значок «ждёт решения в журнале» на карточке", kind: "bool", default: true, low: null,
-      high: null, later: false, choices: [] },
+      high: null, choices: [] },
     { key: "monthly_ceiling_usd", label: "Потолок расходов контура в месяц, $", kind: "number", default: 50, low: 0,
-      high: 10000, later: false, choices: [] },
+      high: 10000, choices: [] },
   ],
   can_edit: true,
 };

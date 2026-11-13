@@ -22,6 +22,7 @@ from oiltech_digest.processing.openai_client import AIResponse
 from tests.expert_rules_support import RecordingModel, approved, proposal
 from tests.otbor_radar_support import SearchModel, event
 from tests.otbor_support import answer, api_request, api_send, article, decide, reject
+from tests.card_pipeline_support import pipeline  # noqa: F401: фикстура
 from tests.otbor_support import contour  # noqa: F401: фикстура
 from tests.signal_card_support import DRILLING, admin, run_worker, tag, user  # noqa: F401: фикстуры
 
@@ -113,7 +114,7 @@ def test_otbor_rule_check_counts_toward_and_away_and_takes_the_answer_without_th
     assert (check["advice"], check["little_data"], check["baseline"]) == (
         "согласовать", False, {"accepted": 3, "computed": 1})
     assert {sample["direction"] for sample in check["samples"]} == {"toward", "away"}
-    assert _entry(admin, action_id)["confirm"] == []
+    assert _entry(admin, action_id)["confirm_reasons"] == []
     usage = _usage("rule_check")
     assert {row[0] for row in usage} == set(signals.values())
     assert all(float(row[1]) > 0 and row[2]["agent"] == "otbor" for row in usage)
@@ -168,7 +169,7 @@ def test_dedup_check_on_few_pairs_shows_little_data_and_needs_a_separate_confirm
     assert (check["rows"], check["toward"], check["away"], check["advice"], check["little_data"]) == (
         2, 1, 1, "мало данных: 2", True)
     assert sorted(judge.calls) == [False, False, True, True]
-    assert _entry(admin, action_id)["confirm"] == ["мало данных: 2"]
+    assert _entry(admin, action_id)["confirm_reasons"] == ["мало данных: 2"]
     refused = api_request("POST", f"/api/feedback-journal/proposals/{action_id}/decision", admin,
                           {"decision": "approve"})
     assert (refused.status_code, refused.json()["detail"]) == (409, "нужно отдельное подтверждение: мало данных: 2")
@@ -196,7 +197,7 @@ def test_summary_check_shows_before_and_after_next_to_the_expert_text_without_a_
     assert check["advice"] == "числа нет: сравните «было / стало» с текстом эксперта"
     assert sorted((one["expert"], one["before"], one["after"]) for one in check["samples"]) == sorted(
         (expert[title], f"Было: {title}", f"Стало: {title}") for title in titles)
-    assert _entry(admin, action_id)["confirm"] == []
+    assert _entry(admin, action_id)["confirm_reasons"] == []
 
 
 def test_search_check_compares_a_repeated_search_with_hints_and_without_against_the_top_list(user, admin, contour,
@@ -248,7 +249,7 @@ def test_ceiling_postpones_checks_until_next_month_and_the_admin_sees_a_warning(
     assert rule_check.check_proposal(action_id)["status"] == "postponed"
     entry = _entry(admin, action_id)
     assert entry["check"]["status"] == "postponed" and "потолок расходов контура" in entry["check"]["note"]
-    assert entry["confirm"] == ["автопроверка отложена потолком расходов"]
+    assert entry["confirm_reasons"] == ["автопроверка отложена потолком расходов"]
     assert "Потолок расходов контура ОС" in api_send("GET", "/api/feedback-journal/overview", admin, None)["warning"]
 
     # Тот же месяц: проверка ждёт; следующий месяц: шаг планировщика ставит её снова.
@@ -303,3 +304,100 @@ def test_seeded_stage_hints_proposal_is_first_in_the_journal_and_the_scheduler_c
     rule_check.scheduler_step(datetime.now(MSK), monthly=False)
     assert _entry(admin, seed["id"])["check"]["status"] in ("queued", "done")
     assert rule_check.scheduler_step(datetime.now(MSK), monthly=False)["proposals"] == []
+
+
+def test_otbor_check_compares_the_reject_reason_named_in_the_noise_mark(user, admin, contour, monkeypatch):
+    title = "Реклама нового сервиса Halliburton"
+    article_id = article(title, "Halliburton рассказывает о преимуществах своего сервиса без события и цифр.")
+    decide(monkeypatch, {title: answer()})
+    # «Шум» администратора с причиной справочника: эталон «не брать» с этой причиной («решение и причина», #133).
+    _mark(admin, _signal(article_id), verdict="reject", reason="Корпоративное и реклама, события нет")
+    _settings(admin, little_data_rows=1)
+    action_id = proposal("otbor", "decision", RULE)
+
+    model = CheckModel({title: (answer(), reject("corporate_promo"))})
+    _check(monkeypatch, model, action_id)
+
+    check = _entry(admin, action_id)["check"]
+    assert (check["rows"], check["toward"], check["away"]) == (1, 1, 0)
+    [sample] = check["samples"]
+    assert (sample["expected"], sample["before"], sample["after"]) == (
+        "reject:corporate_promo", "accept:None", "reject:corporate_promo")
+    # Принятое решение той же инструкции: прогон без правила не оплачивается.
+    assert [call["with"] for call in model.calls] == [True]
+
+
+def test_search_run_that_failed_is_not_counted_as_not_found(user, admin, contour, monkeypatch):
+    tag(DRILLING)
+    title = "Бурение на обсадной колонне в Омане"
+    article_id = article(title, f"{title}. Подробности события.")
+    decide(monkeypatch, {title: answer(category="technology")})
+    signal_id = _signal(article_id)
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE signals SET theme = %s WHERE id = %s", (DRILLING, signal_id))
+        conn.commit()
+    _mark(admin, signal_id, verdict="strong_signal")
+    action_id = proposal("search", "topics", "бурение на обсадной колонне", topic=DRILLING)
+
+    class Broken(SearchModel):
+        def research_json(self, instructions, user_input, schema, **kwargs):
+            from oiltech_digest.processing.openai_client import AIClientError
+
+            self.calls.append(user_input)
+            if "бурение на обсадной колонне" not in user_input:
+                raise AIClientError("поиск недоступен")
+            return super().research_json(instructions, user_input, schema, **kwargs)
+
+    monkeypatch.setattr(signal_research, "RESEARCH_RETRY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(signal_research, "make_client", lambda offline=False: Broken([event(title, "https://x.ex/a")]))
+    _check(monkeypatch, None, action_id)
+
+    check = _entry(admin, action_id)["check"]
+    assert (check["rows"], check["toward"], check["away"], check["little_data"]) == (0, 0, 0, True)
+    assert "поиск не ответил" in check["note"]
+
+
+def test_card_and_scores_checks_measure_the_field_and_the_band_against_accepted_answers(
+        user, admin, pipeline, monkeypatch):
+    from oiltech_digest.db import feedback_store
+    from tests.card_pipeline_support import accepted, card_answer, even, fill_cards, run_scores, scores
+
+    title = "Контракт Weatherford в Омане"
+    text = "Weatherford получила контракт на бурение 274 скважин в Омане. SLB подписала контракт 24 сентября 2026."
+    ids, _ = accepted(monkeypatch, {title: answer(industry="oilfield_services")}, {title: text})
+    fill_cards(monkeypatch, {title: card_answer(maturity="прототип")})
+    run_scores(monkeypatch, {title: scores(even("business", 70))})
+    signal_id = _signal(ids[title])
+    _settings(admin, little_data_rows=1)
+
+    # Согласованное улучшение карточки: стадия «пилот/ОПИ» вместо «прототип» агента (эталон «Карточки»).
+    from oiltech_digest import feedback_review
+
+    card = feedback_store.review_cards([signal_id])[signal_id]
+    change = feedback_review._change("technology_maturity", {"technology_maturity": "пилот/ОПИ"}, card,
+                                     quote="уже пилот", event_ids=[])
+    improvement = feedback_store.create_action("signal_proposal", "pending", signal_id=signal_id,
+                                               details={"changes": [change]})
+    api_send("POST", f"/api/feedback-journal/proposals/{improvement}/decision", admin, {"decision": "approve"})
+    stage_rule = proposal("card", "maturity", "Испытание у оператора: пилот/ОПИ.")
+    card_model = CheckModel({title: (card_answer(maturity="прототип"), card_answer(maturity="пилот/ОПИ"))},
+                            rule="Испытание у оператора")
+    from oiltech_digest import signal_card
+
+    monkeypatch.setattr(signal_card, "make_client", lambda: card_model)
+    _check(monkeypatch, card_model, stage_rule)
+    check = _entry(admin, stage_rule)["check"]
+    assert (check["rows"], check["toward"], check["away"], check["baseline"]) == (
+        1, 1, 0, {"accepted": 1, "computed": 0})
+
+    # Оценка администратора «Сильный сигнал» при ступени «полезный»: эталон баллов.
+    _mark(admin, signal_id, verdict="strong_signal")
+    band_rule = proposal("scores", "criteria", "Контракт на сотни скважин: сильный сигнал.", category="business")
+    scores_model = CheckModel({title: (scores(even("business", 70)), scores(even("business", 96)))},
+                              rule="сотни скважин")
+    _check(monkeypatch, scores_model, band_rule)
+    check = _entry(admin, band_rule)["check"]
+    assert (check["rows"], check["toward"], check["away"]) == (1, 1, 0)
+    [sample] = check["samples"]
+    assert (sample["expected"], sample["before"], sample["after"]) == ("strong", "useful", "strong")
+    assert [call["with"] for call in scores_model.calls] == [True]

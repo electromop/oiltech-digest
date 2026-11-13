@@ -293,4 +293,5 @@ def test_old_nl_build_does_not_get_the_review_job_and_the_slice_shows_it_failed(
 
     [failed] = _slices(admin)
     assert failed["status"] == "failed"
-    assert "нужен контракт 12" in failed["note"]
+    # С вызовом о правилах эксперта (#190) разбору ОС нужен контракт 13: сборка 12 сделала бы срез без него, молча.
+    assert "нужен контракт 13" in failed["note"]

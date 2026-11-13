@@ -69,13 +69,12 @@ def rules_by_ids(rule_ids: Sequence[int], *, conn=None) -> dict[int, dict[str, A
     return {int(row["id"]): row for row in rows}
 
 
-def payload_block(agent: str, *, priority: bool | None = None) -> dict[str, Any]:
-    """Блок задачи агента: действующий набор (версия и правила). priority: «правило эксперта главнее инструкции»
-    (настройка контура); None: из настроек."""
-    if priority is None:
-        from oiltech_digest import feedback_settings
+def payload_block(agent: str) -> dict[str, Any]:
+    """Блок задачи агента: действующий набор (версия и правила) и настройка контура «правило эксперта главнее
+    основной инструкции»."""
+    from oiltech_digest import feedback_settings
 
-        priority = bool(feedback_settings.current()["expert_rule_priority"])
+    priority = bool(feedback_settings.current()["expert_rule_priority"])
     found = current_set(agent)
     if found is None:
         return expert_rules.block(agent, 0, [], priority=priority)
@@ -173,3 +172,38 @@ def rollback(set_id: int, *, conn) -> dict[str, Any]:
             "UPDATE expert_rule_sets SET current = TRUE WHERE id = %s RETURNING *", (row["previous_id"],)).fetchone()
     return {"agent": row["agent"], "from_version": int(row["version"]),
             "to_version": int(previous["version"]) if previous else 0}
+
+
+# --- Вход разбора ОС о правилах ------------------------------------------------------------------
+
+
+def window_marks(since, until, *, limit: int) -> list[dict[str, Any]]:
+    """Отметки окна похожих отметок по всем карточкам (оценка, обоснование, комментарий, правки), с ролью автора, но
+    без имени, и полями карточки, о которой они: новые сверху."""
+    from oiltech_digest.db.feedback_store import JOURNAL_MARK_SQL
+
+    with connection.get_connection() as conn:
+        conn.execute("SET LOCAL jit = off")
+        return conn.cursor(row_factory=dict_row).execute(
+            f"""
+            SELECT sfe.id, sfe.signal_id, sfe.created_at, sfe.verdict, sfe.reason, sfe.comment, sfe.corrected_title,
+                   sfe.corrected_thesis, sfe.correction_undone_at, u.role, COALESCE(s.title_ru, s.title) AS card_title,
+                   s.signal_category, s.theme, s.score_band, s.otbor_decision, s.technology_maturity
+            FROM signal_feedback_events sfe
+            LEFT JOIN users u ON u.id = sfe.user_id
+            JOIN signals s ON s.id = sfe.signal_id
+            WHERE sfe.created_at > %s AND sfe.created_at <= %s AND {JOURNAL_MARK_SQL}
+            ORDER BY sfe.created_at DESC, sfe.id DESC
+            LIMIT %s
+            """, (since, until, int(limit))).fetchall()
+
+
+def taken_rule_texts(proposal_kind: str) -> list[tuple[str, str]]:
+    """(агент, текст) правил, которые уже действовали или уже предложены (ждут решения, убраны, применены): их не
+    предлагают снова."""
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT details->'rule'->>'agent', details->'rule'->>'text' FROM feedback_actions"
+            " WHERE kind = %s AND status IN ('pending', 'dismissed', 'applied')"
+            " UNION SELECT agent, text FROM expert_rules", (proposal_kind,)).fetchall()
+    return [(str(agent or ""), str(text)) for agent, text in rows if text]

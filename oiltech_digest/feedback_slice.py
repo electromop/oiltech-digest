@@ -14,13 +14,13 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from oiltech_digest import feedback_journal, feedback_review, feedback_settings
+from oiltech_digest import feedback_journal, feedback_review, feedback_settings, rule_check
 from oiltech_digest.db import feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, SAMPLE_TASK
 from oiltech_digest.feed_window import MSK
 
 # Стадии расхода контура ОС под потолком: разбор ОС и автопроверка правил эксперта (#190).
-STAGES = (feedback_review.STAGE, "rule_check")
+STAGES = (feedback_review.STAGE, rule_check.STAGE)
 SLICE_AUTHOR = "Недельный срез"
 _SAMPLE_POOL_DAYS = 31
 
@@ -36,8 +36,6 @@ def _now() -> datetime:
 def scheduler_step(now: datetime | None = None) -> dict[str, Any]:
     """Шаг планировщика: «устарело» у предложений без решения; в день и после часа среза по настройке: срез этой
     недели, если его ещё не было; в первый такой день месяца: задача выборки отклонённого."""
-    from oiltech_digest import rule_check
-
     now = now or _now()
     settings = feedback_settings.current()
     result: dict[str, Any] = {"expired": feedback_journal.expire_stale()}

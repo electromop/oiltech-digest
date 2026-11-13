@@ -36,14 +36,19 @@ export function valueLabel(value: unknown): string {
   return VALUE_LABELS[text] ?? text;
 }
 
+// Где действует правило: шаг, категория, тема поиска (строка журнала и набор правил агента).
+export function ruleWhere(rule: JournalRule): string {
+  return [rule.step_label, rule.category_label ? `категория «${rule.category_label}»` : null,
+    rule.topic ? `тема «${rule.topic}»` : null].filter(Boolean).join(" · ");
+}
+
 export function RuleSummary({ rule, ruleKind, replaced, proposed }: {
   rule: JournalRule;
   ruleKind?: string;
   replaced?: Array<JournalRule & { id: number }>;
   proposed?: JournalRule | null;
 }) {
-  const where = [rule.step_label, rule.category_label ? `категория «${rule.category_label}»` : null,
-    rule.topic ? `тема «${rule.topic}»` : null].filter(Boolean).join(" · ");
+  const where = ruleWhere(rule);
   return (
     <div className="ruleSummary" aria-label="Правило">
       <p className="metaText">{RULE_KINDS[ruleKind ?? "new"] ?? ruleKind} для агента {rule.agent_label}: {where}</p>
@@ -72,7 +77,7 @@ export function CheckSummary({ check }: { check: JournalCheck | null | undefined
   return (
     <div className="ruleCheck" aria-label="Автопроверка">
       <p>
-        <span className={`miniPill ${check.advice === "согласовать" ? "ok" : "warn"}`}>
+        <span className={`miniPill ${check.advises_approval ? "ok" : "warn"}`}>
           {check.advice ?? "совета нет"}
         </span>
         {check.no_count ? null : (

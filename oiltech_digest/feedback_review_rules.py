@@ -17,12 +17,10 @@ import re
 from datetime import datetime
 from typing import Any
 
-from psycopg.rows import dict_row
-
 from oiltech_digest import expert_rules, feedback_rules, feedback_settings
 from oiltech_digest.colleague_materials import VERDICTS
 from oiltech_digest.db import connection, expert_rules_store
-from oiltech_digest.db.feedback_store import JOURNAL_MARK_SQL, RULE_PROPOSAL
+from oiltech_digest.db.feedback_store import RULE_PROPOSAL
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +28,12 @@ PROMPT_VERSION = "2026-11-13.1"
 OUTPUT_TOKENS = 3000
 _MARKS_LIMIT = 400
 _TEXT_CHARS = 600
-_VERDICT_RU = {code: short for code, short, _full in VERDICTS}
-# Явная просьба в тексте отметки: правило по одной отметке (настройка «правило по одной явной просьбе»).
-_EXPLICIT = re.compile(r"(?<!\w)(всегда|никогда|переводи\w*|не\s+путай\w*|не\s+путать|называ\w*|считать|считай|пиши"
-                       r"|писать|относи\w*)(?!\w)", re.IGNORECASE)
+# Оценка шкалы коротко (у разбора ОС по сигналам: та же таблица).
+VERDICT_RU = {code: short for code, short, _full in VERDICTS}
+# Явная просьба в тексте отметки: правило по одной отметке (настройка «правило по одной явной просьбе»). Только
+# указания («всегда…», «переводить X как Y», «не путать»), а не любые формы глаголов («относится», «называется»).
+_EXPLICIT = re.compile(r"(?<!\w)(всегда|никогда|переводить|переводи|не\s+переводить|не\s+переводи|называть|называй"
+                       r"|не\s+путать|не\s+путай|считать|считай|писать|пиши|относить|относи)(?!\w)", re.IGNORECASE)
 _BAND_RU = {"strong": "сильный", "useful": "полезный", "watch": "наблюдать", "weak": "слабый"}
 _DECISION_RU = {"accept": "брать", "reject": "не брать"}
 
@@ -56,10 +56,10 @@ def _moment(value: Any) -> datetime:
 def build(since: datetime, until: datetime, window_from: datetime | None) -> dict[str, Any] | None:
     """Вход вызова о правилах: отметки окна по всем карточкам (новые помечены), действующие правила агентов, шаги,
     категории и темы поиска. Отметок нет: вызова нет."""
-    marks = _window_marks(since, until)
+    marks = expert_rules_store.window_marks(since, until, limit=_MARKS_LIMIT)
     if not marks:
         return None
-    from oiltech_digest.rule_check_rows import VERDICT_BAND
+    from oiltech_digest.db.rule_check_rows import VERDICT_BAND
 
     current = expert_rules_store.current_sets()
     settings = feedback_settings.current()
@@ -75,25 +75,6 @@ def build(since: datetime, until: datetime, window_from: datetime | None) -> dic
     }
 
 
-def _window_marks(since: datetime, until: datetime) -> list[dict[str, Any]]:
-    """Отметки окна с текстом или оценкой (без имён авторов: роль) и карточка, о которой они: новые сверху."""
-    with connection.get_connection() as conn:
-        conn.execute("SET LOCAL jit = off")
-        return conn.cursor(row_factory=dict_row).execute(
-            f"""
-            SELECT sfe.id, sfe.signal_id, sfe.created_at, sfe.verdict, sfe.reason, sfe.comment, sfe.corrected_title,
-                   sfe.corrected_thesis, sfe.correction_undone_at, u.role, COALESCE(s.title_ru, s.title) AS card_title,
-                   s.title_ru AS model_title, s.summary AS model_summary, s.signal_category, s.theme, s.score_band,
-                   s.otbor_decision, s.technology_maturity
-            FROM signal_feedback_events sfe
-            LEFT JOIN users u ON u.id = sfe.user_id
-            JOIN signals s ON s.id = sfe.signal_id
-            WHERE sfe.created_at > %s AND sfe.created_at <= %s AND {JOURNAL_MARK_SQL}
-            ORDER BY sfe.created_at DESC, sfe.id DESC
-            LIMIT %s
-            """, (since, until, _MARKS_LIMIT)).fetchall()
-
-
 def _mark(row: dict[str, Any], window_from: datetime | None, bands: dict[str, str]) -> dict[str, Any]:
     undone = row["correction_undone_at"] is not None
     admin = row["role"] == "admin"
@@ -102,7 +83,7 @@ def _mark(row: dict[str, Any], window_from: datetime | None, bands: dict[str, st
         "id": int(row["id"]), "signal_id": int(row["signal_id"]), "day": str(row["created_at"])[:10],
         "new": window_from is None or row["created_at"] > window_from,
         "role": "администратор" if admin else "участник" if row["role"] else "автор материала",
-        "verdict": _VERDICT_RU.get(row["verdict"] or "", row["verdict"] or ""), "verdict_code": row["verdict"],
+        "verdict": VERDICT_RU.get(row["verdict"] or "", row["verdict"] or ""), "verdict_code": row["verdict"],
         "reason": _cut(row["reason"]), "comment": _cut(row["comment"]),
         "proposed_title": "" if undone else _cut(row["corrected_title"]),
         "proposed_summary": "" if undone else _cut(row["corrected_thesis"]),
@@ -111,8 +92,10 @@ def _mark(row: dict[str, Any], window_from: datetime | None, bands: dict[str, st
                  "theme": row["theme"] or "", "stage": row["technology_maturity"] or "",
                  "band": _BAND_RU.get(row["score_band"] or "", ""),
                  "decision": _DECISION_RU.get(row["otbor_decision"] or "", "")},
-        # Расхождение оценки администратора с баллом платформы: материал правила для баллов (решение 6 гриля).
-        "band_gap": bool(admin and expected and row["score_band"] and expected != row["score_band"]),
+        # Расхождение оценки администратора с баллом платформы: материал правила для баллов (решение 6 гриля);
+        # «Оценка завышена» само и есть расхождение.
+        "band_gap": bool(admin and row["score_band"] and (row["verdict"] == "overrated"
+                                                          or (expected and expected != row["score_band"]))),
     }
 
 
@@ -300,7 +283,7 @@ def checked(answer: Any, item: dict[str, Any]) -> tuple[list[dict[str, Any]], li
         except expert_rules.RuleProblem as exc:
             problems.append(f"правило «{str(one.get('text') or '')[:60]}»: {exc}")
             continue
-        key = (proposal["rule"]["agent"], _plain(proposal["rule"]["text"]))
+        key = (proposal["rule"]["agent"], plain(proposal["rule"]["text"]))
         if key in seen or key in taken:
             problems.append(f"правило «{proposal['rule']['text'][:60]}»: уже действует или уже предложено")
             continue
@@ -324,7 +307,9 @@ def _proposal(one: dict[str, Any], marks: dict[int, dict[str, Any]], current: di
         raise expert_rules.RuleProblem("цитаты нет в тексте отметок")
     if len(cited) < threshold and not (explicit and _EXPLICIT.search(quote)):
         raise expert_rules.RuleProblem(f"отметок меньше порога ({threshold}) и нет явной просьбы")
-    kind = str(one.get("kind") or "new")
+    kind = str(one.get("kind") or "")
+    if kind not in feedback_rules.RULE_KINDS:
+        raise expert_rules.RuleProblem(f"вид правила «{kind[:20]}» не из списка: новое, уточнение или сведение")
     replaces = sorted({int(number) for number in one.get("replaces") or [] if isinstance(number, int)})
     agent_rules = current.get(rule["agent"]) or {}
     if any(number not in agent_rules for number in replaces):
@@ -339,26 +324,23 @@ def _proposal(one: dict[str, Any], marks: dict[int, dict[str, Any]], current: di
 
 
 def _quoted(quote: str, mark: dict[str, Any], agent: str) -> bool:
-    wanted = _plain(quote).strip(" .,;:!?\"'")
+    wanted = plain(quote).strip(" .,;:!?\"'")
     if len(wanted) < 4:
         return False
     parts = [mark.get("reason"), mark.get("comment"), mark.get("proposed_title"), mark.get("proposed_summary")]
     if agent == "scores":
         # Правило для баллов из расхождения оценки с баллом: цитатой служит и сама оценка.
         parts.append(mark.get("verdict"))
-    return any(wanted in _plain(part) for part in parts if part)
+    return any(wanted in plain(part) for part in parts if part)
 
 
 def _taken_texts() -> set[tuple[str, str]]:
-    """Правила, которые уже действуют или уже предложены (ждут решения или убраны): их не предлагают снова."""
-    with connection.get_connection() as conn:
-        rows = conn.execute(
-            f"SELECT details->'rule'->>'agent', details->'rule'->>'text' FROM feedback_actions"
-            f" WHERE kind = '{RULE_PROPOSAL}' AND status IN ('pending', 'dismissed', 'applied')"
-            " UNION SELECT agent, text FROM expert_rules").fetchall()
-    return {(str(agent or ""), _plain(text)) for agent, text in rows if text}
+    """Правила, которые уже действуют или уже предложены (ждут решения, убраны): их не предлагают снова."""
+    return {(agent, plain(text)) for agent, text in expert_rules_store.taken_rule_texts(RULE_PROPOSAL)}
 
 
-def _plain(value: Any) -> str:
+def plain(value: Any) -> str:
+    """Текст для сравнения: без регистра, «ё» как «е», кавычки-ёлочки как прямые, пробелы схлопнуты (и у разбора ОС
+    по сигналам)."""
     return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").replace("«", "\"").replace("»", "\"")
                     .casefold().split())

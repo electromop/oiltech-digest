@@ -80,6 +80,8 @@ export type JournalCheck = {
   unchanged: number;
   advice: string | null;
   note: string | null;
+  // Совет «согласовать» (по нему цвет совета на экране, а не по тексту).
+  advises_approval: boolean;
   little_data: boolean;
   no_count: boolean;
   baseline: { accepted: number; computed: number } | null;
@@ -133,7 +135,7 @@ export type JournalEntry = {
   replaced?: Array<JournalRule & { id: number }>;
   check?: JournalCheck | null;
   // Почему согласование требует отдельного подтверждения (мало данных, перевес «от эталона», проверки нет).
-  confirm?: string[];
+  confirm_reasons?: string[];
   version?: number | null;
   can_rollback?: boolean;
   can_recheck?: boolean;
@@ -186,7 +188,6 @@ export type ContourSettingField = {
   default: unknown;
   low: number | null;
   high: number | null;
-  later: boolean;
   choices: Array<{ value: string; label: string }>;
 };
 

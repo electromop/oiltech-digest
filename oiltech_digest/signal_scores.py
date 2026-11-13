@@ -193,6 +193,13 @@ def model_criteria(criteria: list[dict[str, Any]], rubrics: dict[str, Any], prof
     return found
 
 
+def criteria_fingerprints(rubrics: dict[str, Any]) -> dict[str, str]:
+    """Отпечатки критериев профилей, как их сейчас видит модель: по ним автопроверка правил (#190) решает, годится ли
+    принятый балл как ответ «без правила»."""
+    return {profile: _fingerprint(model_criteria(repository.list_enabled_scoring_criteria(profile), rubrics, profile))
+            for profile in signal_scores_store.PROFILES.values()}
+
+
 def _fingerprint(seen: list[dict[str, Any]]) -> str:
     """Отпечаток критериев так, как их видит модель (model_criteria): имена, описания критериев без линейки, линейки.
     Веса, ключевые слова и описания критериев с линейкой в него не входят: модель их не видит."""
@@ -357,7 +364,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             applied["errors"].append({"signal_id": signal_id, "error": problem})
             continue
         recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
-                  "expert_rules_version": rules_version,
+                  "expert_rules_version": rules_version, "criteria_fingerprint": sent.get(item["profile"]),
                   "model": _model_name(row), "rubrics_version": rubrics["version"], "totals": values["totals"],
                   "keywords": bool(config.SIGNAL_SCORES_KEYWORDS), "named_customer": values["named_customer"],
                   "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id}

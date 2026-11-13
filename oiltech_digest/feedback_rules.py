@@ -18,9 +18,10 @@ from oiltech_digest import expert_rules
 from oiltech_digest.db import connection, expert_rules_store, feedback_store, rule_check_store
 from oiltech_digest.db.expert_rules_store import RulesRefused
 from oiltech_digest.db.feedback_store import (APPLIED, APPLIED_STATUS, APPROVED, DECISION, DISMISSED, MODIFIED, PENDING,
-                                              RULE_PROPOSAL, SET_CHECK, STALE, UNDO, UNDONE)
+                                              RULE_PROPOSAL, STALE, UNDO, UNDONE)
 
 RULE_KINDS = {"new": "новое правило", "refine": "уточнение правила", "merge": "сведение правил"}
+UNCHECKED_WORDING = "новая формулировка не проходила автопроверку"
 
 
 def topics() -> list[str]:
@@ -72,14 +73,14 @@ def confirmation(check: dict[str, Any] | None) -> list[str]:
                  "failed": "не выполнена"}.get(check["status"], check["status"])
         return [f"автопроверка {state}"]
     details = check.get("details") or {}
+    if details.get("little_data"):
+        return [f"мало данных: {int(check['row_count'])}"] + (
+            [f"от эталона {int(check['away'])}, к эталону {int(check['toward'])}"]
+            if int(check["away"]) > int(check["toward"]) else [])
     if details.get("no_count"):
         return []
-    reasons = []
-    if details.get("little_data"):
-        reasons.append(f"мало данных: {int(check['row_count'])}")
-    if int(check["away"]) > int(check["toward"]):
-        reasons.append(f"от эталона {int(check['away'])}, к эталону {int(check['toward'])}")
-    return reasons
+    return ([f"от эталона {int(check['away'])}, к эталону {int(check['toward'])}"]
+            if int(check["away"]) > int(check["toward"]) else [])
 
 
 # --- Решение администратора ----------------------------------------------------------------------
@@ -118,6 +119,9 @@ def decide(proposal_id: int, decision: str, *, author: str | None, user_id: int 
                 raise JournalRefused("новая формулировка та же, что в предложении: согласуйте его")
         check = rule_check_store.latest([proposal["id"]]).get(int(proposal["id"]))
         reasons = confirmation(check)
+        if status == MODIFIED:
+            # Проверка мерила исходную формулировку: новую согласовать можно, но только явно.
+            reasons.append(UNCHECKED_WORDING)
         if reasons and not confirm:
             raise JournalRefused("нужно отдельное подтверждение: " + "; ".join(reasons))
         try:
@@ -198,7 +202,7 @@ def entry(row: dict[str, Any], own_steps: list[dict[str, Any]], basis: list[dict
     return {
         **base, "rule": describe(modified or rule), "proposed_rule": describe(rule) if modified else None,
         "rule_kind": details.get("rule_kind") or "new", "replaced": details.get("replaced") or [],
-        "check": check_view(check), "confirm": confirmation(check) if row["status"] == PENDING else [],
+        "check": check_view(check), "confirm_reasons": confirmation(check) if row["status"] == PENDING else [],
         "version": int(applied_set["version"]) if applied_set else None, "basis": basis, "path": path,
         "can_decide": is_admin and row["status"] == PENDING,
         "can_rollback": is_admin and applied_set is not None and bool(applied_set["current"]),
@@ -228,6 +232,7 @@ def check_view(check: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"id": int(check["id"]), "status": check["status"], "mode": check["mode"], "rows": int(check["row_count"]),
             "toward": int(check["toward"]), "away": int(check["away"]), "unchanged": int(check["unchanged"]),
             "advice": check.get("advice"), "note": check.get("note"),
+            "advises_approval": check["status"] == rule_check_store.DONE and check.get("advice") == "согласовать",
             "little_data": bool(details.get("little_data")), "no_count": bool(details.get("no_count")),
             "baseline": details.get("baseline"), "samples": details.get("samples") or [],
             "search": details.get("search"), "finished_at": check["finished_at"].isoformat()

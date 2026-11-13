@@ -125,3 +125,25 @@ def record_usage(job_id: int | None, rows: Sequence[dict[str, Any]], *, stage: s
                 (job_id, row.get("signal_id"), stage, row.get("model"), row["input_tokens"], row["output_tokens"],
                  row["input_tokens"] + row["output_tokens"], row["cost_usd"], Json(recipe)))
         conn.commit()
+
+
+def pair_nodes(signal_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
+    """Карточки пар «Дедупа», как их видит судья (signal_dedup.pair_prompt): заголовки, тема, суть, компании-участники
+    и ссылки (у сигнала ленты: его статья)."""
+    ids = sorted({int(one) for one in signal_ids})
+    if not ids:
+        return {}
+    with connection.get_connection() as conn:
+        rows = conn.cursor(row_factory=dict_row).execute(
+            "SELECT s.id, s.title, s.title_ru, s.theme, s.summary, s.participants_json,"
+            " ARRAY(SELECT e.source_url FROM signal_evidence e WHERE e.signal_id = s.id AND e.source_url IS NOT NULL"
+            "       UNION SELECT a.url FROM articles a WHERE a.id = s.origin_article_id) AS urls"
+            " FROM signals s WHERE s.id = ANY(%s)", (ids,)).fetchall()
+    found = {}
+    for row in rows:
+        companies = [str(one.get("name")) for one in row["participants_json"] or [] if isinstance(one, dict)
+                     and one.get("name")]
+        found[int(row["id"])] = {"signal": {"title": row["title"], "title_ru": row["title_ru"], "theme": row["theme"],
+                                            "summary": row["summary"], "companies": companies},
+                                 "urls": [url for url in row["urls"] or [] if url]}
+    return found

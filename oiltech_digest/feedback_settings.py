@@ -39,8 +39,6 @@ class Setting:
     low: float | None = None
     high: float | None = None
     choices: tuple[tuple[str, str], ...] = ()
-    # Вступает в силу позже, с будущей частью контура: до тех пор только хранится (с #190 таких нет).
-    later: bool = False
 
 
 WEEKDAYS = (("1", "понедельник"), ("2", "вторник"), ("3", "среда"), ("4", "четверг"), ("5", "пятница"),
@@ -117,9 +115,9 @@ def save(changes: dict[str, Any], *, author: str | None) -> dict[str, Any]:
 
 
 def describe() -> list[dict[str, Any]]:
-    """Состав настроек для экрана: подпись, вид значения, пределы, варианты, умолчание и вступает ли в силу позже."""
+    """Состав настроек для экрана: подпись, вид значения, пределы, варианты и умолчание."""
     return [{"key": setting.key, "label": setting.label, "kind": setting.kind, "default": setting.default,
-             "low": setting.low, "high": setting.high, "later": setting.later,
+             "low": setting.low, "high": setting.high,
              "choices": [{"value": value, "label": label} for value, label in setting.choices]}
             for setting in SETTINGS]
 

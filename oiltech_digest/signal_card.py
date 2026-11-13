@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from oiltech_digest import card_return, config, event_dates, expert_rules, signal_themes, word_forms
-from oiltech_digest.db import repository, signal_card_store
+from oiltech_digest.db import expert_rules_store, repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
@@ -29,8 +29,7 @@ from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, U
                                              publication_day, publication_text)
 
 KIND = signal_card_store.KIND
-# Агент в правилах эксперта (#190, expert_rules.AGENTS).
-AGENT = "card"
+AGENT = "card"  # агент в правилах эксперта (#190, expert_rules.AGENTS)
 # Версия инструкции, в рецепте карточки: другая инструкция: другие карточки.
 PROMPT_VERSION = "2026-11-01.1"
 _OUTPUT_TOKENS = 1200
@@ -125,9 +124,7 @@ def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации с категорией, справочники, имена 13 тематик и
-    у каждой публикации: темы-кандидаты по ключам (#132); действующие правила эксперта агента (#190)."""
-    from oiltech_digest.db import expert_rules_store
-
+    у каждой публикации: темы-кандидаты по ключам (#132)."""
     tags = repository.list_enabled_tags()
     rows = signal_card_store.card_inputs(job_payload.get("signal_ids") or [])
     return {
@@ -194,10 +191,9 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 result["partial"] = True
                 break
         card = {"signal_id": item["signal_id"], "publication": item.get("publication")}
-        instructions = instructions_with_rules(dictionaries, themes, rules, category=item_category(item))
         try:
             response = client.complete_json(
-                instructions, _model_input(item), schema,
+                instructions_with_rules(dictionaries, themes, rules, item), _model_input(item), schema,
                 max_output_tokens=output_budget(_OUTPUT_TOKENS, payload.get("reasoning")),
                 model=model, reasoning_effort=payload.get("reasoning"),
             )
@@ -237,16 +233,10 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
 - why_important — одной фразой по-русски, почему сигнал важен нефтесервису."""
 
 
-def instructions_with_rules(dictionaries: dict[str, Any], themes: list[str], rules_block: Any = None, *,
-                            category: str | None = None) -> str:
-    """Инструкция со справочниками и правилами эксперта своей категории (#190): все шаги «Карточки» идут одним
-    вызовом. Правил нет: инструкция прежняя."""
-    return expert_rules.with_rules(_instructions(dictionaries, themes), rules_block, category=category)
-
-
-def item_category(item: dict[str, Any]) -> str | None:
-    """Категория сигнала во входе модели (подпись) → код категории правила."""
-    return next((code for code, label in CATEGORY_RU.items() if label == item.get("category")), None)
+def instructions_with_rules(dictionaries: dict[str, Any], themes: list[str], rules_block: Any, item: dict) -> str:
+    """Инструкция и правила эксперта категории сигнала (#190), все шаги одним вызовом; нет правил: прежняя."""
+    return expert_rules.with_rules(_instructions(dictionaries, themes), rules_block,
+                                   category=expert_rules.category_of(item.get("category")))
 
 
 def _instructions(dictionaries: dict[str, Any], themes: list[str]) -> str:
@@ -326,9 +316,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         stale = (f"справочники сменились после выдачи задачи ({result.get('dictionaries_version')} → "
                  f"{dictionaries.get('version')}): карточка не записана")
         return {"applied": 0, "errors": [{"signal_id": _signal_id(card), "error": stale} for card in cards]}
-    from oiltech_digest.db import expert_rules_store
-
-    rules_version = expert_rules_store.known_version(AGENT, result.get("expert_rules_version", 0))
+    rules_version = expert_rules_store.known_version(AGENT, result.get("expert_rules_version", 0))  # #190
     applied = 0
     errors: list[dict[str, Any]] = []
     returned: list[str] = []
@@ -345,8 +333,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             "agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
             "model": _model_name(card), "dictionaries_version": dictionaries.get("version"),
             "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id,
-            "expert_rules_version": rules_version,
-        }
+            "expert_rules_version": rules_version}
         if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
             if (back := card_return.old_event(signal_id, values, publications[signal_id])) is not None:

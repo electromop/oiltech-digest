@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from oiltech_digest import config, expert_rules, feedback_settings, rule_check_agents, rule_check_rows
+from oiltech_digest import config, expert_rules, feedback_settings, rule_check_agents
 from oiltech_digest.db import connection, expert_rules_store, feedback_store, repository, rule_check_store
 from oiltech_digest.db.feedback_store import DONE, PENDING, RULE_PROPOSAL, SET_CHECK
 from oiltech_digest.db.rule_check_store import FAILED, POSTPONED, QUEUED, RULE, SET
@@ -105,10 +105,12 @@ def _enqueue(mode: str, agent: Any, action_id: int, spec: dict[str, Any], *, now
         topics = ([(spec.get("rule") or {}).get("topic")] if mode == RULE
                   else _rule_topics(int(settings["search_check_topics"])))
         spec = {**spec, "topics": [topic for topic in topics if topic], "days": int(settings["search_check_days"])}
-    rows = _rows(mode, agent, spec, settings)
-    summary = agent == "summary" and mode == RULE
+    rule = spec.get("rule") or {}
+    steps = [rule["step"]] if mode == RULE else list(expert_rules.AGENTS[agent].steps)
+    rows = rule_check_agents.adapter(agent).rows(steps, rule.get("category") if mode == RULE else None, spec, settings)
+    # У «Сути и перевода» числа нет («было / стало»): и у проверки правила, и у проверки набора.
     details = {"spec": spec, "rows": rows, "little_data_rows": int(settings["little_data_rows"]),
-               "advice_rule": settings["autocheck_advice"], "no_count": summary}
+               "advice_rule": settings["autocheck_advice"], "no_count": agent == "summary"}
     check_id = rule_check_store.create(action_id=action_id, mode=mode, agent=agent, status=QUEUED, details=details)
     if not rows:
         # Сверять не с чем (у поиска: ТОП-список темы пуст): итог сразу, без оплаченных вызовов.
@@ -129,30 +131,6 @@ def _enqueue(mode: str, agent: Any, action_id: int, spec: dict[str, Any], *, now
         raise
     rule_check_store.attach_job(check_id, int(job["id"]))
     return {"check_id": check_id, "status": QUEUED, "rows": len(rows), "job_id": int(job["id"])}
-
-
-def _rows(mode: str, agent: str, spec: dict[str, Any], settings: dict[str, Any]) -> list[dict[str, Any]]:
-    """Снимок строк эталона ОС: у проверки предложения: шаг и категория правила; у проверки набора: все шаги."""
-    rule = spec.get("rule") or {}
-    steps = [rule["step"]] if mode == RULE else list(expert_rules.AGENTS[agent].steps)
-    category = rule.get("category") if mode == RULE else None
-    limit = int(settings["autocheck_rows"])
-    if agent == "otbor":
-        from oiltech_digest.otbor_pack_format import load_dictionaries
-
-        reasons = {value["code"]: value["label"] for value in (load_dictionaries().get("reject_reason") or {}).get(
-            "values") or []}
-        return rule_check_rows.otbor_rows(steps, category, limit, reasons=reasons)
-    if agent == "scores":
-        return rule_check_rows.scores_rows(category, limit)
-    if agent == "card":
-        return rule_check_rows.card_rows(steps, category, limit)
-    if agent == "dedup":
-        return rule_check_rows.dedup_rows(limit)
-    if agent == "summary":
-        return rule_check_rows.summary_rows(steps, category, int(settings["summary_check_edits"]))
-    return [{**row, "topic": topic} for topic in spec.get("topics") or []
-            for row in rule_check_rows.search_rows(topic, int(spec["days"]))]
 
 
 def _rule_topics(limit: int) -> list[str]:
@@ -197,15 +175,16 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     details = check["details"] or {}
     mode, agent, spec = check["mode"], check["agent"], details.get("spec") or {}
     sets = blocks(mode, agent, spec)
+    adapter = rule_check_agents.adapter(agent)
     try:
-        common = rule_check_agents.shared(agent, spec)
+        common = adapter.shared(spec)
     except Exception as exc:
         raise InvalidJobPayload(str(exc)) from exc
     rows = details.get("rows") or []
     if agent == "search":
         return {"kind": KIND, "check_id": int(check["id"]), "mode": mode, "agent": agent, "blocks": sets,
                 "shared": {**common, "topics": sorted({row["topic"] for row in rows})}, "rows": []}
-    found = rule_check_agents.inputs(agent, rows)
+    found = adapter.inputs(rows)
     items = []
     for row in rows:
         if row["key"] not in found:
@@ -224,13 +203,14 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Сторона воркера: прогоны агента по строкам с нужными наборами правил; ответы: как есть."""
     agent, sets, common = str(payload.get("agent") or ""), payload.get("blocks") or {}, payload.get("shared") or {}
+    adapter = rule_check_agents.adapter(agent)
     answers: list[dict[str, Any]] = []
     result: dict[str, Any] = {"rule_check": True, "kind": KIND, "check_id": payload.get("check_id"), "answers": answers,
                               "versions": {side: expert_rules.version(block) for side, block in sets.items()}}
     if agent == "search":
         beat = (lambda: heartbeat(result)) if heartbeat else None
-        result["search"] = {topic: {side: _safe(lambda side=side, topic=topic: rule_check_agents.run_search(
-            {**common, "topic": topic}, sets.get(side), beat)) for side in ("with", "without")}
+        result["search"] = {topic: {side: _safe(lambda side=side, topic=topic: adapter.search(
+            common, topic, sets.get(side), beat)) for side in ("with", "without")}
             for topic in common.get("topics") or []}
         return result
     client = make_client()
@@ -239,8 +219,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             heartbeat(result)
         answer: dict[str, Any] = {"key": row.get("key")}
         for side in row.get("need") or []:
-            answer[side] = _safe(lambda side=side: rule_check_agents.run(agent, client, common, row.get("input") or {},
-                                                                         sets.get(side)))
+            answer[side] = _safe(lambda side=side: adapter.run(client, common, row.get("input") or {}, sets.get(side)))
         answers.append(answer)
     return result
 
@@ -269,7 +248,8 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
     versions = result.get("versions") if isinstance(result.get("versions"), dict) else {}
     _record_usage(job_id, check, result)
     if check["agent"] == "search":
-        summary = _search_summary(rows, result.get("search") or {}, int(details.get("little_data_rows") or 30))
+        search = result.get("search") if isinstance(result.get("search"), dict) else {}
+        summary = _search_summary(check, rows, search)
     else:
         summary = _count(check, rows, result.get("answers") or [], versions)
     rule_check_store.finish(int(check["id"]), status=DONE, row_count=summary["rows"], toward=summary["toward"],
@@ -294,7 +274,8 @@ def _count(check: dict[str, Any], rows: list[dict[str, Any]], answers: list[dict
     details = check["details"] or {}
     mode, agent = check["mode"], check["agent"]
     by_key = {str(one.get("key")): one for one in answers if isinstance(one, dict)}
-    judge = rule_check_agents.Judge(agent, rows)
+    judge = rule_check_agents.adapter(agent)
+    judge.prepare(rows)
     identity = {"with": None if mode == RULE else _int(versions.get("with")), "without": _int(versions.get("without"))}
     toward = away = unchanged = errors = 0
     samples, baseline = [], {"accepted": 0, "computed": 0}
@@ -303,7 +284,8 @@ def _count(check: dict[str, Any], rows: list[dict[str, Any]], answers: list[dict
         values = {}
         for side in ("with", "without"):
             if side in answer:
-                values[side] = judge.value(row, answer[side])
+                given = answer[side]
+                values[side] = judge.value(row, given) if isinstance(given, dict) and not given.get("error") else None
             elif row.get("accepted") is not None and identity[side] is not None \
                     and row.get("accepted_version") == identity[side]:
                 values[side] = judge.accepted(row)
@@ -367,18 +349,24 @@ def _little(rows: int) -> str:
     return f"мало данных: {int(rows)}"
 
 
-def _search_summary(rows: list[dict[str, Any]], search: dict[str, Any], little_rows: int) -> dict[str, Any]:
+def _search_summary(check: dict[str, Any], rows: list[dict[str, Any]], search: dict[str, Any]) -> dict[str, Any]:
     """Сверка повторного поиска с ТОП-списком темы: элемент ТОП найден, если ссылка совпала (ключ адреса) или
-    заголовок одного события (основы слов)."""
-    by_topic = {topic: {side: (runs.get(side) or {}) for side in ("with", "without")}
+    заголовок одного события (основы слов). Тема, у которой упал хоть один из двух поисков, в счёт не идёт: «не
+    найдено» там не ответ, а сбой."""
+    details = check["details"] or {}
+    by_topic = {topic: {side: (runs.get(side) if isinstance(runs.get(side), dict) else {})
+                        for side in ("with", "without")}
                 for topic, runs in search.items() if isinstance(runs, dict)}
-    errors = [f"{topic}, {side}: {one.get('error')}" for topic, runs in by_topic.items() for side, one in runs.items()
-              if one.get("error") or one.get("status") == "error"]
-    toward = away = unchanged = 0
+    failed = {topic for topic, runs in by_topic.items()
+              if any(one.get("error") or one.get("status") == "error" or not one for one in runs.values())}
+    toward = away = unchanged = errors = 0
     samples = []
     for row in rows:
-        found = by_topic.get(row.get("topic")) or {"with": {}, "without": {}}
-        hit = {side: _found(row, one.get("items") or []) for side, one in found.items()}
+        if row.get("topic") in failed or row.get("topic") not in by_topic:
+            errors += 1
+            continue
+        hit = {side: _found(row, one.get("items") if isinstance(one.get("items"), list) else [])
+               for side, one in by_topic[row["topic"]].items()}
         direction = ("toward" if hit["with"] and not hit["without"] else "away" if hit["without"] and not hit["with"]
                      else None)
         toward += direction == "toward"
@@ -386,14 +374,17 @@ def _search_summary(rows: list[dict[str, Any]], search: dict[str, Any], little_r
         unchanged += direction is None
         samples.append({"signal_id": row["signal_id"], "label": row.get("label"), "with": hit["with"],
                         "without": hit["without"], "direction": direction})
-    counted = len(rows)
-    little = counted < little_rows
+    counted = toward + away + unchanged
+    little = counted < int(details.get("little_data_rows") or 30)
+    note = "; ".join(f"{topic}: поиск не ответил ({str(one.get('error') or 'ошибка')[:200]})"
+                     for topic in sorted(failed) for one in by_topic[topic].values() if one.get("error") or not one)
     return {"rows": counted, "toward": toward, "away": away, "unchanged": unchanged, "samples": samples[:_SAMPLES],
-            "little_data": little, "advice": _little(counted) if little else (
-                "согласовать" if toward > away else "не согласовывать: к эталону не больше, чем от него"),
-            "search": {f"{topic}: {side}": {"found": len(one.get("items") or []), "error": one.get("error")}
-                       for topic, runs in by_topic.items() for side, one in runs.items()},
-            "note": "; ".join(errors) or None}
+            "errors": errors, "little_data": little,
+            "advice": _advice(check["mode"], toward, away, counted, little, str(details.get("advice_rule") or
+                                                                                "more_toward")),
+            "search": {f"{topic}: {side}": {"found": len(one.get("items") or []), "error": str(one.get("error") or "")[:200]
+                                            or None} for topic, runs in by_topic.items() for side, one in runs.items()},
+            "note": note or None}
 
 
 def _found(row: dict[str, Any], items: list[dict[str, Any]]) -> bool:
@@ -465,7 +456,7 @@ def scheduler_step(now: datetime, *, monthly: bool) -> dict[str, Any]:
     month = now.astimezone(_msk()).strftime("%Y-%m")
     done: dict[str, Any] = {"proposals": [], "sets": []}
     for action_id in rule_check_store.proposals_waiting_check(kind=RULE_PROPOSAL,
-                                                              retry_postponed=_new_month_for_postponed(now)):
+                                                              retry_postponed=_under_ceiling(now)):
         try:
             done["proposals"].append(check_proposal(action_id, now=now))
         except Exception:  # noqa: BLE001 - одна проверка не держит остальные
@@ -483,8 +474,8 @@ def scheduler_step(now: datetime, *, monthly: bool) -> dict[str, Any]:
     return done
 
 
-def _new_month_for_postponed(now: datetime) -> bool:
-    """Отложенные потолком проверки ставятся снова, когда расход месяца ниже потолка (новый месяц или поднятый
+def _under_ceiling(now: datetime) -> bool:
+    """Расход контура в месяце ниже потолка: отложенные потолком проверки ставятся снова (новый месяц или поднятый
     потолок)."""
     from oiltech_digest import feedback_slice
 

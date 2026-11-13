@@ -12,7 +12,7 @@ const json = (body: unknown, status = 200) =>
 
 const check: JournalCheck = {
   id: 5, status: "done", mode: "rule", rows: 42, toward: 6, away: 2, unchanged: 34, advice: "согласовать", note: null,
-  little_data: false, no_count: false, baseline: { accepted: 40, computed: 2 }, search: null,
+  advises_approval: true, little_data: false, no_count: false, baseline: { accepted: 40, computed: 2 }, search: null,
   finished_at: "2026-11-16T07:00:00+00:00",
   samples: [{ signal_id: 610, label: "Пилот робота на НПЗ", field: "technology_maturity", kind: "field",
     expected: "пилот/ОПИ", before: "внедрение", after: "пилот/ОПИ", direction: "toward" }],
@@ -24,7 +24,7 @@ const rule: JournalEntry = {
   event_ids: [21, 22],
   rule: { agent: "card", agent_label: "«Карточка»", step: "maturity", step_label: "стадия", category: null,
     category_label: null, topic: null, text: "«PoC» не промышленное внедрение." },
-  proposed_rule: null, rule_kind: "new", replaced: [], check, confirm: [], version: null, can_rollback: false,
+  proposed_rule: null, rule_kind: "new", replaced: [], check, confirm_reasons: [], version: null, can_rollback: false,
   can_recheck: true, can_decide: true,
   basis: [{ id: 21, author: "expert@example.test", role: "admin", at: null, verdict: "watch_later", reason: null,
     comment: "PoC это не внедрение", corrected_title: null, corrected_thesis: null, duplicate_of_signal_id: null }],
@@ -32,8 +32,9 @@ const rule: JournalEntry = {
 };
 
 const littleData: JournalEntry = {
-  ...rule, key: "action:121", id: 121, confirm: ["мало данных: 12"],
-  check: { ...check, id: 6, rows: 12, toward: 3, away: 0, unchanged: 9, little_data: true, advice: "мало данных: 12" },
+  ...rule, key: "action:121", id: 121, confirm_reasons: ["мало данных: 12"],
+  check: { ...check, id: 6, rows: 12, toward: 3, away: 0, unchanged: 9, little_data: true, advice: "мало данных: 12",
+    advises_approval: false },
 };
 
 const applied: JournalEntry = {
@@ -163,8 +164,11 @@ describe("правила эксперта на вкладке «Обратная
     fireEvent.change(within(pending).getByRole("textbox", { name: "Новая формулировка правила" }),
       { target: { value: "«PoC» и пилот не промышленное внедрение." } });
     fireEvent.click(within(pending).getByRole("button", { name: "Применить новую формулировку" }));
+    // Новую формулировку проверка не мерила: отдельное подтверждение.
+    expect(within(pending).getByRole("alert")).toHaveTextContent("новая формулировка не проходила автопроверку");
+    fireEvent.click(within(pending).getByRole("button", { name: "Подтверждаю, согласовать" }));
     await waitFor(() => expect(posted("/api/feedback-journal/proposals/120/decision")).toContainEqual(
-      { decision: "modify", changes: [], text: "«PoC» и пилот не промышленное внедрение." }));
+      { decision: "modify", changes: [], text: "«PoC» и пилот не промышленное внедрение.", confirm: true }));
 
     fireEvent.click(within(pending).getByRole("button", { name: "Проверить снова" }));
     await waitFor(() => expect(posted("/api/feedback-journal/proposals/120/check")).toHaveLength(1));

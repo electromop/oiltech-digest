@@ -85,7 +85,7 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
   const [ruleText, setRuleText] = useState("");
   const [confirming, setConfirming] = useState<null | { decision: ProposalDecision; text?: string }>(null);
   const isRule = entry.kind === "rule_proposal";
-  const reasons = entry.confirm ?? [];
+  const reasons = entry.confirm_reasons ?? [];
 
   function startEdit() {
     if (isRule) setRuleText(entry.rule?.text ?? "");
@@ -102,10 +102,10 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
     setEditing(false);
   }
 
-  // Согласование правила без готовой проверки, с «мало данных» или с перевесом «от эталона»: сначала отдельное
-  // подтверждение (сервер без него отказывает).
+  // Согласование правила без готовой проверки, с «мало данных» или с перевесом «от эталона», и новая формулировка (её
+  // проверка не мерила): сначала отдельное подтверждение (сервер без него отказывает).
   function decideRule(decision: ProposalDecision, text?: string) {
-    if (decision !== "dismiss" && reasons.length) {
+    if (decision === "modify" || (decision === "approve" && reasons.length)) {
       setConfirming({ decision, text });
       return;
     }
@@ -165,7 +165,8 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
       </ol>
       {confirming ? (
         <div className="documentAlert warn" role="alert">
-          Нужно отдельное подтверждение: {reasons.join("; ")}.
+          Нужно отдельное подтверждение: {[...reasons, ...(confirming.decision === "modify"
+            ? ["новая формулировка не проходила автопроверку"] : [])].join("; ")}.
           <div className="journalActions">
             <button type="button" className="primaryButton compactButton" disabled={busy} onClick={confirm}>
               Подтверждаю, согласовать

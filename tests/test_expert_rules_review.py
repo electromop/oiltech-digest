@@ -66,13 +66,15 @@ def test_review_proposes_rules_from_two_similar_marks_or_one_explicit_request_an
                mark(admin, second, verdict="approved", reason=f"{HINT}: стадия завышена")["event_id"]]
     explicit = mark(admin, third, verdict="approved",
                     comment="Всегда переводить well control как контроль скважины")["event_id"]
-    single = mark(colleague, third, comment="Сделка оператора, это бизнес")["event_id"]
+    single = mark(colleague, third, comment="Сделка оператора относится к бизнесу")["event_id"]
 
     model = _slice(admin, monkeypatch, [
         rule("card", "maturity", "«PoC» не промышленное внедрение.", similar, HINT),
         rule("summary", "terms", "Переводить well control как контроль скважины.", [explicit],
              "Всегда переводить well control как контроль скважины"),
-        rule("otbor", "category", "Сделка оператора: бизнес.", [single], "Сделка оператора, это бизнес"),
+        # «относится» не явная просьба: одной отметки мало.
+        rule("otbor", "category", "Сделка оператора: бизнес.", [single], "Сделка оператора относится к бизнесу"),
+        rule("otbor", "category", "Неизвестный вид правила.", similar, HINT, kind="rewrite"),
         rule("otbor", "decision", "Брать отчёты о бурении.", similar, "цитаты такой нет"),
         rule("card", "stage", "Шаг не из списка.", similar, HINT),
         rule("search", "topics", "Ищи только на сайтах операторов", similar, HINT, topic=DRILLING),
@@ -92,7 +94,9 @@ def test_review_proposes_rules_from_two_similar_marks_or_one_explicit_request_an
     # Каждое предложение сразу получает автопроверку; эталона ОС у этих шагов ещё нет: «мало данных: 0» сразу.
     assert {(row["check"]["status"], row["check"]["advice"], row["check"]["little_data"])
             for row in proposals.values()} == {("done", "мало данных: 0", True)}
-    assert stage["confirm"] == ["мало данных: 0"]
+    assert stage["confirm_reasons"] == ["мало данных: 0"]
+    # У «Сути и перевода» числа нет, но без единой правки эксперта «было / стало» не с чем сравнить: подтверждение.
+    assert proposals["Переводить well control как контроль скважины."]["confirm_reasons"] == ["мало данных: 0"]
     assert [step["label"] for step in stage["path"]][0].startswith("Предложено разбором ОС (срез №")
     slices = admin.get("/api/feedback-journal/overview").json()["slices"]
     assert slices[0]["proposals"] == 2

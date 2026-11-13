@@ -34,7 +34,7 @@ def test_approval_issues_a_new_rule_set_version_and_rollback_makes_the_previous_
     assert (pending["rule"]["agent_label"], pending["rule"]["step_label"], pending["rule"]["text"]) == (
         "«Карточка»", "стадия", STAGE_HINTS)
     assert (pending["check"]["rows"], pending["check"]["toward"], pending["check"]["away"]) == (40, 6, 1)
-    assert pending["confirm"] == [] and entry(admin, f"action:{first}")["can_decide"] is True
+    assert pending["confirm_reasons"] == [] and entry(admin, f"action:{first}")["can_decide"] is True
 
     assert approve(admin, first)["version"] == 1
     assert approve(admin, second)["version"] == 2
@@ -99,9 +99,9 @@ def test_approval_without_a_check_with_little_data_or_away_from_reference_needs_
     checked(little, "scores", rows=12, toward=3, away=0)
     checked(away, "scores", rows=60, toward=2, away=5)
 
-    assert entry(admin, f"action:{unchecked}")["confirm"] == ["автопроверки ещё не было"]
-    assert entry(admin, f"action:{little}")["confirm"] == ["мало данных: 12"]
-    assert entry(admin, f"action:{away}")["confirm"] == ["от эталона 5, к эталону 2"]
+    assert entry(admin, f"action:{unchecked}")["confirm_reasons"] == ["автопроверки ещё не было"]
+    assert entry(admin, f"action:{little}")["confirm_reasons"] == ["мало данных: 12"]
+    assert entry(admin, f"action:{away}")["confirm_reasons"] == ["от эталона 5, к эталону 2"]
     for action_id, reason in ((unchecked, "автопроверки ещё не было"), (little, "мало данных: 12"),
                               (away, "от эталона 5, к эталону 2")):
         refused = decide(admin, action_id)
@@ -122,17 +122,22 @@ def test_modify_applies_the_admin_wording_and_a_search_rule_with_free_text_is_re
     checked(card_rule)
     checked(search_rule, "search")
 
-    response = decide(admin, card_rule, "modify", text="  PoC и пилот:   не промышленное внедрение. ")
+    # Проверка мерила исходную формулировку: новую согласовать можно только с отдельным подтверждением.
+    refused = decide(admin, card_rule, "modify", text="PoC и пилот: не промышленное внедрение.")
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409, "нужно отдельное подтверждение: новая формулировка не проходила автопроверку")
+    response = decide(admin, card_rule, "modify", text="  PoC и пилот:   не промышленное внедрение. ", confirm=True)
     assert response.status_code == 200, response.text
     assert agent_rules(admin, "card")["rules"][0]["text"] == "PoC и пилот: не промышленное внедрение."
     modified = entry(admin, f"action:{card_rule}")
     assert (modified["rule"]["text"], modified["proposed_rule"]["text"]) == (
         "PoC и пилот: не промышленное внедрение.", "PoC не промышленное внедрение.")
-    assert _labels(modified)[1] == "Изменено"
+    assert _labels(modified)[1] == ("Изменено с отдельным подтверждением (новая формулировка не проходила "
+                                    "автопроверку)")
 
     for text in ("Ищи только на сайте example.com", "не искать слухи; цифровой двойник",
                  "Всегда начинай поиск с отчётов операторов, а потом переходи к новостям сервисных компаний"):
-        refused = decide(admin, search_rule, "modify", text=text)
+        refused = decide(admin, search_rule, "modify", text=text, confirm=True)
         assert refused.status_code == 409, text
         assert "свободный текст" in refused.json()["detail"]
     assert agent_rules(admin, "search")["rules"] == []
