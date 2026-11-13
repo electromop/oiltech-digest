@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from oiltech_digest import feedback_journal, feedback_settings, feedback_slice
+from oiltech_digest import feedback_journal, feedback_rules, feedback_settings, feedback_slice, rule_check
 from oiltech_digest.api_access import require_admin, require_user
 from oiltech_digest.db import feedback_store
 
@@ -82,16 +82,42 @@ class ProposalDecision(BaseModel):
     decision: str = Field(pattern="^(approve|modify|dismiss)$")
     # «Изменить»: новая формулировка полей предложения.
     changes: list[ProposalChange] = Field(default_factory=list, max_length=20)
+    # Предложение правила (#190): «изменить»: новая формулировка правила; confirm: отдельное подтверждение согласования
+    # без готовой проверки, с «мало данных» или с перевесом «от эталона».
+    text: str | None = Field(None, max_length=1000)
+    confirm: bool = False
 
 
 @router.post("/api/feedback-journal/proposals/{proposal_id}/decision")
 def feedback_journal_decide(proposal_id: int, payload: ProposalDecision,
                             user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """«Согласовать», «изменить» или «убрать» предложение: согласованное система сразу применяет к карточке."""
+    """«Согласовать», «изменить» или «убрать» предложение: согласованное система сразу применяет к карточке, а правило
+    эксперта: новой версией набора правил агента."""
     with _refusals():
         return feedback_journal.decide(proposal_id, payload.decision, author=user.get("email"),
                                        user_id=int(user["id"]),
-                                       changes=[change.model_dump() for change in payload.changes])
+                                       changes=[change.model_dump() for change in payload.changes],
+                                       text=payload.text, confirm=payload.confirm)
+
+
+@router.post("/api/feedback-journal/proposals/{proposal_id}/rollback")
+def feedback_journal_rollback(proposal_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Откат версии набора правил, которую выпустило согласование предложения: действует прежняя (#190)."""
+    with _refusals():
+        return feedback_rules.rollback(proposal_id, author=user.get("email"), user_id=int(user["id"]))
+
+
+@router.post("/api/feedback-journal/proposals/{proposal_id}/check")
+def feedback_journal_recheck(proposal_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Автопроверка предложения правила заново: после сбоя, отсрочки или смены инструкции (#190)."""
+    with _refusals():
+        return rule_check.recheck(proposal_id)
+
+
+@router.get("/api/feedback-journal/rules")
+def feedback_journal_rules(user: dict[str, Any] = Depends(_reader)) -> dict[str, Any]:
+    """Правила эксперта по агентам: действующая версия набора и её правила, прежние версии (#190)."""
+    return {**feedback_rules.overview(), "can_rollback": _is_admin(user)}
 
 
 @router.post("/api/feedback-journal/actions/{action_id}/undo")

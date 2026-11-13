@@ -15,7 +15,7 @@ import re
 from datetime import date, datetime
 from typing import Any, Callable
 
-from oiltech_digest import config, feedback_changes, feedback_settings
+from oiltech_digest import config, feedback_changes, feedback_review_rules, feedback_settings
 from oiltech_digest.colleague_materials import VERDICTS
 from oiltech_digest.db import connection, feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, PROPOSAL, STALE
@@ -47,14 +47,17 @@ _CATEGORY_CODES = {"бизнес": "business", "технология": "technolo
 # --- Постановка (ядро) ---------------------------------------------------------------------------
 
 
-def enqueue(slice_id: int, signal_ids: list[int], *, since: datetime, until: datetime, model: str) -> dict[str, Any]:
-    """Одна задача разбора на срез: сигналы с новыми отметками, окно похожих отметок, модель из настроек."""
+def enqueue(slice_id: int, signal_ids: list[int], *, since: datetime, until: datetime, model: str,
+            window_from: datetime | None = None) -> dict[str, Any]:
+    """Одна задача разбора на срез: сигналы с новыми отметками, окно похожих отметок, модель из настроек. window_from:
+    начало окна среза: отметки после него новые (правило эксперта стоит хоть на одной новой, #190)."""
     from oiltech_digest import network_policy
 
     route = network_policy.route_ai_processing()
     return repository.create_background_job(
         KIND, {"slice_id": int(slice_id), "signal_ids": [int(one) for one in signal_ids], "since": since.isoformat(),
-               "until": until.isoformat(), "model": model, "reasoning": config.FEEDBACK_REVIEW_REASONING},
+               "until": until.isoformat(), "model": model, "reasoning": config.FEEDBACK_REVIEW_REASONING,
+               **({"window_from": window_from.isoformat()} if window_from else {})},
         queue_name=route.queue_name, execution_region=route.execution_region, capability=route.capability,
     )
 
@@ -77,6 +80,8 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
         "prompt_version": PROMPT_VERSION, "choices": context["choices"],
         "items": [_item(cards[one], publications.get(one), marks.get(one) or []) for one in ids
                   if one in cards and marks.get(one)],
+        # Правила эксперта (#190): после сигналов один вызов по отметкам окна и действующим правилам агентов.
+        "rules_review": feedback_review_rules.payload(job_payload),
     }
 
 
@@ -168,6 +173,11 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             continue
         rows.append({**row, "answer": response.data, "model": response.model,
                      "input_tokens": response.input_tokens, "output_tokens": response.output_tokens})
+    if payload.get("rules_review") and not result.get("partial"):
+        if heartbeat:
+            heartbeat(result)
+        result["rules"] = feedback_review_rules.call(client, payload["rules_review"], model=model,
+                                                     reasoning=payload.get("reasoning"))
     return result
 
 
@@ -269,6 +279,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
         if changes:
             _write_proposal(signal_id, changes, slice_id=slice_id, model=str(row.get("model") or "")[:100] or None)
             applied["proposals"] += 1
+    if isinstance(result.get("rules"), dict):
+        found = feedback_review_rules.apply_result(result["rules"], job_id=job_id, job_payload=job_payload,
+                                                   slice_id=slice_id, stage=STAGE)
+        applied["rule_proposals"] = found["rule_proposals"]
+        applied["errors"] += [{"signal_id": None, "error": problem} for problem in found["rule_errors"]]
     if slice_id is not None and not result.get("partial"):
         note = f"не прошло проверку кодом: {len(applied['errors'])}" if applied["errors"] else None
         feedback_store.finish_slice(int(slice_id), status="done", note=note)

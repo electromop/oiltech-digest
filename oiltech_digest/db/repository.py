@@ -5972,16 +5972,18 @@ def insert_ai_run(rec: dict) -> None:
     # job_id по умолчанию NULL: для локального пути и старых вызовов (не дедуплицируются).
     # ON CONFLICT DO NOTHING (баг H1/T2): повторное применение результата задачи не двоит
     # биллинг: одна строка на (job_id, article_id, stage).
+    # recipe: версия набора правил эксперта, по которой шёл вызов, там, где у решения рецепта нет (#190).
     rec = {"job_id": None, **rec}
+    rec["recipe"] = Json(rec["recipe"]) if rec.get("recipe") else None
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO ai_processing_runs
               (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
-               total_tokens, cost_usd, status, error_message)
+               total_tokens, cost_usd, status, error_message, recipe)
             VALUES (%(job_id)s, %(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
                     %(input_tokens)s, %(output_tokens)s, %(total_tokens)s, %(cost_usd)s,
-                    %(status)s, %(error_message)s)
+                    %(status)s, %(error_message)s, %(recipe)s)
             ON CONFLICT (job_id, article_id, stage) DO NOTHING
             """,
             rec,
@@ -6005,22 +6007,25 @@ def record_radar_ai_usage(job_id: int | None, usage: list[dict] | None) -> int:
             output_tokens = int(row.get("output_tokens") or 0)
             cost = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
             cost += int(row.get("web_search_calls") or 0) * config.SIGNAL_WEB_SEARCH_USD_PER_CALL
+            # recipe: версия набора правил эксперта поиска и «Дедупа» прогона (#190); строка без неё: до #190.
+            recipe = row.get("recipe") if isinstance(row.get("recipe"), dict) else None
             conn.execute(
                 """
                 INSERT INTO ai_processing_runs
                   (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
-                   total_tokens, cost_usd, status, error_message)
-                VALUES (%s, NULL, %s, 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s)
+                   total_tokens, cost_usd, status, error_message, recipe)
+                VALUES (%s, NULL, %s, 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s, %s)
                 """,
                 (job_id, row["stage"], row.get("model") or None, input_tokens, output_tokens,
                  input_tokens + output_tokens, round(cost, 6),
-                 f"calls={int(row.get('calls') or 0)} web_search={int(row.get('web_search_calls') or 0)}"),
+                 f"calls={int(row.get('calls') or 0)} web_search={int(row.get('web_search_calls') or 0)}",
+                 Json(recipe) if recipe else None),
             )
         conn.commit()
     return len(rows)
 
 
-def record_reprint_usage(job_id: int | None, verdicts: list[dict] | None) -> int:
+def record_reprint_usage(job_id: int | None, verdicts: list[dict] | None, *, recipe: dict | None = None) -> int:
     """Расход судьи перепечаток: в ai_processing_runs, строка на модель за каждый принятый итог задачи.
 
     Стадия reprint_review, статьи у строки нет: пара это две статьи. Частичный итог (воркер остановлен) и итог
@@ -6049,11 +6054,11 @@ def record_reprint_usage(job_id: int | None, verdicts: list[dict] | None) -> int
                 """
                 INSERT INTO ai_processing_runs
                   (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
-                   total_tokens, cost_usd, status, error_message)
-                VALUES (%s, NULL, 'reprint_review', 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s)
+                   total_tokens, cost_usd, status, error_message, recipe)
+                VALUES (%s, NULL, 'reprint_review', 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s, %s)
                 """,
                 (job_id, model or None, input_tokens, output_tokens, input_tokens + output_tokens,
-                 round(cost, 6), f"pairs={pairs}"),
+                 round(cost, 6), f"pairs={pairs}", Json(recipe) if recipe else None),
             )
         conn.commit()
     return len(totals)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from oiltech_digest import contract
+from oiltech_digest import contract, expert_rules
 from oiltech_digest.db import repository
 from oiltech_digest.processing import fulltext_recompute
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
@@ -50,12 +50,16 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
         # (_article_prompt кладёт summary), и модель повторила бы её слово в слово.
         articles = [{**article, "summary": None} for article in articles]
+    from oiltech_digest.db import expert_rules_store
+
     worker_payload = {
         "kind": "process_articles",
         "offline": bool(payload.get("offline", False)),
         "limit": limit,
         "article_ids": article_ids,
         "articles": [_jsonable_dict(article) for article in articles],
+        # Правила эксперта «Сути и перевода» (#190): суть и заголовок статьи ленты, как у сигналов.
+        "expert_rules": expert_rules_store.payload_block("summary"),
     }
     if payload.get("only"):
         worker_payload["only"] = sorted(stages)
@@ -117,11 +121,13 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     """
     stages = stages_to_write(payload.get("only"))  # граница: битая пометка: до любого вызова модели
     client = make_client(bool(payload.get("offline", False)))
+    rules = payload.get("expert_rules")
     result: dict[str, Any] = {
         "external_ai": True,
         "kind": "process_articles",
         "stats": {"processed": 0, "summary": 0, "translated": 0, "errors": 0},
         "articles": [],
+        "expert_rules_version": expert_rules.version(rules),
     }
     # Пакет планировщика, ни списка статей, ни пометки only (#53): только недостающие стадии.
     # Статья без перевода получала бы новую суть на каждом проходе. Явный список (перекачка
@@ -148,6 +154,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         todo = _stages_left(article, stages, missing_only=scheduler_batch)
+        article = {**article, "expert_rules": rules}
         try:
             if "summary" in todo:
                 summary_resp = summarize_article(article, client)
@@ -339,9 +346,13 @@ def apply_process_result(
     заголовков): воркер не запрошенное не зовёт (process_payload), а фильтр остаётся здесь, чтобы
     запись не зависела от сборки NL. Расход по всем стадиям учитывается: он оплачен, в том числе
     снятых (RETIRED_STAGES) из итога, выданного сборке до выката: их ответы не пишутся."""
+    from oiltech_digest.db import expert_rules_store
+
     write = stages_to_write(only)
     stats = {"articles": 0, "summary": 0, "translation": 0, "errors": 0}
     contexts = _glossary_contexts(result)
+    # Версия набора правил эксперта «Сути и перевода» (#190): у статьи рецепта нет, версия в записи расхода.
+    recipe = {"expert_rules_version": expert_rules_store.known_version("summary", result.get("expert_rules_version", 0))}
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
@@ -354,7 +365,7 @@ def apply_process_result(
                 stats[stage] += 1
             # Перевод русского заголовка, копия без модели: такой вызов не оплачен.
             if stage != "translation" or payload.get("provider") != "offline" or payload.get("model"):
-                _insert_run(article_id, stage, payload, job_id=job_id)
+                _insert_run(article_id, stage, payload, job_id=job_id, recipe=recipe)
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
     return stats
@@ -372,9 +383,11 @@ def _response_payload(response: AIResponse, data: dict[str, Any]) -> dict[str, A
     }
 
 
-def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id: int | None = None) -> None:
+def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id: int | None = None,
+                recipe: dict[str, Any] | None = None) -> None:
     repository.insert_ai_run(
         {
+            "recipe": recipe,
             "job_id": job_id,
             "article_id": article_id,
             "stage": stage,
@@ -423,7 +436,11 @@ def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "a": _compact_article_for_reprint(left),
             "b": _compact_article_for_reprint(right),
         })
-    return {"kind": "reprint_review", "pairs": packed, "dry_run": bool(payload.get("dry_run"))}
+    from oiltech_digest.db import expert_rules_store
+
+    # Правила эксперта «Дедупа» (#190): судья перепечаток отвечает на тот же вопрос «одно ли событие».
+    return {"kind": "reprint_review", "pairs": packed, "dry_run": bool(payload.get("dry_run")),
+            "expert_rules": expert_rules_store.payload_block("dedup")}
 
 
 def _compact_article_for_reprint(article: dict[str, Any]) -> dict[str, Any]:
@@ -446,10 +463,12 @@ def process_reprint_review_payload(payload: dict[str, Any],
 
     configured_model()  # без модели: сбой задачи с причиной, а не «разные события» у каждой пары
     client = make_client()
+    rules = payload.get("expert_rules")
     result: dict[str, Any] = {
         "reprint_review": True,
         "kind": "reprint_review",
         "dry_run": bool(payload.get("dry_run")),
+        "expert_rules_version": expert_rules.version(rules),
         "verdicts": [],
     }
     verdicts: list[dict[str, Any]] = result["verdicts"]
@@ -462,7 +481,7 @@ def process_reprint_review_payload(payload: dict[str, Any],
                 break
         left, right = pair["a"], pair["b"]
         try:
-            response = judge_pair(left, right, client)
+            response = judge_pair(left, right, client, rules)
             verdicts.append({
                 "a_id": left["id"], "b_id": right["id"], "overlap": pair.get("overlap"),
                 "same_event": bool(response.data.get("same_event")),
@@ -495,7 +514,10 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
         # показа заказчику перед тем, как что-то схлопывать. Расход тоже, как у радара
         # (signal_discovery.apply_discovery): токены остаются в итоге задачи.
         return {"applied": 0, "dry_run": True}
-    repository.record_reprint_usage(job_id, result.get("verdicts") or [])
+    from oiltech_digest.db import expert_rules_store
+
+    repository.record_reprint_usage(job_id, result.get("verdicts") or [], recipe={
+        "expert_rules_version": expert_rules_store.known_version("dedup", result.get("expert_rules_version", 0))})
 
     applied = 0
     skipped = 0

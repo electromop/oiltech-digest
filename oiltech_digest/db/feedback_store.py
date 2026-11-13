@@ -25,15 +25,17 @@ from oiltech_digest.db.repository import _FEEDBACK_IS_BLOCK_SQL
 # Виды действий ОС.
 IMMEDIATE, PROPOSAL, DECISION, APPLIED, UNDO, SAMPLE_TASK = (
     "immediate", "signal_proposal", "decision", "applied", "undo", "sample_task")
+# Правила эксперта (#190): предложение правила агенту и итог ежемесячной проверки всего набора правил агента.
+RULE_PROPOSAL, SET_CHECK = "rule_proposal", "set_check"
 # Строки журнала верхнего уровня: отметки (из журнала отметок), предложения, задачи выборки и явные действия
 # администратора без отметки («Вернуть» в «Отклонённых»); «сразу» по отметке идёт в её строке.
-TOP_KINDS = (PROPOSAL, SAMPLE_TASK, IMMEDIATE)
+TOP_KINDS = (PROPOSAL, SAMPLE_TASK, IMMEDIATE, RULE_PROPOSAL, SET_CHECK)
 # Статусы.
 DONE, PENDING, APPROVED, MODIFIED, DISMISSED, APPLIED_STATUS, UNDONE, STALE = (
     "done", "pending", "approved", "modified", "dismissed", "applied", "undone", "stale")
 STATUSES = (DONE, PENDING, APPROVED, MODIFIED, DISMISSED, APPLIED_STATUS, UNDONE, STALE)
-# Агенты, к которым относится отметка или действие (фильтр журнала).
-AGENTS = ("otbor", "summary", "card", "scores", "dedup")
+# Агенты, к которым относится отметка или действие (фильтр журнала); поиск радара: правила эксперта (#190).
+AGENTS = ("otbor", "summary", "card", "scores", "dedup", "search")
 # Оценки шкалы, которые говорят о балле карточки: их расхождение с баллом платформы идёт в срез (решение 6 гриля).
 RATING_VERDICTS = ("strong_signal", "approved", "watch_later", "background_material", "reject", "overrated",
                    "needs_better_source", "bad_translation", "too_generic")

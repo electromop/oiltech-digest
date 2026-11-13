@@ -1372,3 +1372,62 @@ CREATE TABLE IF NOT EXISTS signal_event_pairs (
 );
 CREATE INDEX IF NOT EXISTS idx_signal_event_pairs_signal ON signal_event_pairs(signal_id);
 CREATE INDEX IF NOT EXISTS idx_signal_event_pairs_other ON signal_event_pairs(other_signal_id);
+-- Правила эксперта и автопроверка (#190, спека #187, ADR 0007): надстройка в базе поверх инструкций агентов в коде.
+-- Правило не правится: уточнение и сведение заводят новое правило, а прежние уходят из набора новой версией. category:
+-- business / technology, NULL: любая; topic: тема поиска радара (только у поиска). Основание: отметки и цитата,
+-- предложение журнала ОС; кто согласовал.
+CREATE TABLE IF NOT EXISTS expert_rules (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  agent         TEXT NOT NULL,
+  step          TEXT NOT NULL,
+  category      TEXT,
+  topic         TEXT,
+  text          TEXT NOT NULL,
+  replaces      BIGINT[] NOT NULL DEFAULT '{}',
+  event_ids     BIGINT[] NOT NULL DEFAULT '{}',
+  quote         TEXT,
+  action_id     BIGINT REFERENCES feedback_actions(id) ON DELETE SET NULL,
+  approved_by   TEXT,
+  user_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Версия набора правил агента: состав номерами правил; previous_id: версия, которая действовала до неё (откат делает
+-- действующей её). Действующая у агента одна (current); нет действующей: версия 0, правил нет.
+CREATE TABLE IF NOT EXISTS expert_rule_sets (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  agent         TEXT NOT NULL,
+  version       INTEGER NOT NULL,
+  rule_ids      BIGINT[] NOT NULL DEFAULT '{}',
+  previous_id   BIGINT REFERENCES expert_rule_sets(id),
+  current       BOOLEAN NOT NULL DEFAULT FALSE,
+  action_id     BIGINT REFERENCES feedback_actions(id) ON DELETE SET NULL,
+  author        TEXT,
+  user_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (agent, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_expert_rule_sets_current ON expert_rule_sets(agent) WHERE current;
+-- Прогон автопроверки: правило предложения на эталоне ОС (mode rule) или весь набор агента против голой инструкции
+-- (mode set, первый понедельник месяца). Счёт к эталону, от эталона, без изменений; строки, «было / стало» и сверка
+-- поиска с ТОП-списком в details.
+CREATE TABLE IF NOT EXISTS rule_checks (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  action_id     BIGINT REFERENCES feedback_actions(id) ON DELETE CASCADE,
+  mode          TEXT NOT NULL,
+  agent         TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  job_id        BIGINT REFERENCES background_jobs(id) ON DELETE SET NULL,
+  row_count     INTEGER NOT NULL DEFAULT 0,
+  toward        INTEGER NOT NULL DEFAULT 0,
+  away          INTEGER NOT NULL DEFAULT 0,
+  unchanged     INTEGER NOT NULL DEFAULT 0,
+  advice        TEXT,
+  note          TEXT,
+  details       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_rule_checks_action ON rule_checks(action_id, id DESC);
+-- Рецепт вызова у записи расхода: версия набора правил эксперта там, где у решения рецепта нет («Суть и перевод»,
+-- «Дедуп», поиск радара, автопроверка).
+ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS recipe JSONB;

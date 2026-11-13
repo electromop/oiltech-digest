@@ -329,14 +329,23 @@ def assign_duplicates(nodes: list[dict[str, Any]], edges: list[tuple[int, int, s
     return assigned
 
 
+def instructions(rules_block: Any = None) -> str:
+    """Инструкция судьи пар с правилами эксперта «Дедупа» (#190): у находки категории ещё нет, поэтому все правила, у
+    правила категории с её пометкой. Правил нет: инструкция прежняя."""
+    from oiltech_digest import expert_rules
+
+    return expert_rules.with_rules(SIGNAL_DUPLICATE_INSTRUCTIONS, rules_block, every_category=True)
+
+
 def dedupe(
     nodes: list[dict[str, Any]],
     *,
     client_factory: Callable[[], Any],
     heartbeat: Callable[[], None] | None = None,
     max_pairs: int = MAX_JUDGED_PAIRS,
+    rules_block: Any = None,
 ) -> dict[str, Any]:
-    """Отобрать пары, спросить судью, собрать группы. В базу не ходит.
+    """Отобрать пары, спросить судью, собрать группы. В базу не ходит. rules_block: правила эксперта «Дедупа» (#190).
 
     Клиент создаётся, только если есть что судить."""
     beat = heartbeat or (lambda: None)
@@ -349,9 +358,11 @@ def dedupe(
     model = configured_model() if judged else None
     client = client_factory() if judged else None
 
+    judge = instructions(rules_block)
+
     def ask(i: int, j: int) -> Any:
         return client.complete_json(
-            SIGNAL_DUPLICATE_INSTRUCTIONS,
+            judge,
             pair_prompt(nodes[i], nodes[j]),
             SIGNAL_DUPLICATE_SCHEMA,
             max_output_tokens=output_budget(700, app_config.SIGNAL_DEDUP_REASONING),

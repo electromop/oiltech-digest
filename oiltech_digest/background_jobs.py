@@ -464,6 +464,17 @@ def _run_feedback_review(payload: dict[str, Any], job_id: int) -> dict[str, Any]
     return {"feedback_review": True, "applied": applied}
 
 
+def _run_rule_check(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Автопроверка правила эксперта (#190) в местном контуре: как разбор ОС."""
+    from oiltech_digest import rule_check
+
+    repository.update_background_job_progress(job_id, 20)
+    result = rule_check.process_payload(rule_check.build_payload(payload))
+    applied = rule_check.apply_result(result, job_id=job_id, job_payload=payload)
+    repository.update_background_job_progress(job_id, 95)
+    return {"rule_check": True, "applied": applied}
+
+
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Код допуска отправляет только воркер NL (#113): с РФ-ядра Telegram недоступен. Вид
     зарегистрирован, чтобы ядро могло поставить задачу; очередь external-notify здесь не исполняется."""
@@ -484,5 +495,6 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "signal_summary": _run_signal_summary,
     "signal_scores": _run_signal_scores,
     "feedback_review": _run_feedback_review,
+    "rule_check": _run_rule_check,
     "admission_notify": _run_admission_notify,
 }

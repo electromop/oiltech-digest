@@ -29,6 +29,7 @@ from oiltech_digest.db import analytics, documents_repo, marks, rejected_section
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import (contract, feedback_changes, feedback_journal, feedback_review, feedback_settings, lanes,
+                            rule_check,
                             network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
                             signal_summary)
 from oiltech_digest import material_signals
@@ -2220,6 +2221,10 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         # Конверт ЗАМЕНЯЕТСЯ итогом: предложения уже лежат в журнале ОС (#189).
         applied = feedback_review.apply_result(result, job_id=job_id, job_payload=job.get("payload_json") or {})
         result = {"feedback_review": True, "applied": applied}
+    if job.get("kind") == rule_check.KIND and result.get("rule_check"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: счёт автопроверки уже лежит в её прогоне (#190).
+        applied = rule_check.apply_result(result, job_id=job_id, job_payload=job.get("payload_json") or {})
+        result = {"rule_check": True, "applied": applied}
     return result
 
 
@@ -2511,6 +2516,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "signal_scores": lambda payload, job_id: signal_scores.build_payload(payload),
     # «Разбор ОС» (#189): карточки, публикации, отметки без имён авторов и справочники: воркеру без базы.
     "feedback_review": lambda payload, job_id: feedback_review.build_payload(payload),
+    # Автопроверка правила эксперта (#190): два набора правил агента и вход строк эталона ОС.
+    "rule_check": lambda payload, job_id: rule_check.build_payload(payload),
 }
 
 
