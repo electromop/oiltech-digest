@@ -53,3 +53,36 @@ def agent_rules(person, agent: str) -> dict:
     assert response.status_code == 200, response.text
     [found] = [one for one in response.json()["agents"] if one["agent"] == agent]
     return found
+
+
+def approved(agent: str, step: str, text: str, *, category: str | None = None, topic: str | None = None) -> int:
+    """Действующее правило: предложение с готовой проверкой, согласованное администратором; номер версии набора."""
+    action_id = proposal(agent, step, text, category=category, topic=topic)
+    checked(action_id, agent)
+    return int(feedback_rules.decide(action_id, "approve", author="admin@example.test", user_id=None,
+                                     confirm=True)["version"])
+
+
+class RecordingModel:
+    """Подставная модель одного вызова: ответ по имени схемы (или функцией от входа), вызовы запоминает."""
+
+    def __init__(self, replies, *, model="gpt-6-test"):
+        self.replies = replies
+        self.model = model
+        self.calls = []
+
+    def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
+                      reasoning_effort=None):
+        from oiltech_digest.processing.openai_client import AIResponse
+
+        self.calls.append({"instructions": instructions, "input": user_input, "schema": schema["name"],
+                           "model": model})
+        reply = self.replies[schema["name"]]
+        if callable(reply):
+            reply = reply(user_input)
+        if isinstance(reply, Exception):
+            raise reply
+        return AIResponse(data=reply, model=model or self.model, input_tokens=1000, output_tokens=100)
+
+    def instructions(self, schema: str) -> list[str]:
+        return [call["instructions"] for call in self.calls if call["schema"] == schema]

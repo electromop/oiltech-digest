@@ -111,6 +111,8 @@ def _enqueue(mode: str, agent: Any, action_id: int, spec: dict[str, Any], *, now
     if not rows and agent != "search":
         rule_check_store.finish(check_id, status=DONE, advice=_little(0), note="строк эталона ОС нет",
                                 details={"little_data": True})
+        if mode == SET:
+            _close_set_check(action_id)
         return {"check_id": check_id, "status": DONE, "rows": 0}
     from oiltech_digest import network_policy
 
@@ -262,10 +264,15 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
                                                                if key not in ("rows", "toward", "away", "unchanged",
                                                                               "advice", "note")})
     if check["mode"] == SET and check["action_id"]:
-        with connection.get_connection() as conn:
-            feedback_store.set_status(int(check["action_id"]), DONE, conn=conn)
-            conn.commit()
+        _close_set_check(int(check["action_id"]))
     return {"check_id": int(check["id"]), **{key: summary[key] for key in ("rows", "toward", "away", "unchanged")}}
+
+
+def _close_set_check(action_id: int) -> None:
+    """Строка журнала ежемесячной проверки набора: «сделано», итог в её прогоне."""
+    with connection.get_connection() as conn:
+        feedback_store.set_status(int(action_id), DONE, conn=conn)
+        conn.commit()
 
 
 def _count(check: dict[str, Any], rows: list[dict[str, Any]], answers: list[dict[str, Any]],
