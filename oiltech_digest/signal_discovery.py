@@ -449,10 +449,8 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         except Exception:  # noqa: BLE001 - без тегов разведка беднее, но работает
             tags = []
         snapshot["tags"] = [{key: tag.get(key) for key in _TAG_SNAPSHOT_FIELDS} for tag in tags]
-        # Память ОС в прогон радара не едет (#188): словарь замен из «Рекомендаций AI-агенту» снят, заголовки страниц
-        # он больше не правит. Пустой снимок только для сборки NL до #188: без поля она читала бы память из базы,
-        # которой на NL нет, а с пустым ничего не заменяет; новая сборка поле не читает. Снять со сменой контракта.
-        snapshot["memory"] = {}
+        # Память ОС в прогон радара не едет (#188): словарь замен из «Рекомендаций AI-агенту» снят. Пустой снимок для
+        # сборки NL до #188 снят со сменой контракта на 12 (#189): таких сборок на воркерах нет.
     return _jsonable(snapshot)
 
 
@@ -909,9 +907,11 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             continue
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
-        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")
+                      or owner.get("otbor_decision") is not None):
             # Склеенная отсеянная: событие уже найдено снова, повтор отсева её не оживляет и не
-            # уводит ссылку от забравшей.
+            # уводит ссылку от забравшей. С решением «Отбора» (её вернул человек кнопкой «Вернуть», #189): повтор
+            # отсева её не перезаписывает.
             continue
         if url and _links_held_elsewhere([url], key):
             # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события

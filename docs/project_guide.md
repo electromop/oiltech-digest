@@ -193,8 +193,12 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 - Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
   `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,
-  `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `POST /api/signals/{id}/restore` (вернуть убранное
+  `POST /api/signals/{id}/return` (вернуть карточку из любого раздела «Отклонённых», админ), `POST /api/signals/{id}/restore` (вернуть убранное
   людьми, админ), `/api/feedback`.
+- Журнал ОС (вкладка «Обратная связь»): `GET /api/feedback-journal` (фильтры статус, витрина, агент, автор, карточка),
+  `GET /api/feedback-journal/overview` (срезы, расход, потолок), `POST /api/feedback-journal/slices` («собрать
+  сейчас», админ), `POST /api/feedback-journal/proposals/{id}/decision`, `POST /api/feedback-journal/actions/{id}/undo`,
+  `POST /api/feedback-journal/tasks/{id}/close` (админ), `GET`/`PUT /api/feedback-journal/settings` (правит админ).
 - Выпуск: `GET /api/digest-content`, `GET /api/digest-preview.pdf`, `GET /api/digest-email`,
   `POST /api/jobs/digest-export`, `/api/monthly-digests`, `PUT /api/issue-highlights/{month}`,
   `PATCH /api/signals/{id}/issue-material`, `/api/digest-branding`.

@@ -102,10 +102,11 @@ def test_worker_run_gets_tags_and_reviewed_urls_from_snapshot(monkeypatch, core_
     result = signal_discovery.process_external_payload(payload, heartbeat=lambda: beats.append(1))
 
     json.dumps(result)  # уходит ядру по HTTP
-    # Ключи тематики из снимка тегов попали в промпт поиска; памяти ОС в снимке нет (#188, граница данных О-7).
+    # Ключи тематики из снимка тегов попали в промпт поиска; памяти ОС в снимке нет (#188, граница данных О-7; поле
+    # снято со сменой контракта на 12, #189).
     [prompt] = search.prompts
     assert "Ключевые слова: бурение, closed-loop drilling" in prompt
-    assert not payload["snapshot"]["memory"]
+    assert "memory" not in payload["snapshot"]
     topic = result["run"]["topics"][0]
     # Разобранная человеком ссылка (известна ядру по снимку) находкой не становится.
     assert topic["skipped_reviewed"] == 1

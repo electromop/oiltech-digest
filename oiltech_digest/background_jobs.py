@@ -453,6 +453,17 @@ def _run_signal_scores(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {"signal_scores": True, "applied": applied}
 
 
+def _run_feedback_review(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """«Разбор ОС» недельного среза (#189) в местном контуре: как баллы «Карточки»."""
+    from oiltech_digest import feedback_review
+
+    repository.update_background_job_progress(job_id, 20)
+    result = feedback_review.process_payload(feedback_review.build_payload(payload))
+    applied = feedback_review.apply_result(result, job_id=job_id, job_payload=payload)
+    repository.update_background_job_progress(job_id, 95)
+    return {"feedback_review": True, "applied": applied}
+
+
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Код допуска отправляет только воркер NL (#113): с РФ-ядра Telegram недоступен. Вид
     зарегистрирован, чтобы ядро могло поставить задачу; очередь external-notify здесь не исполняется."""
@@ -472,5 +483,6 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "otbor": _run_otbor,
     "signal_summary": _run_signal_summary,
     "signal_scores": _run_signal_scores,
+    "feedback_review": _run_feedback_review,
     "admission_notify": _run_admission_notify,
 }

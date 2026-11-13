@@ -2303,3 +2303,102 @@
 .signalHypothesis button {
   margin-top: var(--ot-space-02);
 }
+
+/* Журнал ОС (#189): вкладка «Обратная связь». Строка: шапка (вид, статус, когда, кто, карточка), две колонки «что
+   пришло» и «что сделала система», путь действия и кнопки администратора. */
+.journalBadge {
+  display: inline-block;
+  color: var(--sem-warn-fg);
+  font-weight: var(--ot-weight-bold);
+}
+
+.journalList {
+  display: grid;
+  gap: var(--ot-space-04);
+  margin-top: var(--ot-space-04);
+}
+
+.journalEntry {
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  padding: var(--ot-space-04);
+  min-width: 0;
+}
+
+.journalEntryHighlighted {
+  border-color: var(--sem-warn-fg);
+}
+
+.journalEntryHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ot-space-02) var(--ot-space-03);
+}
+
+.journalKind {
+  font-weight: var(--ot-weight-bold);
+}
+
+.journalEntryBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--ot-space-04);
+  margin-top: var(--ot-space-03);
+}
+
+.journalLabel {
+  margin: 0 0 var(--ot-space-02);
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
+}
+
+.journalLines {
+  margin: 0;
+  padding-left: 1.1em;
+  overflow-wrap: anywhere;
+}
+
+.journalQuote {
+  color: var(--ot-text-secondary);
+}
+
+.journalChanges {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ot-size-body);
+}
+
+.journalChanges th,
+.journalChanges td {
+  text-align: left;
+  vertical-align: top;
+  padding: 2px 8px 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.journalPath {
+  margin: var(--ot-space-03) 0 0;
+  padding-left: 1.4em;
+  font-size: var(--ot-size-body);
+}
+
+.journalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ot-space-02);
+  margin-top: var(--ot-space-03);
+}
+
+.journalActions:empty {
+  display: none;
+}
+
+.journalWording {
+  display: grid;
+  gap: var(--ot-space-02);
+}
+
+.journalOverview p {
+  margin: 0 0 var(--ot-space-02);
+}

@@ -29,6 +29,7 @@ const AREA_LABELS: Record<string, string> = {
   radar: "радар · ",
   signal_card: "карточка сигнала · ",
   otbor: "«Отбор» · ",
+  feedback_review: "разбор ОС · ",
 };
 
 function pct(part: number, total: number): string {

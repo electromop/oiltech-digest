@@ -350,6 +350,11 @@ SIGNAL_CONFIRMED_PUBLICATIONS = max(1, int(os.environ.get("SIGNAL_CONFIRMED_PUBL
 # вариант; какой оставить, решает экзамен (#133) по близости к эксперту.
 SIGNAL_SCORES_KEYWORDS = os.environ.get("SIGNAL_SCORES_KEYWORDS", "1").strip().lower() in {"1", "true", "yes", "on"}
 
+# --- Разбор ОС (#189, спека #187) ---
+# Модель разбора ОС задаёт настройка контура на вкладке «Обратная связь» (feedback_settings, gpt-6-sol по умолчанию);
+# здесь только уровень рассуждения, как у остальных агентов «Отбора».
+FEEDBACK_REVIEW_REASONING = os.environ.get("FEEDBACK_REVIEW_REASONING", "").strip() or "low"
+
 # Целевые показатели экрана «Статистика»: из презентации ГД «Нефтесервисный радар»
 # (июль 2026): >120 источников (слайды 4-5); бюджет ИИ ≈10 000 ₽/мес при потоке
 # 5 000 статей/мес (слайд 7). Курс для пересчёта cost_usd в рубли берётся у ЦБ РФ

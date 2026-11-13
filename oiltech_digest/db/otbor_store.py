@@ -23,7 +23,8 @@ from psycopg.types.json import Json
 from oiltech_digest import config
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
-                                          SIGNAL_ORIGIN_FEED, SIGNAL_SELECTOR_OTBOR, SYSTEM_TAG_UNCLASSIFIED,
+                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_RADAR, SIGNAL_SELECTOR_OTBOR,
+                                          SYSTEM_TAG_UNCLASSIFIED,
                                           refresh_platform_decisions)
 from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 
@@ -36,9 +37,6 @@ FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено: публикацию выбрали «в дайджест», а повтор «Отбора» решения людей не
 # перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»); не изменено: решение человека (#132).
 DECIDED, KEPT_IN_DIGEST, KEPT_BY_HUMAN = "decided", "kept_in_digest", "kept_by_human"
-# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего; убрано людьми
-# (#188): его возвращает «Вернуть» раздела «Убрано людьми» прежним решением (removed_by_people.restore).
-RETURNED, NOT_REJECTED, REMOVED_BY_PEOPLE = "returned", "not_rejected", "removed_by_people"
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение: в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
 
@@ -370,56 +368,6 @@ def write_signal_decision(signal_id: int, values: dict[str, Any], *, disputed: s
                                   recipe=recipe, chosen_sql=marks.signal_marked_sql("%s", "digest"))
         conn.commit()
     return written
-
-
-def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) -> str | None:
-    """Вернуть отклонённое «Отбором» решением человека (#132, спека #128): человек вписал то, что ставит «Отбор»:
-    отрасль, связь и применение, категорию (проверены: otbor_answer.return_problems). Решение: «брать», источник всех
-    полей, человек, пометка «спорное: „Отбор“ не взял бы» с причиной отказа; «Решение платформы»: по ступени, когда
-    будут баллы. Дальше публикация идёт по остатку конвейера: суть и перевод, оба вызова «Карточки», «Дедуп». RETURNED;
-    NOT_REJECTED: «Отбор» её не отклонял (вернуть можно только отклонённое); None: сигнала нет."""
-    from oiltech_digest.otbor_answer import code_label
-    from oiltech_digest.otbor_pack_format import load_dictionaries
-
-    label = partial(code_label, load_dictionaries())
-
-    with connection.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by, human_removal"
-                    " FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
-        row = cur.fetchone()
-        if row is None:
-            return None
-        if row["human_removal"] is not None:
-            return REMOVED_BY_PEOPLE
-        if row["otbor_decision"] != OTBOR_REJECT:
-            return NOT_REJECTED
-        disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
-        application = values.get("oilfield_application") if values["oilfield_relevance"] == "transferable" else None
-        relevance = label("oilfield_relevance", values["oilfield_relevance"])
-        step = {"stage": "Человек", "text": (
-            f"Вернул{f' {author}' if author else ''}: отрасль «{label('industry', values['industry'])}», связь "
-            f"«{relevance}»{f' ({application})' if application else ''}, категория "
-            f"«{label('category', values['category'])}». {disputed}")}
-        set_by = {**(row["card_set_by"] or {}),
-                  **{column: CARD_SET_BY_HUMAN for column in (*_SET_BY_COLUMNS, "otbor_decision")}}
-        cur.execute(
-            f"""
-            UPDATE signals
-            SET industry = %s, oilfield_relevance = %s, oilfield_application = %s, signal_category = %s,
-                otbor_decision = '{OTBOR_ACCEPT}', accepted_at = now(), reject_reason = NULL, otbor_disputed = %s,
-                otbor_failure = NULL, otbor_failure_reason = NULL, card_set_by = %s,
-                decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
-            WHERE id = %s
-            """,
-            (values["industry"], values["oilfield_relevance"], application, values["category"], disputed,
-             Json(set_by), Json([step]), row["id"]),
-        )
-        refresh_platform_decisions([row["id"]], conn=conn)
-        conn.commit()
-    # Принятая статья: снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
-    sync_feed_article(row)
-    return RETURNED
 
 
 def sync_feed_article(row: dict[str, Any]) -> None:

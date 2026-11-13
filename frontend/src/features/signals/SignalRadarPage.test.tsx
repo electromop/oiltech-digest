@@ -1194,6 +1194,30 @@ describe("качество радара на экране (эксперт зак
       "Публикация возвращена: она пройдёт суть, карточку и баллы с пометкой «спорное»"));
   });
 
+  it("«Вернуть» есть в любом разделе «Отклонённых»: и у спрятанного машиной до «Отбора» (#189, решение 13.11)", async () => {
+    const dropped: Signal = { ...rejectedCard, id: 603, signal_key: "url:example.com/x", origin: "radar",
+      title_ru: "Найдено поиском без текста", otbor_decision: null, reject_reason: null,
+      hidden_reason: "отсеяно (поиск): текст страницы не получен" };
+    serveWithHidden([scored], [dropped]);
+    vi.mocked(getSignalDictionaries).mockResolvedValueOnce({
+      event_type: [], region: [], technology_class: [], technology_maturity: [], companies: [], country: [],
+      otbor_return: RETURN_CHOICES,
+    });
+    vi.mocked(returnSignal).mockResolvedValue({ ok: true });
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin />);
+    await screen.findByText(scored.title_ru as string);
+    fireEvent.click(screen.getByRole("button", { name: "Отклонённые: 1" }));
+    const card = (await screen.findByText("Найдено поиском без текста")).closest("article") as HTMLElement;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Вернуть" }));
+    const form = within(card).getByRole("form", { name: "Вернуть публикацию" });
+    fireEvent.change(within(form).getByLabelText("Категория"), { target: { value: "technology" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Вернуть" }));
+
+    await waitFor(() => expect(returnSignal).toHaveBeenCalledWith(603, expect.objectContaining({
+      signal_category: "technology" })));
+  });
+
   it("без справочника «Отбора» кнопки «Вернуть» нет: вариантов формы взять неоткуда (#132)", async () => {
     serveWithHidden([scored], [], [rejectedCard]);
     renderRadar(true);

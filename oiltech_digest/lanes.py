@@ -27,7 +27,7 @@ AGENTS = "external-agents"
 NOTIFY = "external-notify"
 
 _AI_KINDS = frozenset({"process_articles", "translate_titles", "process_document", "reprint_review",
-                       "signal_card", "otbor", "signal_summary", "signal_scores"})
+                       "signal_card", "otbor", "signal_summary", "signal_scores", "feedback_review"})
 _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
 _AGENT_KINDS = frozenset({"signal_discovery"})
 

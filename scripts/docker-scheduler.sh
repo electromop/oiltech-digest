@@ -199,6 +199,10 @@ while true; do
   # Второй вызов «Карточки» (#132): баллы по профилю категории, после её основного вызова.
   run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
 
+  # Недельный срез контура ОС (#189): в день и час из настроек контура (понедельник, 09:00 МСК) разбор ОС по
+  # отметкам с прошлого среза; в остальные циклы только «устарело» у предложений без решения.
+  run_step "feedback-slice" python -m oiltech_digest.cli feedback-slice
+
   if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
     run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
   fi

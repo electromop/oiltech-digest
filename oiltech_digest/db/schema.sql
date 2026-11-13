@@ -1302,3 +1302,73 @@ ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS applied BOOLEAN NOT 
 -- «Убрано людьми» (#188): администратор убрал карточку оценкой «Не релевантно». Прежнее решение «Отбора» (его
 -- возвращает «вернуть»), кто, когда и почему; NULL: людьми не убрана.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS human_removal JSONB;
+
+-- Контур ОС (#189, спека #187): журнал ОС, недельный срез, разбор ОС, настройки контура. Отметки остаются в журнале
+-- отметок (signal_feedback_events); действия по ним: новая сущность «действие ОС».
+-- Недельный срез: окно отметок с прошлого среза, задача разбора ОС и итог. week_start: понедельник недели по Москве у
+-- среза по расписанию (не дважды за неделю). Строка seed: начало окна первого среза (выкат #188).
+CREATE TABLE IF NOT EXISTS feedback_slices (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  trigger       TEXT NOT NULL,                 -- schedule / manual / seed
+  status        TEXT NOT NULL,                 -- running / done / postponed / failed
+  window_from   TIMESTAMPTZ NOT NULL,
+  window_to     TIMESTAMPTZ NOT NULL,
+  week_start    DATE,
+  job_id        BIGINT REFERENCES background_jobs(id) ON DELETE SET NULL,
+  signals       INTEGER NOT NULL DEFAULT 0,
+  proposals     INTEGER NOT NULL DEFAULT 0,
+  note          TEXT,
+  author        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_slices_week ON feedback_slices(week_start) WHERE trigger = 'schedule';
+CREATE INDEX IF NOT EXISTS idx_feedback_slices_created ON feedback_slices(created_at DESC);
+-- Действие ОС: вид (immediate: явное действие администратора сразу; signal_proposal: предложение по сигналу; decision:
+-- решение администратора; applied: применение системой; undo: отмена; sample_task: задача выборки), статус (done,
+-- pending, approved, modified, dismissed, applied, undone, stale), основание (номера отметок), цитата, агенты, что
+-- сделано или предложено и прежнее состояние для отмены (details), автор и время. parent_id: путь действия.
+CREATE TABLE IF NOT EXISTS feedback_actions (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind          TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  signal_id     BIGINT REFERENCES signals(id) ON DELETE CASCADE,
+  parent_id     BIGINT REFERENCES feedback_actions(id) ON DELETE CASCADE,
+  slice_id      BIGINT REFERENCES feedback_slices(id) ON DELETE SET NULL,
+  event_ids     BIGINT[] NOT NULL DEFAULT '{}',
+  quote         TEXT,
+  agents        TEXT[] NOT NULL DEFAULT '{}',
+  details       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  author        TEXT,
+  user_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_actions_created ON feedback_actions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_actions_signal ON feedback_actions(signal_id, kind, status);
+CREATE INDEX IF NOT EXISTS idx_feedback_actions_parent ON feedback_actions(parent_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_actions_events ON feedback_actions USING gin(event_ids);
+-- Настройки контура ОС: строка на сохранение, действует последняя поверх умолчаний кода (feedback_settings.py).
+CREATE TABLE IF NOT EXISTS feedback_settings (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  values_json   JSONB NOT NULL,
+  author        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Отмена правки заголовка и сути из журнала ОС (#189): правка больше не ложится на карточку и в открытый выпуск;
+-- закрытый выпуск по-прежнему берёт правки, какими они были до закрытия.
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS correction_undone_at TIMESTAMPTZ;
+-- Пары «одно ли событие» от людей (#189): отмена склейки из журнала ОС пишет пару «не одно событие» для «Дедупа» (эталон
+-- его автопроверки). Строки не правятся: последняя по паре действует.
+CREATE TABLE IF NOT EXISTS signal_event_pairs (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  signal_id        BIGINT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  other_signal_id  BIGINT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  same_event       BOOLEAN NOT NULL,
+  source           TEXT NOT NULL,                -- undo_merge
+  action_id        BIGINT REFERENCES feedback_actions(id) ON DELETE SET NULL,
+  author           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_event_pairs_signal ON signal_event_pairs(signal_id);
+CREATE INDEX IF NOT EXISTS idx_signal_event_pairs_other ON signal_event_pairs(other_signal_id);

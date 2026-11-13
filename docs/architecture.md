@@ -59,7 +59,7 @@
 
 | Сервис | Очереди | Что исполняет | Потоков |
 |---|---|---|---|
-| `external-worker` | `external-ai` | поток дня: суть и перевод ленты, «Отбор», «Суть и перевод» сигналов, «Карточка» и её баллы, судья перепечаток, разбор документов | 1 |
+| `external-worker` | `external-ai` | поток дня: суть и перевод ленты, «Отбор», «Суть и перевод» сигналов, «Карточка» и её баллы, разбор ОС, судья перепечаток, разбор документов | 1 |
 | `external-worker-bulk` | `external-ai-bulk` | пересчёты и повторы названных публикаций (те же агенты, без документов и перепечаток); на ядре включается `AI_BULK_LANE_ENABLED=1` | 1 |
 | `external-worker-fetch` | `external-fetch`, `external-notify` | сбор запросом, дозагрузка тел; отправка кода допуска в Telegram | 3 |
 | `external-worker-browser` | `external-playwright` | сбор браузером | 1 |
@@ -159,6 +159,14 @@ RSS часто отдаёт только анонс: статья ложится
   профиля категории: бизнес набором business, технология набором tech_radar, «другое» без баллов. Итог по весам,
   ступень (`SIGNAL_SCORE_BANDS`, по умолчанию 80, 65, 40) и «Решение платформы» считает код
   ([ADR 0002](adr/0002-two-scoring-profiles.md)).
+- «Разбор ОС» ([`feedback_review.py`](../oiltech_digest/feedback_review.py); недельный срез `feedback-slice`,
+  [`feedback_slice.py`](../oiltech_digest/feedback_slice.py)). Раз в неделю по настройке контура (понедельник, 09:00
+  МСК) и по кнопке «собрать сейчас» сводит отметки ОС всех участников по каждому сигналу в одно предложение улучшения
+  карточки (поле, значение, номера отметок, цитата); ответ модели проверяет код, тексты отметок уходят без имён
+  авторов. Предложение ложится в журнал ОС ([`feedback_journal.py`](../oiltech_digest/feedback_journal.py)), его
+  согласует администратор, применяет система ([`feedback_changes.py`](../oiltech_digest/feedback_changes.py)); любое
+  явное действие администратора и применённое улучшение отменяются из журнала. Настройки контура (20 штук) в базе,
+  правит администратор на вкладке «Обратная связь» ([`feedback_settings.py`](../oiltech_digest/feedback_settings.py)).
 
 Отклонённую публикацию обработка дальше не берёт, ждущую решения «Отбора» тоже. Статья, которую до 08.11 решил гейт
 ленты, живёт по его решению (`article_cards.relevant`); теги и баллы статей (`article_tags`, `article_scores`) с
@@ -249,7 +257,7 @@ RSS часто отдаёт только анонс: статья ложится
 Доступ по Bearer-токену; на ядре хранится только его SHA-256 (`EXTERNAL_WORKER_TOKEN_HASH`), сравнение через
 `hmac.compare_digest`. У каждой задачи свой `lease_token`.
 
-Договор сторон в [`contract.py`](../oiltech_digest/contract.py), сейчас контракт 11. Воркер в каждом запросе шлёт
+Договор сторон в [`contract.py`](../oiltech_digest/contract.py), сейчас контракт 12. Воркер в каждом запросе шлёт
 сборку (git SHA) и номер контракта (`X-Worker-Build`, `X-Worker-Contract`); ядро помнит их по контейнеру
 (`external_worker_consumers`), `check-lanes` поднимает тревогу при расхождении, а задачу, которую старая сборка
 исполнила бы неверно, ядро ей не выдаёт (`contract.required_contract`). Порядок выката: ядро, потом NL.
@@ -282,7 +290,10 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
 - Настройки: `tags` (13 тематик заказчика и подтеги), `scoring_criteria` (профили business и tech_radar),
   `company_parents` (дочерние общества для фильтра «всё про компанию»), `company_descriptions`.
 - Отметки и обратная связь: `article_marks` и `signal_marks` (общие для всех учёток, через `db/marks.py`),
-  `signal_feedback_events` (журнал отметок ОС; `applied`: явные действия применены, отметка администратора),
+  `signal_feedback_events` (журнал отметок ОС; `applied`: явные действия применены, отметка администратора;
+  `correction_undone_at`: правка отменена из журнала ОС), `feedback_actions` (действия ОС: сразу, предложение по
+  сигналу, решение, применение, отмена, задача выборки), `feedback_slices` (недельные срезы), `feedback_settings`
+  (настройки контура ОС), `signal_event_pairs` (пары «одно ли событие» от людей),
   `feedback_entries`, `signal_agent_memory` (прежняя память радара: история отзывов до #188, отметки её больше не пишут, и
   эталон заказчика),
   `signal_training_examples` (снимки решений для выгрузок); личные `user_article_states` и `user_signal_states`
@@ -343,6 +354,7 @@ enqueue-external-refetch        при FETCH_EXTERNAL_ENABLED=1: тела обр
 find-reprints --apply           раз в REPRINTS_INTERVAL_HOURS (12 ч) по времени прошлого прогона; 0 выключает
 enqueue-signal-cards            при SIGNAL_CARD_ENABLED=1: основной вызов «Карточки»
 enqueue-signal-scores           баллы «Карточки»
+feedback-slice                  недельный срез ОС в день и час из настроек контура; «устарело» у предложений
 enqueue-daily-signal-discovery  радар (раздел 3.6)
 check-lanes                     сторож полос: застой очереди, нет живого воркера, расхождение контракта
 stats

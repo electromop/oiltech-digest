@@ -13,8 +13,8 @@ from typing import Any, Callable
 
 import requests
 
-from oiltech_digest import (admission, config, contract, otbor, signal_card, signal_discovery, signal_scores,
-                            signal_summary, worker_shutdown)
+from oiltech_digest import (admission, config, contract, feedback_review, otbor, signal_card, signal_discovery,
+                            signal_scores, signal_summary, worker_shutdown)
 from oiltech_digest.ingestion import core_page, external_fetch, publisher_page
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
@@ -290,6 +290,8 @@ _JOB_STALL_SECONDS = {
     "otbor": 1200,
     "signal_summary": 1200,
     "signal_scores": 1200,
+    # Разбор ОС (#189): один вызов модели на сигнал.
+    "feedback_review": 1200,
 }
 # Процесс перед перезапуском перестаёт брать задачи и ждёт соседние потоки полосы: выход
 # рвал бы их здоровые задачи (ждали бы истечения аренды и теряли попытку).
@@ -448,6 +450,8 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "signal_summary": (signal_summary, "process_payload"),
     # Второй вызов «Карточки»: баллы по профилю категории (#132, контракт 6).
     "signal_scores": (signal_scores, "process_payload"),
+    # «Разбор ОС» недельного среза контура ОС (#189, контракт 12).
+    "feedback_review": (feedback_review, "process_payload"),
     # Код допуска в чат подтверждающих (#113, контракт 3): воркер сбора, полоса external-notify.
     "admission_notify": (admission, "send_notification"),
 }

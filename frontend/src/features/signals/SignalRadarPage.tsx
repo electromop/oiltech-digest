@@ -1004,6 +1004,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     {signal.otbor_disputed ? (
                       <div className="signalCardStatus signalDisputed">Спорный сигнал: {disputedWhy(signal.otbor_disputed)}</div>
                     ) : null}
+                    {/* Предложение разбора ОС ждёт решения администратора (#189): значок ведёт на его строку журнала. */}
+                    {signal.feedback_pending ? (
+                      <a className="signalCardStatus journalBadge"
+                        href={`?screen=feedback-journal&signal=${signal.id}&action=${signal.feedback_pending}`}>
+                        Ждёт решения в журнале
+                      </a>
+                    ) : null}
                   </div>
                   <div className="articleCardMetrics signalCardMetrics">
                     {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
@@ -1049,8 +1056,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                         Вернуть
                       </button>
                     ) : null}
-                    {/* Отклонённое «Отбором» возвращает человек, вписав его поля (#132): разделы видит только админ. */}
-                    {isAdmin && signal.otbor_decision === "reject" && !signal.human_removal && dictionaries?.otbor_return ? (
+                    {/* Карточку из «Отклонённых» возвращает человек, вписав поля «Отбора» (#132): из любого раздела,
+                        не только отказа «Отбора» (решение владельца 13.11, #189); разделы видит только админ. */}
+                    {isAdmin && !signal.human_removal && (signal.otbor_decision === "reject" || Boolean(signal.section_reason))
+                      && dictionaries?.otbor_return ? (
                       <button
                         type="button"
                         className="ghostButton compactButton"
