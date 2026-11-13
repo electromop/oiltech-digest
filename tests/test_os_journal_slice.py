@@ -271,10 +271,11 @@ def test_cost_ceiling_postpones_the_review_the_admin_sees_a_warning_and_the_cost
 
     assert postponed["status"] == "postponed"
     assert _reviewed(review(monkeypatch, {})) == []
-    assert "Потолок расходов контура ОС: $0.01 из $0.01" in admin.get("/api/feedback-journal/overview").json()["warning"]
+    # Расход разбора: вызов по сигналу и вызов о правилах эксперта (#190), оба своей стадией разбора ОС.
+    assert "Потолок расходов контура ОС: $0.02 из $0.01" in admin.get("/api/feedback-journal/overview").json()["warning"]
     assert colleague.get("/api/feedback-journal/overview").json()["warning"] is None
     costs = admin.get("/api/stats/monthly").json()["ai_cost"]
-    assert [(row["area"], row["runs"]) for row in costs if row["area"] == "feedback_review"] == [("feedback_review", 1)]
+    assert [(row["area"], row["runs"]) for row in costs if row["area"] == "feedback_review"] == [("feedback_review", 2)]
 
     # Отложенный срез окна не закрыл: его отметку берёт следующий.
     settings(admin, monthly_ceiling_usd=50)
