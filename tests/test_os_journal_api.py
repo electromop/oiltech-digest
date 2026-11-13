@@ -175,3 +175,45 @@ def test_removed_by_people_section_opens_to_participants_only_by_the_setting(iss
     assert response.status_code == 200
     assert [row["id"] for row in response.json()] == [feed]
     assert colleague.get("/api/signals", params={"section": "all"}).status_code == 403
+
+
+def _rejected(person) -> dict[int, str]:
+    """«Отклонённые» одним списком: номер карточки и «кто убрал → причина»."""
+    response = person.get("/api/signals", params={"section": "all", "limit": 200})
+    assert response.status_code == 200, response.text
+    return {row["id"]: row["section_reason"] for row in response.json()}
+
+
+def test_admin_returns_a_card_from_any_rejected_section_and_undoes_it_from_the_journal(issue):
+    """Решение владельца 13.11: ушедшую карточку администратор возвращает кнопкой «Вернуть» из любого раздела
+    «Отклонённых» (здесь технический отсев поиска и «Другое»); возврат ложится в журнал ОС и отменяется оттуда:
+    карточка снова в своём разделе."""
+    from oiltech_digest.signal_research import PAGE_NOT_FETCHED
+    from tests.digest_user_path_support import add_signal, feed_signal, msk, set_card
+    from tests.os_journal_support import card
+
+    admin, analyst = issue["admin"], issue["analyst"]
+    dropped = add_signal("dropped", first_seen=msk(2026, 9, 12, 0, 20), title="Operator pilots MPD on the shelf")
+    set_card(dropped, filter_stage="search", filter_reason=PAGE_NOT_FETCHED, maturity="reject")
+    other = card(feed_signal(issue["a"]["mid"]), category="other")
+    sections = _rejected(admin)
+    assert {dropped, other} <= set(sections)
+
+    for signal_id, category in ((dropped, "technology"), (other, "business")):
+        response = admin.post(f"/api/signals/{signal_id}/return", json={
+            "industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
+            "signal_category": category})
+        assert response.status_code == 200, response.text
+
+    assert dropped in cards(analyst, "technology") and other in cards(analyst, "business")
+    assert {dropped, other}.isdisjoint(_rejected(admin))
+    [row] = [one for one in journal(admin, kind="immediate") if one["signal_id"] == dropped]
+    assert row["system"] == [f"Вернул из «Отклонённых» ({sections[dropped]}): технология"]
+    assert (row["author"], row["agents"], row["can_undo"]) == (f"user{admin.id}@example.test", ["otbor"], True)
+
+    undone = admin.post(f"/api/feedback-journal/actions/{row['id']}/undo")
+    assert undone.status_code == 200, undone.text
+
+    assert dropped not in cards(analyst, "technology")
+    assert _rejected(admin)[dropped] == sections[dropped]
+    assert entry(admin, row["key"])["status"] == "undone"

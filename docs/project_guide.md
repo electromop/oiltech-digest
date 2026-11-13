@@ -193,7 +193,7 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 - Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
   `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,
-  `POST /api/signals/{id}/return` (вернуть отклонённое, админ), `POST /api/signals/{id}/restore` (вернуть убранное
+  `POST /api/signals/{id}/return` (вернуть карточку из любого раздела «Отклонённых», админ), `POST /api/signals/{id}/restore` (вернуть убранное
   людьми, админ), `/api/feedback`.
 - Журнал ОС (вкладка «Обратная связь»): `GET /api/feedback-journal` (фильтры статус, витрина, агент, автор, карточка),
   `GET /api/feedback-journal/overview` (срезы, расход, потолок), `POST /api/feedback-journal/slices` («собрать

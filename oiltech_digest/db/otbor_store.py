@@ -23,7 +23,8 @@ from psycopg.types.json import Json
 from oiltech_digest import config
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
-                                          SIGNAL_ORIGIN_FEED, SIGNAL_SELECTOR_OTBOR, SYSTEM_TAG_UNCLASSIFIED,
+                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_RADAR, SIGNAL_SELECTOR_OTBOR,
+                                          SYSTEM_TAG_UNCLASSIFIED,
                                           refresh_platform_decisions)
 from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 
@@ -373,28 +374,44 @@ def write_signal_decision(signal_id: int, values: dict[str, Any], *, disputed: s
 
 
 def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) -> str | None:
-    """Вернуть отклонённое «Отбором» решением человека (#132, спека #128): человек вписал то, что ставит «Отбор»:
-    отрасль, связь и применение, категорию (проверены: otbor_answer.return_problems). Решение: «брать», источник всех
-    полей, человек, пометка «спорное: „Отбор“ не взял бы» с причиной отказа; «Решение платформы»: по ступени, когда
-    будут баллы. Дальше публикация идёт по остатку конвейера: суть и перевод, оба вызова «Карточки», «Дедуп». RETURNED;
-    NOT_REJECTED: «Отбор» её не отклонял (вернуть можно только отклонённое); None: сигнала нет."""
+    """Вернуть карточку из «Отклонённых» решением человека (#132, спека #128; с #189 из любого раздела, решение
+    владельца 13.11: «если карточка уходит, администратор возвращает её кнопкой»): человек вписал то, что ставит
+    «Отбор»: отрасль, связь и применение, категорию (проверены: otbor_answer.return_problems). Решение: «брать»,
+    источник всех полей, человек, пометка «спорное» с тем, откуда вернули («„Отбор“ не взял бы: причина» или раздел
+    «Отклонённых»); «Решение платформы»: по ступени, когда будут баллы. Дальше публикация идёт по остатку конвейера:
+    суть и перевод, оба вызова «Карточки», «Дедуп»; карточка, спрятанная до «Отбора», встаёт на его путь (selector),
+    а заголовок, который поиск оставил непереведённым, переведёт «Суть и перевод». RETURNED; NOT_REJECTED: карточки
+    нет в «Отклонённых» (вернуть можно только оттуда); REMOVED_BY_PEOPLE: её возвращает «Вернуть» прежним решением;
+    None: сигнала нет."""
+    from oiltech_digest.db.rejected_sections import everything
     from oiltech_digest.otbor_answer import code_label
     from oiltech_digest.otbor_pack_format import load_dictionaries
+    from oiltech_digest.processing.pipeline import _needs_translation
 
     label = partial(code_label, load_dictionaries())
+    section = everything()
 
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by, human_removal"
-                    " FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
+        cur.execute(f"SELECT s.id, s.origin, s.origin_article_id, s.otbor_decision, s.reject_reason, s.card_set_by,"
+                    f" s.human_removal, s.selector, s.title, s.title_ru, ({section.condition}) AS rejected,"
+                    f" ({section.short_reason}) AS section_reason FROM signals s WHERE s.id = %s FOR UPDATE OF s",
+                    (int(signal_id),))
         row = cur.fetchone()
         if row is None:
             return None
         if row["human_removal"] is not None:
             return REMOVED_BY_PEOPLE
-        if row["otbor_decision"] != OTBOR_REJECT:
+        if row["otbor_decision"] != OTBOR_REJECT and not row["rejected"]:
             return NOT_REJECTED
-        disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
+        disputed = (f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
+                    if row["otbor_decision"] == OTBOR_REJECT else f"Было в «Отклонённых»: {row['section_reason']}")
+        # Находка радара, спрятанная до «Отбора», встаёт на его путь; её непереведённый заголовок (поиск копирует
+        # исходный) переведёт «Суть и перевод». Сигнал ленты суть и перевод получает обработкой статьи: путь прежний.
+        radar_before = row["origin"] == SIGNAL_ORIGIN_RADAR and row["selector"] is None
+        title_ru = row["title_ru"]
+        if radar_before and title_ru == row["title"] and _needs_translation(row["title"] or ""):
+            title_ru = None
         application = values.get("oilfield_application") if values["oilfield_relevance"] == "transferable" else None
         relevance = label("oilfield_relevance", values["oilfield_relevance"])
         step = {"stage": "Человек", "text": (
@@ -409,11 +426,12 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
             SET industry = %s, oilfield_relevance = %s, oilfield_application = %s, signal_category = %s,
                 otbor_decision = '{OTBOR_ACCEPT}', accepted_at = now(), reject_reason = NULL, otbor_disputed = %s,
                 otbor_failure = NULL, otbor_failure_reason = NULL, card_set_by = %s,
+                selector = CASE WHEN %s THEN '{SIGNAL_SELECTOR_OTBOR}' ELSE selector END, title_ru = %s,
                 decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
             WHERE id = %s
             """,
             (values["industry"], values["oilfield_relevance"], application, values["category"], disputed,
-             Json(set_by), Json([step]), row["id"]),
+             Json(set_by), radar_before, title_ru, Json([step]), row["id"]),
         )
         refresh_platform_decisions([row["id"]], conn=conn)
         conn.commit()

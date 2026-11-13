@@ -1538,9 +1538,10 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 @app.post("/api/signals/{signal_id}/return")
 def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
                            user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», отрасль, связь и
-    применение, категорию, и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
-    человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит только он (решение 05.10)."""
+    """Вернуть карточку из «Отклонённых» (#132, спека #128; с #189 из любого раздела: решение владельца 13.11): человек
+    вписывает то, что ставит «Отбор», отрасль, связь и применение, категорию, и публикация идёт по остатку конвейера с
+    пометкой «спорное». Решение человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит
+    только он (решение 05.10). Возврат ложится в журнал ОС строкой «сразу» и отменяется оттуда (#189)."""
     from oiltech_digest.db import otbor_store
     from oiltech_digest.otbor_answer import return_problems
     from oiltech_digest.otbor_pack_format import load_dictionaries
@@ -1551,13 +1552,16 @@ def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
     problems = return_problems(values, load_dictionaries())
     if problems:
         raise HTTPException(status_code=422, detail="Вернуть нельзя: " + "; ".join(problems))
+    before = feedback_changes.return_snapshot(signal_id)
     done = otbor_store.human_return(signal_id, values, author=user.get("email"))
     if done is None:
         raise HTTPException(status_code=404, detail="Signal not found")
     if done == otbor_store.REMOVED_BY_PEOPLE:
         raise HTTPException(status_code=409, detail="Карточку убрали люди: её возвращает «Вернуть» прежним решением")
     if done == otbor_store.NOT_REJECTED:
-        raise HTTPException(status_code=409, detail="Вернуть можно только отклонённое «Отбором»")
+        raise HTTPException(status_code=409, detail="Вернуть можно только карточку из «Отклонённых»")
+    feedback_journal.record_return(signal_id, feedback_changes.return_change(before, values["category"]),
+                                   author=user.get("email"), user_id=int(user["id"]))
     return {"ok": True}
 
 

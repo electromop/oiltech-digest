@@ -25,8 +25,9 @@ from oiltech_digest.db.repository import _FEEDBACK_IS_BLOCK_SQL
 # Виды действий ОС.
 IMMEDIATE, PROPOSAL, DECISION, APPLIED, UNDO, SAMPLE_TASK = (
     "immediate", "signal_proposal", "decision", "applied", "undo", "sample_task")
-# Строки журнала верхнего уровня: отметки (из журнала отметок), предложения и задачи выборки.
-TOP_KINDS = (PROPOSAL, SAMPLE_TASK)
+# Строки журнала верхнего уровня: отметки (из журнала отметок), предложения, задачи выборки и явные действия
+# администратора без отметки («Вернуть» в «Отклонённых»); «сразу» по отметке идёт в её строке.
+TOP_KINDS = (PROPOSAL, SAMPLE_TASK, IMMEDIATE)
 # Статусы.
 DONE, PENDING, APPROVED, MODIFIED, DISMISSED, APPLIED_STATUS, UNDONE, STALE = (
     "done", "pending", "approved", "modified", "dismissed", "applied", "undone", "stale")
@@ -377,8 +378,9 @@ def journal_marks(*, status: str | None, showcase: str | None, agent: str | None
 
 def journal_actions(*, status: str | None, showcase: str | None, agent: str | None, author: str | None,
                     signal_id: int | None, kinds: Sequence[str], limit: int) -> list[dict[str, Any]]:
-    """Предложения и задачи выборки журнала ОС, новые сверху. Автор у предложения: автор любой отметки основания."""
-    clauses, params = ["fa.kind = ANY(%s)"], [list(kinds)]
+    """Предложения, задачи выборки и явные действия без отметки журнала ОС, новые сверху. Автор у предложения: автор
+    любой отметки основания, у явного действия: администратор."""
+    clauses, params = [f"fa.kind = ANY(%s) AND (fa.kind <> '{IMMEDIATE}' OR cardinality(fa.event_ids) = 0)"], [list(kinds)]
     if status:
         clauses.append("fa.status = %s")
         params.append(status)
@@ -389,9 +391,9 @@ def journal_actions(*, status: str | None, showcase: str | None, agent: str | No
         clauses.append("%s = ANY(fa.agents)")
         params.append(agent)
     if author:
-        clauses.append("EXISTS (SELECT 1 FROM signal_feedback_events sfe LEFT JOIN users u ON u.id = sfe.user_id"
-                       f" WHERE sfe.id = ANY(fa.event_ids) AND {_AUTHOR_SQL} = %s)")
-        params.append(author)
+        clauses.append("(fa.author = %s OR EXISTS (SELECT 1 FROM signal_feedback_events sfe LEFT JOIN users u"
+                       f" ON u.id = sfe.user_id WHERE sfe.id = ANY(fa.event_ids) AND {_AUTHOR_SQL} = %s))")
+        params += [author, author]
     if signal_id is not None:
         clauses.append("fa.signal_id = %s")
         params.append(int(signal_id))

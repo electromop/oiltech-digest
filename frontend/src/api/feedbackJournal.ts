@@ -4,7 +4,8 @@ import { apiFetch } from "./client";
 // выборки одним журналом; решения, отмена и настройки только у администратора (сервер отвечает остальным 403).
 
 export type JournalStatus = "done" | "pending" | "approved" | "modified" | "dismissed" | "applied" | "undone" | "stale";
-export type JournalKind = "mark" | "signal_proposal" | "sample_task";
+// immediate: явное действие администратора без отметки (кнопка «Вернуть» в «Отклонённых»).
+export type JournalKind = "mark" | "signal_proposal" | "sample_task" | "immediate";
 
 export type JournalStep = { label: string; at: string | null; author: string | null };
 

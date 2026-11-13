@@ -55,6 +55,16 @@ def record_immediate(event_id: int, signal_id: int, changes: list[dict[str, Any]
                                         author=author, user_id=user_id)
 
 
+def record_return(signal_id: int, change: dict[str, Any] | None, *, author: str | None,
+                  user_id: int | None) -> int | None:
+    """Строка «сразу» к кнопке «Вернуть» в «Отклонённых» (решение владельца 13.11): отметки у неё нет, строка своя;
+    отмена из журнала уводит карточку обратно в её раздел."""
+    if not change:
+        return None
+    return feedback_store.create_action(IMMEDIATE, DONE, signal_id=signal_id, agents=["otbor"],
+                                        details={"changes": [change]}, author=author, user_id=user_id)
+
+
 def after_restore(signal_id: int, *, author: str | None, user_id: int | None) -> None:
     """«Вернуть» в «Убрано людьми» мимо журнала: уборка, которую вернули, в журнале отменена."""
     action = feedback_store.latest_with_change(signal_id, "removed")
@@ -74,6 +84,8 @@ def after_restore(signal_id: int, *, author: str | None, user_id: int | None) ->
 def _agent_of(field: str) -> str | None:
     if field == "correction":
         return "summary"
+    if field == "returned":
+        return "otbor"
     spec = feedback_changes.FIELDS.get(field)
     return spec.agent if spec else None
 
@@ -166,6 +178,12 @@ def _action_entry(row: dict[str, Any], steps: dict[int, list[dict[str, Any]]], b
         "status": row["status"], "quote": row["quote"], "event_ids": [int(one) for one in row["event_ids"] or []],
     }
     own_steps = steps.get(row["id"], [])
+    if row["kind"] == IMMEDIATE:
+        system = [feedback_changes.describe(change) for change in details.get("changes") or []]
+        path = [_step("Сразу: " + "; ".join(system), row["created_at"], row["author"])]
+        path += [_step(_undo_label(step), step["created_at"], step["author"]) for step in own_steps]
+        return {**entry, "system": system, "path": path, "action_id": int(row["id"]),
+                "can_undo": is_admin and row["status"] == DONE}
     if row["kind"] == SAMPLE_TASK:
         publications = details.get("publications") or []
         path = [_step(f"Задача выборки: {len(publications)} отклонённых «Отбором» публикаций на просмотр",

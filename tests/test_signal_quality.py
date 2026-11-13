@@ -276,24 +276,29 @@ def _feedback(signal_id, event_type, verdict=None):
         conn.commit()
 
 
-def test_judge_does_not_hide_an_approved_card_but_archive_and_age_do(isolated_db):
-    old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
-    approved = _store("approved", signal_category="business", oilfield_relevance="none")
-    archived = _store("archived", signal_category="business")
-    stale = _store("stale", signal_category="business", event_date=old)
-    plain = _store("plain", signal_category="business")
-    for signal_id in (approved, archived, stale):
-        _feedback(signal_id, "verdict", "approved")
-    repository.archive_signals([archived], reason="test")
+def _return(signal_id, category="technology"):
+    """Кнопка «Вернуть» в «Отклонённых» (#132; с #189 из любого раздела): решение человека «брать» с полями «Отбора»."""
+    from oiltech_digest.db import otbor_store
 
-    assert _visible_ids() == {approved}
+    return otbor_store.human_return(signal_id, {"industry": "oil_gas", "oilfield_relevance": "direct",
+                                                "oilfield_application": "", "category": category},
+                                    author="admin@example.test")
+
+
+def test_rating_does_not_bring_back_a_card_the_machine_hid_but_the_return_button_does(isolated_db):
+    """Правило 05.10 снято (решение владельца 13.11, #189): положительная оценка спрятанное машиной не возвращает, и
+    причина скрытия видна целиком; вернуть карточку может кнопка «Вернуть» в «Отклонённых»."""
+    from oiltech_digest.db import otbor_store
+
+    card = _store("rated", signal_category="business", oilfield_relevance="none")
+    _feedback(card, "verdict", "approved")
+
+    assert card not in _visible_ids()
     hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
-    # Причина, только то, что прячет на самом деле: у одобренной решение судьи не в счёт.
-    assert hidden == {
-        archived: "в архиве",
-        stale: f"событие старше {config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS} дней",
-        plain: "бизнес-сигнал, не технология",
-    }
+    assert hidden == {card: "бизнес-сигнал, не технология; не про нефтесервис"}
+
+    assert _return(card) == otbor_store.RETURNED
+    assert card in _visible_ids()
 
 
 @pytest.mark.parametrize("event_type, verdict", [
@@ -308,20 +313,6 @@ def test_rejected_or_commented_hidden_card_stays_off_the_radar(isolated_db, even
     assert business not in _visible_ids()
     hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
     assert hidden == {business: "бизнес-сигнал, не технология"}
-
-
-def test_later_rejection_overrides_an_earlier_approval(isolated_db):
-    card = _store("card", signal_category="business")
-    _feedback(card, "verdict", "approved")
-    _feedback(card, "verdict", "reject")
-
-    assert card not in _visible_ids()
-
-
-def test_positive_verdicts_match_the_dedup_ones():
-    from oiltech_digest import signal_dedup
-
-    assert set(repository.SIGNAL_POSITIVE_VERDICTS) == signal_dedup._POSITIVE_VERDICTS
 
 
 # --- Отсеянное: карточкой «Отсеяно», чтобы заказчик просмотрел всё (02.10) ---------------------
@@ -426,16 +417,16 @@ def test_search_drop_of_an_event_on_the_radar_leaves_its_link_alone(isolated_db)
     assert (link["title_ru"], link["summary_ru"]) == ("Видно на радаре", "суть на радаре")
 
 
-def test_approved_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
+def test_returned_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
     card = _judge_rejected("judge-no", "Судья ошибся", ["https://example.com/judge-no"])
     assert card not in _visible_ids() and repository.list_signals_for_dedup() == []
 
-    # Заказчик разобрал «Отсеянные» и одобрил: решение машины одобренную не прячет (ревью #89).
-    _feedback(card, "verdict", "approved")
+    # Администратор разобрал «Отклонённые» и вернул кнопкой: решение человека «брать» (#189, решение 13.11).
+    _return(card)
 
     assert card in _visible_ids()
     assert card not in _filtered()
-    assert [row["id"] for row in repository.list_signals_for_dedup()] == [card]
+    assert [(row["id"], row["hidden"]) for row in repository.list_signals_for_dedup()] == [(card, False)]
 
 
 def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db):
@@ -458,14 +449,14 @@ def _search_drop(title, url, reason="страница не открылась, �
         {"stage": "search", "title": title, "reason": reason, "url": url}]}
 
 
-@pytest.mark.parametrize("rescue", ["approved", "digest"])
+@pytest.mark.parametrize("rescue", ["returned", "digest"])
 def test_filtered_card_without_link_rescued_by_a_human_goes_on_the_radar(isolated_db, rescue):
-    # Находка поиска без ссылки, одобренная или выбранная «в дайджест», не пропадает из обоих
+    # Находка поиска без ссылки, возвращённая кнопкой «Вернуть» или выбранная «в дайджест», не пропадает из обоих
     # списков: решение человека выводит её на радар (выбранную иначе не снять с выпуска).
     _apply_run([_search_drop("Без ссылки", "", reason="нет ссылки или заголовка")])
     (card,) = _filtered()
-    if rescue == "approved":
-        _feedback(card, "verdict", "approved")
+    if rescue == "returned":
+        _return(card)
     else:
         _choose_for_digest(card)
 
@@ -564,26 +555,17 @@ def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):
     assert list(_filtered().values()) == ["отсеяно (поиск): причина"]
 
 
-def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
+def test_recall_counts_only_filtered_cards_a_human_returned(isolated_db):
     _apply_run([_search_drop("SLB MPD на Ямале", "https://example.com/slb")])
     (card,) = _filtered()
     assert repository.radar_cards_for_recall() == []
 
+    # Оценка отсеянную «найденной» не делает (05.10 снято), возврат кнопкой делает.
     _feedback(card, "verdict", "approved")
+    assert repository.radar_cards_for_recall() == []
+    _return(card)
 
     assert [(row["id"], row["visible"]) for row in repository.radar_cards_for_recall()] == [(card, True)]
-
-
-def test_overrated_counts_as_approval(isolated_db):
-    from oiltech_digest import signal_dedup
-
-    # «Оценка завышена, сигнал годный, балл слишком высокий»: решение судьи такую не прячет.
-    assert "overrated" in repository.SIGNAL_POSITIVE_VERDICTS
-    assert "overrated" in signal_dedup._POSITIVE_VERDICTS
-    card = _store("card", signal_category="business")
-    _feedback(card, "verdict", "overrated")
-
-    assert card in _visible_ids()
 
 
 # --- Причина и ход решения (03.10) ------------------------------------------------------------

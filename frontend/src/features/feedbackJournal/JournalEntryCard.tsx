@@ -35,6 +35,7 @@ const KIND_LABELS: Record<string, string> = {
   mark: "Отметка",
   signal_proposal: "Предложение разбора ОС",
   sample_task: "Задача выборки",
+  immediate: "Действие администратора",
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -169,6 +170,9 @@ function Incoming({ entry }: { entry: JournalEntry }) {
   if (entry.kind === "sample_task") {
     return <p>Случайные публикации, отклонённые «Отбором» за месяц{entry.month ? ` (${entry.month})` : ""}, поровну по темам: {entry.publications?.length ?? 0}.</p>;
   }
+  if (entry.kind === "immediate") {
+    return <p>Кнопка «Вернуть» в «Отклонённых».</p>;
+  }
   return (
     <ul className="journalLines" aria-label="Основание">
       {(entry.basis ?? []).map((mark) => (
@@ -185,7 +189,7 @@ function Incoming({ entry }: { entry: JournalEntry }) {
 }
 
 function System({ entry }: { entry: JournalEntry }) {
-  if (entry.kind === "mark") {
+  if (entry.kind === "mark" || entry.kind === "immediate") {
     return entry.system?.length
       ? <ul className="journalLines">{entry.system.map((line) => <li key={line}>{line}</li>)}</ul>
       : <p className="metaText">Записано, карточку не меняет.</p>;

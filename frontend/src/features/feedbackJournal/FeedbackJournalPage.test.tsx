@@ -38,6 +38,16 @@ const applied: JournalEntry = {
     { label: "Применено системой", at: "2026-11-10T08:00:00+00:00", author: "expert@example.test" }],
 };
 
+// Кнопка «Вернуть» в «Отклонённых» (решение 13.11): своя строка журнала «Действие администратора», отменяется.
+const returned: JournalEntry = {
+  key: "action:90", kind: "immediate", id: 90, at: "2026-11-15T10:00:00+00:00", author: "expert@example.test",
+  role: null, signal_id: 703, signal_title: "Найдено поиском без текста", showcase: "technology", agents: ["otbor"],
+  status: "done", quote: null, event_ids: [], system: ["Вернул из «Отклонённых» (Поиск → Текст страницы не получен): технология"],
+  action_id: 90, can_undo: true,
+  path: [{ label: "Сразу: Вернул из «Отклонённых» (Поиск → Текст страницы не получен): технология",
+    at: "2026-11-15T10:00:00+00:00", author: "expert@example.test" }],
+};
+
 const overview: JournalOverview = {
   slices: [{ id: 4, trigger: "schedule", status: "done", window_from: "2026-11-13T07:55:00+00:00",
     window_to: "2026-11-16T06:00:00+00:00", signals: 3, proposals: 1, note: null, author: null,
@@ -171,6 +181,17 @@ describe("вкладка «Обратная связь»", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Потолок расходов контура ОС");
     fireEvent.click(within(await screen.findByRole("article", { name: "Отметка №11" })).getByRole("button", { name: "Отменить" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/feedback-journal/actions/31/undo",
+      expect.objectContaining({ method: "POST" })));
+  });
+
+  it("возврат из «Отклонённых» виден строкой «Действие администратора» и отменяется по её номеру", async () => {
+    serveJournal([returned]);
+    renderJournal(true);
+
+    const row = await screen.findByRole("article", { name: "Действие администратора №90" });
+    expect(within(row).getByText("Кнопка «Вернуть» в «Отклонённых».")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Отменить" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/feedback-journal/actions/90/undo",
       expect.objectContaining({ method: "POST" })));
   });
 

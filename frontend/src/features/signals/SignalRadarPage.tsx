@@ -1056,8 +1056,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                         Вернуть
                       </button>
                     ) : null}
-                    {/* Отклонённое «Отбором» возвращает человек, вписав его поля (#132): разделы видит только админ. */}
-                    {isAdmin && signal.otbor_decision === "reject" && !signal.human_removal && dictionaries?.otbor_return ? (
+                    {/* Карточку из «Отклонённых» возвращает человек, вписав поля «Отбора» (#132): из любого раздела,
+                        не только отказа «Отбора» (решение владельца 13.11, #189); разделы видит только админ. */}
+                    {isAdmin && !signal.human_removal && (signal.otbor_decision === "reject" || Boolean(signal.section_reason))
+                      && dictionaries?.otbor_return ? (
                       <button
                         type="button"
                         className="ghostButton compactButton"

@@ -694,31 +694,19 @@ def refresh_signal_evidence_count(signal_id: int) -> int:
 
 
 # Разобранная карточка, у неё есть суждение человека: вердикт, комментарий или статус,
-# отличный от «наблюдать» (дайджест, архив, шум, дубль). Дедуп такую не прячет и не
-# склеивает с другой разобранной; её ссылки радар не приносит повторно.
+# отличный от «наблюдать» (дайджест, архив, шум, дубль), или решение «Отбора», поставленное человеком («Вернуть» из
+# «Отклонённых», «Убрано людьми»; #189). Дедуп такую не прячет и не склеивает с другой разобранной; её ссылки радар
+# не приносит повторно.
 _SIGNAL_REVIEWED_SQL = """(
   EXISTS (SELECT 1 FROM signal_feedback_events sfe_r
           WHERE sfe_r.signal_id = {alias}.id
             AND (COALESCE(sfe_r.verdict, '') <> '' OR sfe_r.event_type = 'comment_added'))
+  OR COALESCE({alias}.card_set_by->>'otbor_decision', '') = '""" + CARD_SET_BY_HUMAN + """'
   OR """ + marks.signal_marked_other_than_watch_sql("{alias}.id") + """
 )"""
 # Выбранная кем-то «в дайджест»: её не прячет ничто: ни дедуп, ни качество, ни архив. Иначе
 # она исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать (mark_signal_merged).
 _SIGNAL_IN_DIGEST_SQL = marks.signal_marked_sql("{alias}.id", "digest")
-# Положительные вердикты: те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS). «Оценка
-# завышена», тоже одобрение: сигнал годный, завышен только балл.
-SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation",
-                            "overrated")
-# Одобрена человеком: последний вердикт: положительный. Отказ, «не тот блок», «шум» или
-# комментарий без вердикта карточку одобренной не делают. Только применённые отметки (#188): оценка участника без прав
-# администратора карточку не прячет и не возвращает.
-_SIGNAL_APPROVED_SQL = (
-    "COALESCE((SELECT sfe_a.verdict FROM signal_feedback_events sfe_a"
-    " WHERE sfe_a.signal_id = {alias}.id AND sfe_a.applied AND COALESCE(sfe_a.verdict, '') <> ''"
-    " ORDER BY sfe_a.created_at DESC, sfe_a.id DESC LIMIT 1), '') IN ("
-    + ", ".join(f"'{verdict}'" for verdict in SIGNAL_POSITIVE_VERDICTS)
-    + ")"
-)
 # Происхождение сигнала (#95, ADR 0003): находка поиска радара, статья ленты, принятая отбором, или материал коллеги
 # из бота (#131, третье происхождение: решает «Отбор», поля автора не переписываются).
 SIGNAL_ORIGIN_RADAR = "radar"
@@ -744,8 +732,11 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
     не скрытая (#95). last_seen_day, когда радар нашёл событие последний раз: поиск темы
     получает карточки, найденные за его период, чтобы не приносить их снова (17.10)."""
     reviewed = _SIGNAL_REVIEWED_SQL.format(alias="s")
+    # Карточка с решением «брать» (принятая «Отбором» или возвращённая человеком из «Отклонённых», #189) видна по
+    # категории, правила качества её не прячут: в снимке она не скрытая, и повтор её события садится в неё.
+    shown = f"({_any_showcase_quality_sql('s')} OR {_otbor_shown_sql('technology')} OR {_otbor_shown_sql('business')})"
     return _dedup_snapshot_rows(
-        hidden=f"NOT {_any_showcase_quality_sql('s')}",
+        hidden=f"NOT {shown}",
         where=f"""
               -- Только находки радара (#95): сигналы ленты (тысячи в месяц) вытеснили бы карточки радара из снимка
               -- в 300 штук. Видимые сигналы ленты окна поиска едут отдельным списком (list_feed_signals_for_dedup).
@@ -753,8 +744,8 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               -- Находка пробного прогона (#138) не видна нигде: повтор её события — новая находка, а не её дубль.
               AND s.selector IS DISTINCT FROM '{SIGNAL_SELECTOR_TRIAL}'
               -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
-              -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
-              -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
+              -- человеком идёт: возвращённая кнопкой «Вернуть» отсеянная видна, и её повтор должен
+              -- стать её дублем; отклонённая будет главной (_rank), повтор не вернётся.
               AND (s.filter_stage IS NULL OR {reviewed})
               AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %(window)s))""",
         order=f"{reviewed} DESC, s.last_seen_at DESC, s.id DESC",
@@ -1131,16 +1122,14 @@ def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | 
 
 
 def _radar_hidden_group_sql() -> str:
-    """Одна причина на скрытую карточку, для сводки: первая по порядку правил качества.
-    Одобренную решения машины не прячут (_radar_quality_sql): её причина: архив или срок."""
+    """Одна причина на скрытую карточку, для сводки: первая по порядку правил качества. Оценка человека карточку не
+    возвращает (снято 13.11, #189): спрятанное машиной возвращает кнопка «Вернуть» в «Отклонённых»."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     stages = " ".join(f"WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
     age = (f"WHEN {_judged_sql('s', 'event_date')} < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней'"
            if age_days > 0 else "")
-    approved_reason = f"CASE {age} ELSE 'другое' END" if age else "'другое'"
     return (
         "CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве'"
-        f" WHEN {_SIGNAL_APPROVED_SQL.format(alias='s')} THEN {approved_reason}"
         f" WHEN s.filter_stage IS NOT NULL THEN (CASE s.filter_stage {stages} ELSE 'отсеяно' END)"
         " WHEN s.signal_category = 'business' THEN 'бизнес-сигнал'"
         " WHEN s.signal_category = 'other' THEN 'не технологическое событие'"
@@ -1222,12 +1211,13 @@ def radar_weekly_summary(*, days: int = 7) -> dict:
 
 
 def radar_cards_for_recall() -> list[dict]:
-    """Все карточки радара (кроме скрытых дублей и неодобренных отсеянных) со ссылками и
+    """Все карточки радара (кроме скрытых дублей и отсеянных, которых человек не вернул) со ссылками и
     признаком «видна на экране»: для замера полноты по эталону заказчика (signal_reference.recall).
 
     Отсеянное не «найдено»: до 02.10 брак судьи и поиска не сохранялся вовсе, и без этого
     условия полнота выросла бы без единой новой карточки на экране: замер по октябрьскому
-    списку не сравнился бы с прежними. Одобренная отсеянная на радаре: найдена."""
+    списку не сравнился бы с прежними. Отсеянная, которую человек вернул кнопкой «Вернуть» (решение «брать»), или
+    выбранная «в дайджест»: найдена."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1243,7 +1233,7 @@ def radar_cards_for_recall() -> list[dict]:
               AND {radar_origin_sql("s")}
               -- Пробный прогон широкого поиска (#138) мерит свою полноту сам (signal_search_trial.report).
               AND s.selector IS DISTINCT FROM '{SIGNAL_SELECTOR_TRIAL}'
-              AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")}
+              AND (s.filter_stage IS NULL OR s.otbor_decision = '{feed_window.OTBOR_ACCEPT}'
                    OR {_SIGNAL_IN_DIGEST_SQL.format(alias="s")})
             """
         )
@@ -1589,11 +1579,9 @@ def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
     - отсеяно поиском, судьёй, ревью пачки или сбоем судьи: хранится для разбора заказчиком;
     - событие старше срока: «нашёл очень старый сигнал».
 
-    Решения машины (категорию, смешанность, связь с нефтесервисом ставит судья, отсев: поиск,
-    судья и ревью) не прячут карточку, которую человек одобрил (последний вердикт
-    положительный). Отказ, «не тот блок», «шум» её не возвращают: разметка учит агента,
-    карточка остаётся в «Отсеянных и скрытых». Выбранную «в дайджест» не прячет ни одно правило,
-    включая архив: иначе её не снять с выпуска (mark_signal_merged)."""
+    Оценка человека карточку не возвращает (правило 05.10 снято 13.11, #189): спрятанное машиной администратор
+    возвращает кнопкой «Вернуть» в «Отклонённых», это решение «брать» в полях «Отбора». Выбранную «в дайджест» не прячет
+    ни одно правило, включая архив: иначе её не снять с выпуска (mark_signal_merged)."""
     a = alias
     machine = " AND ".join([
         *machine_rules,
@@ -1605,7 +1593,7 @@ def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
     ])
     parts = [
         f"{a}.archived_at IS NULL",
-        f"({machine} OR {_SIGNAL_APPROVED_SQL.format(alias=a)})",
+        f"({machine})",
     ]
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     if age_days > 0:
@@ -1621,14 +1609,13 @@ def _radar_quality_sql(alias: str = "s") -> str:
     """Что технологический радар не показывает по качеству (_quality_rules_sql) плюс бизнес и
     «другое»: не техрадар (с 14.10 бизнес: своя витрина, _business_quality_sql). Карточка
     хранится: правило: показа, срок и категории меняются без пересчёта. NULL: карточка до
-    правки. Категорию ставит судья: одобренная человеком бизнес-карточка на радаре видна."""
+    правки. Категорию до «Отбора» ставил судья; поменять её может человек кнопкой «Вернуть» (#189)."""
     return _quality_rules_sql(alias, f"COALESCE({alias}.signal_category, 'technology') = 'technology'")
 
 
 def _business_quality_sql(alias: str = "s") -> str:
     """Что витрина «бизнес» показывает из находок радара (#95, ADR 0003): категория «бизнес» и
-    те же правила качества, что у радара. Категорию одобрение не перекрывает: одобренная
-    технологическая карточка в бизнес не попадает."""
+    те же правила качества, что у радара. Оценка человека категорию не перекрывает."""
     return f"({alias}.signal_category = 'business' AND {_quality_rules_sql(alias)})"
 
 
@@ -1641,7 +1628,7 @@ def _any_showcase_quality_sql(alias: str = "s") -> str:
 
 # Какую карточку вообще показывать: со ссылкой (своей или склеенного дубля), или отсеянную:
 # находка поиска без ссылки (битый адрес) тоже видна в разборе. Одно условие для радара и для
-# «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
+# «Отсеянных и скрытых»: возвращённая кнопкой «Вернуть» или выбранная «в дайджест» отсеянная без ссылки переходит
 # на радар, а не пропадает из обоих списков.
 _RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
 # Сигнал ленты виден, пока видна его статья в ленте (feed_window.visible_sql): отбор передумал,
@@ -1735,10 +1722,8 @@ def _radar_hidden_reason_sql() -> str:
         f" THEN 'событие старше {age_days} дней' END"
         if age_days > 0 else "NULL"
     )
-    # Решения машины (судья, отсев) одобренную карточку не прячут (_radar_quality_sql): и в
-    # причине их нет.
     machine = (
-        f"CASE WHEN NOT {_SIGNAL_APPROVED_SQL.format(alias='s')} THEN NULLIF(concat_ws('; ',"
+        "NULLIF(concat_ws('; ',"
         " CASE s.filter_stage"
         + "".join(f" WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
         + " END || COALESCE(': ' || NULLIF(s.filter_reason, ''), ''),"
@@ -1747,7 +1732,7 @@ def _radar_hidden_reason_sql() -> str:
         f" CASE WHEN {_judged_sql('s', 'oilfield_relevance')} = 'none' THEN 'не про нефтесервис' END,"
         " CASE WHEN s.mixed_events THEN 'ссылки о разных событиях'"
         "   || COALESCE(': ' || NULLIF(s.mixed_events_reason, ''), '') END"
-        "), '') END"
+        "), '')"
     )
     return (
         f"CASE WHEN s.otbor_decision IS NOT NULL OR {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"

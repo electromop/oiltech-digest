@@ -52,7 +52,7 @@ FIELDS: dict[str, Field] = {
     "removed": Field("Убрать в «Убрано людьми»", "otbor", "removal"),
 }
 CARD_KINDS = frozenset({"theme", "choice", "date", "countries", "companies"})
-CATEGORY_RU = {"business": "бизнес", "technology": "технология"}
+CATEGORY_RU = {"business": "бизнес", "technology": "технология", "other": "другое"}
 # Правка заголовка и сути, применённая системой по согласованному улучшению: запись журнала отметок своего вида, чтобы
 # журнал ОС не показывал её отдельной отметкой.
 PROPOSAL_EVENT = "proposal_applied"
@@ -105,6 +105,36 @@ def merge_change(signal_id: int, children: list[int]) -> dict[str, Any] | None:
 
 def removal_change() -> dict[str, Any]:
     return {"field": "removed"}
+
+
+# Кнопка «Вернуть» в «Отклонённых» (решение владельца 13.11): поля «Отбора» и пути карточки до возврата; их вернёт
+# отмена из журнала, и карточка уйдёт обратно в свой раздел.
+_RETURN_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category", "otbor_decision",
+                   "accepted_at", "reject_reason", "otbor_disputed", "otbor_failure", "otbor_failure_reason",
+                   "selector", "title_ru", "maturity")
+_RETURN_SET_BY = ("industry", "oilfield_relevance", "oilfield_application", "signal_category", "otbor_decision")
+
+
+def return_snapshot(signal_id: int) -> dict[str, Any] | None:
+    """Карточка в «Отклонённых» до кнопки «Вернуть»: поля «Отбора», путь, кто их ставил и раздел, откуда вернули."""
+    from oiltech_digest.db.rejected_sections import everything
+
+    with connection.get_connection() as conn:
+        row = conn.cursor(row_factory=dict_row).execute(
+            f"SELECT {', '.join(f's.{column}' for column in _RETURN_COLUMNS)}, s.card_set_by,"
+            f" ({everything().short_reason}) AS section FROM signals s WHERE s.id = %s", (int(signal_id),)).fetchone()
+    if row is None:
+        return None
+    set_by = row["card_set_by"] or {}
+    return {"columns": _jsonable({column: row[column] for column in _RETURN_COLUMNS}),
+            "set_by": {key: set_by.get(key) for key in _RETURN_SET_BY}, "section": row["section"]}
+
+
+def return_change(before: dict[str, Any] | None, category: str) -> dict[str, Any] | None:
+    if before is None:
+        return None
+    return {"field": "returned", "before": before, "after": {"otbor_decision": "accept", "signal_category": category},
+            "section": before.get("section")}
 
 
 # --- Применение согласованного улучшения ---------------------------------------------------------
@@ -226,9 +256,21 @@ def undo_problem(signal_id: int, change: dict[str, Any]) -> str | None:
         return None if row["merged_into_signal_id"] == change.get("root") else "склейку с тех пор сняли или изменили"
     if field == "removed":
         return None if row["human_removal"] is not None else "карточку уже вернули из «Убрано людьми»"
+    if field == "returned":
+        return _return_changed(row, change)
     if spec is None or spec.kind not in CARD_KINDS:
         return "неизвестное изменение"
     return _field_changed(row, change)
+
+
+def _return_changed(row: dict[str, Any], change: dict[str, Any]) -> str | None:
+    """После «Вернуть» решение по карточке поменяли («Отбор» его не меняет, но человек мог): отмена его не трогает."""
+    after = change.get("after") or {}
+    human = (row["card_set_by"] or {}).get("otbor_decision") == CARD_SET_BY_HUMAN
+    if row["otbor_decision"] != after.get("otbor_decision") or not human \
+            or row["signal_category"] != after.get("signal_category"):
+        return "решение по карточке с тех пор поменяли"
+    return None
 
 
 def _field_changed(row: dict[str, Any], change: dict[str, Any]) -> str | None:
@@ -279,7 +321,38 @@ def undo_change(signal_id: int, change: dict[str, Any], *, author: str | None, a
         if removed_by_people.restore(signal_id, author=author) != removed_by_people.RESTORED:
             raise ChangeRefused("карточку уже вернули из «Убрано людьми»")
         return
+    if field == "returned":
+        _undo_return(signal_id, change, author=author)
+        return
     _undo_card_field(signal_id, change, author=author)
+
+
+def _undo_return(signal_id: int, change: dict[str, Any], *, author: str | None) -> None:
+    """Отмена «Вернуть»: прежние поля «Отбора», путь и кто их ставил; карточка снова в своём разделе «Отклонённых»."""
+    from oiltech_digest.db import otbor_store
+
+    before = change.get("before") or {}
+    columns = before.get("columns") or {}
+    with connection.get_connection() as conn:
+        row = conn.cursor(row_factory=dict_row).execute(
+            "SELECT id, origin, origin_article_id, otbor_decision, signal_category, card_set_by FROM signals"
+            " WHERE id = %s FOR UPDATE", (int(signal_id),)).fetchone()
+        problem = f"карточки №{int(signal_id)} нет" if row is None else _return_changed(row, change)
+        if problem:
+            raise ChangeRefused(problem)
+        set_by = dict(row["card_set_by"] or {})
+        for key in _RETURN_SET_BY:
+            _restore_set_by(set_by, key, (before.get("set_by") or {}).get(key))
+        step = {"stage": "Человек", "text": f"Отмена «Вернуть» из журнала ОС ({author or 'без имени'}): снова в "
+                                            f"«Отклонённых»" + (f" ({before['section']})" if before.get("section") else "")}
+        conn.execute(
+            f"UPDATE signals SET {', '.join(f'{column} = %s' for column in _RETURN_COLUMNS)}, card_set_by = %s,"
+            " decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now() WHERE id = %s",
+            (*(_db_value(column, columns.get(column)) for column in _RETURN_COLUMNS), Json(set_by), Json([step]),
+             int(signal_id)))
+        refresh_platform_decisions([int(signal_id)], conn=conn)
+        conn.commit()
+    otbor_store.sync_feed_article(row)
 
 
 def _undo_card_field(signal_id: int, change: dict[str, Any], *, author: str | None) -> None:
@@ -370,6 +443,10 @@ def describe(change: dict[str, Any]) -> str:
         return f"Склеено с №{change.get('root')}"
     if field == "removed":
         return "Убрано в «Убрано людьми»"
+    if field == "returned":
+        category = (change.get("after") or {}).get("signal_category")
+        section = f" ({change['section']})" if change.get("section") else ""
+        return f"Вернул из «Отклонённых»{section}: {CATEGORY_RU.get(category, category or 'без категории')}"
     spec = FIELDS.get(str(field))
     label = spec.label if spec else str(field)
     if field in ("title", "summary"):
@@ -416,7 +493,7 @@ def _db_value(column: str, value: Any) -> Any:
         return Json(value) if value is not None else None
     if column == "event_date" and isinstance(value, str) and value:
         return date.fromisoformat(value[:10])
-    if column == "scores_stale_since" and isinstance(value, str) and value:
+    if column in ("scores_stale_since", "accepted_at") and isinstance(value, str) and value:
         return datetime.fromisoformat(value)
     return value
 

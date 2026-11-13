@@ -152,17 +152,24 @@ def test_rating_moves_no_card_and_leaves_the_platform_decision(issue):
     assert _ordered(admin) == [(ids["hi"], "shortlist"), (ids["mid"], "watch"), (ids["low"], "watch")]
 
 
-def test_participant_rating_neither_hides_nor_brings_back_a_card_decided_before_otbor(issue):
-    """До «Отбора» решение машины не прячет карточку, которую одобрил администратор (решение 05.10, «Отсеянные»);
-    отметка участника без прав администратора её видимость не меняет ни в какую сторону."""
+def test_rating_brings_back_no_card_hidden_before_otbor_the_admin_returns_it_with_the_button(issue):
+    """Оценка карточку не двигает и спрятанное машиной до «Отбора» не возвращает: правило 05.10 снято (решение
+    владельца 13.11, #189). Вернуть карточку из «Отклонённых» может администратор кнопкой «Вернуть», участнику
+    отказ."""
     admin, colleague = issue["admin"], issue["colleague"]
     returned, sifted = (add_signal(key, first_seen=msk(2026, 9, 12, 0, 20)) for key in ("returned", "sifted"))
     for signal_id in (returned, sifted):
         set_card(signal_id, filter_stage="judge", filter_reason="брак судьи")
 
     _mark(admin, returned, verdict="approved")
-    _mark(colleague, returned, verdict="reject")
     _mark(colleague, sifted, verdict="strong_signal")
+    assert (returned in _cards(admin), sifted in _cards(admin)) == (False, False)
+
+    body = {"industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
+            "signal_category": "technology"}
+    assert colleague.post(f"/api/signals/{returned}/return", json=body).status_code == 403
+    response = admin.post(f"/api/signals/{returned}/return", json=body)
+    assert response.status_code == 200, response.text
 
     radar = _cards(admin)
     assert (returned in radar, sifted in radar) == (True, False)
