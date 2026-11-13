@@ -2,7 +2,7 @@
 
 Чтение журнала, состояния среза и настроек: любая допущенная учётка (если настройка «кто видит вкладку» не закрыла её
 участникам). Решения по предложениям, отмена, закрытие задачи выборки, «собрать сейчас» и правка настроек: только
-администратор (ADR 0004, поправка 12.11), остальным 403. Маршруты на приложении api.app: модуль подключает api.py.
+администратор (ADR 0004, поправка 12.11), остальным 403. Роутер подключает api.py.
 """
 
 from __future__ import annotations
@@ -11,14 +11,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from oiltech_digest import feedback_journal, feedback_settings, feedback_slice
-from oiltech_digest.api import app, require_admin, require_user
+from oiltech_digest.api_access import require_admin, require_user
 from oiltech_digest.db import feedback_store
 
 _KINDS = ("mark", *feedback_store.TOP_KINDS)
+router = APIRouter()
 
 
 def _reader(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
@@ -33,7 +34,7 @@ def _is_admin(user: dict[str, Any]) -> bool:
     return (user.get("role") or "user") == "admin"
 
 
-@app.get("/api/feedback-journal")
+@router.get("/api/feedback-journal")
 def feedback_journal_entries(
     status: str | None = Query(None, max_length=20),
     showcase: str | None = Query(None, pattern="^(business|technology|other)$"),
@@ -57,13 +58,13 @@ def feedback_journal_entries(
                                     limit=limit, offset=offset)
 
 
-@app.get("/api/feedback-journal/overview")
+@router.get("/api/feedback-journal/overview")
 def feedback_journal_overview(user: dict[str, Any] = Depends(_reader)) -> dict[str, Any]:
     """Срезы, следующий по расписанию, расход и потолок; предупреждение о потолке: администратору."""
     return feedback_slice.overview(is_admin=_is_admin(user))
 
 
-@app.post("/api/feedback-journal/slices")
+@router.post("/api/feedback-journal/slices")
 def feedback_journal_collect_now(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Кнопка «собрать сейчас»: недельный срез вне расписания."""
     try:
@@ -83,7 +84,7 @@ class ProposalDecision(BaseModel):
     changes: list[ProposalChange] = Field(default_factory=list, max_length=20)
 
 
-@app.post("/api/feedback-journal/proposals/{proposal_id}/decision")
+@router.post("/api/feedback-journal/proposals/{proposal_id}/decision")
 def feedback_journal_decide(proposal_id: int, payload: ProposalDecision,
                             user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """«Согласовать», «изменить» или «убрать» предложение: согласованное система сразу применяет к карточке."""
@@ -93,22 +94,22 @@ def feedback_journal_decide(proposal_id: int, payload: ProposalDecision,
                                        changes=[change.model_dump() for change in payload.changes])
 
 
-@app.post("/api/feedback-journal/actions/{action_id}/undo")
+@router.post("/api/feedback-journal/actions/{action_id}/undo")
 def feedback_journal_undo(action_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Отменить явное действие администратора или применённое улучшение: прежнее состояние карточки."""
     with _refusals():
         return feedback_journal.undo(action_id, author=user.get("email"), user_id=int(user["id"]))
 
 
-@app.post("/api/feedback-journal/tasks/{action_id}/close")
+@router.post("/api/feedback-journal/tasks/{action_id}/close")
 def feedback_journal_close_task(action_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Задача выборки отклонённого просмотрена."""
     with _refusals():
         return feedback_journal.close_task(action_id, author=user.get("email"), user_id=int(user["id"]))
 
 
-@app.get("/api/feedback-journal/settings")
-def feedback_journal_settings(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+@router.get("/api/feedback-journal/settings")
+def feedback_journal_settings(user: dict[str, Any] = Depends(_reader)) -> dict[str, Any]:
     """Настройки контура ОС: действующие значения, состав и умолчания; править может только администратор."""
     return {"values": feedback_settings.current(), "fields": feedback_settings.describe(),
             "can_edit": _is_admin(user)}
@@ -118,7 +119,7 @@ class SettingsPatch(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
-@app.put("/api/feedback-journal/settings")
+@router.put("/api/feedback-journal/settings")
 def feedback_journal_save_settings(payload: SettingsPatch,
                                    user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Правка настроек контура администратором: действует сразу, без выката."""

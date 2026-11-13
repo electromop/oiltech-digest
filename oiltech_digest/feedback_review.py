@@ -16,6 +16,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 from oiltech_digest import config, feedback_changes, feedback_settings
+from oiltech_digest.colleague_materials import VERDICTS
 from oiltech_digest.db import connection, feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, PROPOSAL, STALE
 from oiltech_digest.processing.external_ai import StopRequested
@@ -33,10 +34,12 @@ _OUTPUT_TOKENS = 1500
 _TEXT_CHARS = 4000
 _COMPANY_CHARS, _COMPANIES = 120, 10
 _DATE_RE = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?")
-_VERDICT_RU = {"strong_signal": "Сильный сигнал", "approved": "Полезный сигнал", "watch_later": "Наблюдать",
-               "background_material": "Фоновый материал", "reject": "Низкая ценность / шум",
-               "wrong_domain": "Не релевантно", "wrong_block": "Не тот блок", "merge_duplicate": "Дубль",
-               "overrated": "Оценка завышена"}
+# Оценка шкалы коротко, как в списке вердиктов материалов коллег (он сверен с формой ОС тестом).
+_VERDICT_RU = {code: short for code, short, _full in VERDICTS}
+# Цитата: не короче стольких знаков. Подпись оценки («Наблюдать») цитатой служит только изменениям, которые от оценки и
+# идут: категория («Не тот блок»), «Дубль», уборка («Не релевантно»); прочим полям нужен текст отметки.
+_QUOTE_MIN = 4
+_VERDICT_KINDS = frozenset({"category", "duplicate", "removal"})
 _CATEGORY_CODES = {"бизнес": "business", "технология": "technology", "business": "business",
                    "technology": "technology"}
 
@@ -294,8 +297,9 @@ def checked_changes(answer: Any, card: dict[str, Any], marks: list[dict[str, Any
             problem = f"{field}: номера отметок не из этой карточки"
         elif len(set(cited)) < threshold:
             problem = f"{field}: отметок меньше порога ({threshold})"
-        elif not _quoted(str(one.get("quote") or ""), [by_id[number] for number in cited]):
-            problem = f"{field}: цитаты нет в отметках"
+        elif not _quoted(str(one.get("quote") or ""), [by_id[number] for number in cited],
+                         verdicts=feedback_changes.FIELDS[field].kind in _VERDICT_KINDS):
+            problem = f"{field}: цитаты нет в тексте отметок"
         if problem is None:
             value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited])
         if problem:
@@ -352,9 +356,10 @@ def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, A
             return None, f"{label}: нет отметки «Не тот блок»"
         return value, None
     if spec.kind == "duplicate":
-        digits = re.sub(r"[^\d]", "", text)
+        numbers = re.findall(r"\d+", text)
+        digits = numbers[0] if len(numbers) == 1 else ""
         if not digits or int(digits) == int(card["id"]):
-            return None, f"{label}: нужен номер другой карточки"
+            return None, f"{label}: нужен один номер другой карточки"
         if cited is not None and not any(mark.get("duplicate_of_signal_id") == int(digits) for mark in cited):
             return None, f"{label}: нет отметки «Дубль» с №{digits}"
         return int(digits), None
@@ -401,7 +406,7 @@ def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, 
 
 def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """«Изменить»: новая формулировка полей предложения от администратора, проверенная так же, как ответ модели (цитаты
-    не нужно: это слова администратора). ValueError: неверное значение или чужое поле."""
+    не нужно: это слова администратора). JournalRefused: неверное значение или поля нет в предложении."""
     from oiltech_digest.feedback_journal import JournalRefused
 
     by_field = {change["field"]: change for change in proposed}
@@ -442,17 +447,19 @@ def _write_proposal(signal_id: int, changes: list[dict[str, Any]], *, slice_id: 
         conn.commit()
 
 
-def _quoted(quote: str, marks: list[dict[str, Any]]) -> bool:
-    wanted = _plain(quote).strip(" .,;:!?«»\"'")
-    if len(wanted) < 3:
+def _quoted(quote: str, marks: list[dict[str, Any]], *, verdicts: bool) -> bool:
+    wanted = _plain(quote).strip(" .,;:!?\"'")
+    if len(wanted) < _QUOTE_MIN:
         return False
-    return any(wanted in _plain(_mark_text(mark)) for mark in marks)
+    return any(wanted in _plain(_mark_text(mark, verdict=verdicts)) for mark in marks)
 
 
-def _mark_text(mark: dict[str, Any]) -> str:
+def _mark_text(mark: dict[str, Any], *, verdict: bool) -> str:
+    """Текст отметки, из которого берётся цитата: обоснование, рекомендации, правки (отменённая правка не в счёт);
+    подпись оценки: только если изменение от неё и идёт."""
     undone = mark.get("correction_undone_at") is not None
     return "\n".join(str(part) for part in (
-        _VERDICT_RU.get(mark.get("verdict") or "", ""), mark.get("reason"), mark.get("comment"),
+        _VERDICT_RU.get(mark.get("verdict") or "", "") if verdict else None, mark.get("reason"), mark.get("comment"),
         None if undone else mark.get("corrected_title"), None if undone else mark.get("corrected_thesis")) if part)
 
 

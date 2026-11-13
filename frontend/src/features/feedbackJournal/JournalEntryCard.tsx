@@ -57,10 +57,17 @@ type Props = {
   onClose: (entry: JournalEntry) => void;
 };
 
+// Время по Москве, как на соседних экранах: срез и расписание считаются по МСК.
 export function formatMoment(value: string | null | undefined): string {
   if (!value) return "";
   return new Date(value).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric",
-    hour: "2-digit", minute: "2-digit" });
+    hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
+}
+
+// Статус строки словами: у отметки участника «ждёт решения» значит, что её ещё не прочёл недельный срез.
+function statusLabel(entry: JournalEntry): string {
+  if (entry.kind === "mark" && entry.status === "pending") return "ждёт среза";
+  return STATUS_LABELS[entry.status] ?? entry.status;
 }
 
 export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, onClose }: Props) {
@@ -82,7 +89,7 @@ export function JournalEntryCard({ entry, highlighted, busy, onDecide, onUndo, o
       aria-label={`${KIND_LABELS[entry.kind]} №${entry.id}`}>
       <header className="journalEntryHead">
         <span className="journalKind">{KIND_LABELS[entry.kind]} №{entry.id}</span>
-        <span className={`miniPill ${STATUS_TONE[entry.status] ?? "muted"}`}>{STATUS_LABELS[entry.status] ?? entry.status}</span>
+        <span className={`miniPill ${STATUS_TONE[entry.status] ?? "muted"}`}>{statusLabel(entry)}</span>
         <span className="metaText">{formatMoment(entry.at)} · {entry.author ?? "без имени"}</span>
         {entry.signal_id ? (
           <span className="metaText">
@@ -195,6 +202,7 @@ function System({ entry }: { entry: JournalEntry }) {
       </ul>
     );
   }
+  const proposed = new Map((entry.proposed_changes ?? []).map((change) => [change.field, change.shown]));
   return (
     <table className="journalChanges">
       <thead><tr><th>Поле</th><th>Было</th><th>Станет</th><th>Цитата</th></tr></thead>
@@ -203,7 +211,12 @@ function System({ entry }: { entry: JournalEntry }) {
           <tr key={change.field}>
             <td>{change.label}</td>
             <td>{change.previous ?? "не определено"}</td>
-            <td>{change.shown}</td>
+            <td>
+              {change.shown}
+              {proposed.has(change.field) && proposed.get(change.field) !== change.shown ? (
+                <span className="metaText"> (разбор ОС предлагал: {proposed.get(change.field)})</span>
+              ) : null}
+            </td>
             <td>{change.quote ? `«${change.quote}»` : ""}{change.event_ids.length ? ` (отметки №${change.event_ids.join(", №")})` : ""}</td>
           </tr>
         ))}

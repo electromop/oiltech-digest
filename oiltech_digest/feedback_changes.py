@@ -115,6 +115,12 @@ def apply_change(signal_id: int, field: str, value: Any, *, author: str | None, 
     spec = FIELDS[field]
     if spec.kind == "text":
         return _apply_text(signal_id, field, value, user_id=user_id)
+    if spec.kind in CARD_KINDS or spec.kind == "category":
+        # Рубрику, подпись, раздел и «давнее событие» выпуск берёт из живых полей карточки: закрытый выпуск только на
+        # просмотр (решение владельца 30.09). Текст защищён иначе: закрытый выпуск берёт правки до закрытия.
+        problem = closed_issue_problem(signal_id)
+        if problem:
+            raise ChangeRefused(problem)
     if spec.kind in CARD_KINDS:
         return _apply_card_field(signal_id, field, value, author=author)
     if spec.kind == "category":
@@ -125,15 +131,13 @@ def apply_change(signal_id: int, field: str, value: Any, *, author: str | None, 
 
 
 def _apply_text(signal_id: int, field: str, value: str, *, user_id: int | None) -> dict[str, Any]:
-    column = "corrected_title" if field == "title" else "corrected_thesis"
-    with connection.get_connection() as conn:
-        if conn.execute("SELECT 1 FROM signals WHERE id = %s", (int(signal_id),)).fetchone() is None:
-            raise ChangeRefused(f"карточки №{int(signal_id)} нет")
-        event_id = int(conn.execute(
-            f"INSERT INTO signal_feedback_events (signal_id, user_id, event_type, {column}, applied)"
-            " VALUES (%s, %s, %s, %s, TRUE) RETURNING id", (int(signal_id), user_id, PROPOSAL_EVENT, value)).fetchone()[0])
-        conn.commit()
-    return {"field": field, "event_id": event_id, "after": value}
+    """Заголовок и суть: запись журнала отметок поверх текста модели, как правка администратора (#162, ADR 0006)."""
+    if not _exists(signal_id):
+        raise ChangeRefused(f"карточки №{int(signal_id)} нет")
+    text = {"corrected_title": value} if field == "title" else {"corrected_thesis": value}
+    event_id = repository.record_signal_feedback_event(None, PROPOSAL_EVENT, signal_id=int(signal_id), user_id=user_id,
+                                                       applied=True, **text)
+    return {"field": field, "event_id": int(event_id), "after": value}
 
 
 def _apply_card_field(signal_id: int, field: str, value: dict[str, Any], *, author: str | None) -> dict[str, Any]:
@@ -211,19 +215,43 @@ def undo_problem(signal_id: int, change: dict[str, Any]) -> str | None:
         row = cur.execute("SELECT * FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
     if row is None:
         return f"карточки №{int(signal_id)} нет"
+    spec = FIELDS.get(str(field))
+    if field == "signal_category" or (spec is not None and spec.kind in CARD_KINDS):
+        problem = closed_issue_problem(signal_id)
+        if problem:
+            return problem
     if field == "signal_category":
         return None if row["signal_category"] == change.get("after") else "категорию с тех пор сменили"
     if field == "duplicate_of":
         return None if row["merged_into_signal_id"] == change.get("root") else "склейку с тех пор сняли или изменили"
     if field == "removed":
         return None if row["human_removal"] is not None else "карточку уже вернули из «Убрано людьми»"
-    spec = FIELDS.get(str(field))
     if spec is None or spec.kind not in CARD_KINDS:
         return "неизвестное изменение"
+    return _field_changed(row, change)
+
+
+def _field_changed(row: dict[str, Any], change: dict[str, Any]) -> str | None:
+    """Поле карточки после изменения поменял кто-то ещё: отмена его не трогает."""
+    spec = FIELDS[change["field"]]
     after = (change.get("after") or {}).get("columns") or {}
-    current = _jsonable({column: row[column] for column in spec.columns})
-    if current != after:
+    if _jsonable({column: row[column] for column in spec.columns}) != after:
         return f"поле «{spec.label}» с тех пор поменяли"
+    return None
+
+
+def closed_issue_problem(signal_id: int) -> str | None:
+    """Карточка в выпуске закрытого месяца: её поля, которые выпуск берёт живыми, не меняются (только просмотр)."""
+    from oiltech_digest import feed_window
+
+    if not repository.signal_selected_for_digest(signal_id):
+        return None
+    try:
+        month = repository.signal_issue_month(signal_id)
+    except KeyError:
+        return f"карточки №{int(signal_id)} нет"
+    if month and not feed_window.current().is_open(month):
+        return "карточка в выпуске закрытого месяца: закрытый выпуск только на просмотр"
     return None
 
 
@@ -260,8 +288,13 @@ def _undo_card_field(signal_id: int, change: dict[str, Any], *, author: str | No
     columns = before.get("columns") or {}
     with connection.get_connection() as conn:
         row = conn.cursor(row_factory=dict_row).execute(
-            "SELECT card_set_by FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),)).fetchone()
-        set_by = dict(row["card_set_by"] or {}) if row else {}
+            f"SELECT card_set_by, {', '.join(spec.columns)} FROM signals WHERE id = %s FOR UPDATE",
+            (int(signal_id),)).fetchone()
+        # Проверка под замком: между проверкой журнала и записью поле мог поменять кто-то ещё.
+        problem = f"карточки №{int(signal_id)} нет" if row is None else _field_changed(row, change)
+        if problem:
+            raise ChangeRefused(problem)
+        set_by = dict(row["card_set_by"] or {})
         _restore_set_by(set_by, change["field"], before.get("set_by"))
         step = {"stage": "Человек", "text": f"Отмена из журнала ОС ({author or 'без имени'}): "
                                             f"{spec.label.lower()} как было"}
@@ -277,7 +310,9 @@ def _undo_category(signal_id: int, change: dict[str, Any], *, author: str | None
     before = change.get("before") or {}
     with connection.get_connection() as conn:
         row = conn.cursor(row_factory=dict_row).execute(
-            "SELECT card_set_by FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),)).fetchone()
+            "SELECT signal_category, card_set_by FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),)).fetchone()
+        if row is None or row["signal_category"] != change.get("after"):
+            raise ChangeRefused("категорию с тех пор сменили")
         set_by = dict(row["card_set_by"] or {})
         _restore_set_by(set_by, "signal_category", before.get("set_by"))
         step = {"stage": "Человек", "text": f"Отмена «Не того блока» из журнала ОС ({author or 'без имени'}): "
@@ -311,11 +346,13 @@ def _undo_merge(signal_id: int, change: dict[str, Any], *, author: str | None, a
         if children:
             conn.execute("UPDATE signals SET merged_into_signal_id = %s, updated_at = now()"
                          " WHERE id = ANY(%s) AND merged_into_signal_id = %s", (int(signal_id), children, root))
+        # Публикаций у обеих стало по-другому: число и «Решение платформы» в той же транзакции (#132).
+        conn.execute(f"UPDATE signals s SET evidence_count = {repository.signal_publication_count_sql('s')},"
+                     " updated_at = now() WHERE s.id = ANY(%s)", ([int(signal_id), root],))
+        refresh_platform_decisions([int(signal_id), root], conn=conn)
         feedback_store.write_pair(signal_id, root, same_event=False, source="undo_merge", action_id=action_id,
                                   author=author, conn=conn)
         conn.commit()
-    repository.refresh_signal_evidence_count(int(signal_id))
-    repository.refresh_signal_evidence_count(root)
 
 
 # --- Значения ------------------------------------------------------------------------------------
@@ -356,15 +393,9 @@ def display_value(field: str, columns: dict[str, Any]) -> str:
     return str(columns.get(spec.columns[0]) or "не определено")
 
 
-def current_values(signal_id: int, fields: list[str]) -> dict[str, Any]:
-    """Нынешние значения полей карточки (до применения улучшения): «было» в журнале."""
-    columns = sorted({column for field in fields if field in FIELDS for column in FIELDS[field].columns})
-    if not columns:
-        return {}
+def _exists(signal_id: int) -> bool:
     with connection.get_connection() as conn:
-        row = conn.cursor(row_factory=dict_row).execute(
-            f"SELECT {', '.join(columns)} FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
-    return _jsonable(dict(row)) if row else {}
+        return conn.execute("SELECT 1 FROM signals WHERE id = %s", (int(signal_id),)).fetchone() is not None
 
 
 def _merged_into(signal_id: int) -> int | None:

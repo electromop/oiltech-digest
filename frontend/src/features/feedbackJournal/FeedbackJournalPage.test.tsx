@@ -75,6 +75,11 @@ function serveJournal(entries: JournalEntry[], extra: Partial<JournalOverview> =
   });
 }
 
+// Строка так, как её отдаёт сервер участнику: кнопок решений, отмены и закрытия у него нет (флаги считает сервер).
+function asParticipant(entry: JournalEntry): JournalEntry {
+  return { ...entry, can_decide: false, can_undo: false, can_close: false };
+}
+
 function renderJournal(isAdmin: boolean) {
   render(<FeedbackJournalPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin={isAdmin} />);
 }
@@ -97,7 +102,7 @@ afterEach(() => {
 
 describe("вкладка «Обратная связь»", () => {
   it("показывает отметки и действия обеих витрин одним журналом со статусами и путём действия", async () => {
-    serveJournal([proposal, mark, applied]);
+    serveJournal([proposal, mark, applied].map(asParticipant), { can_collect: false, can_configure: false });
     renderJournal(false);
 
     const pending = await screen.findByRole("article", { name: "Предложение разбора ОС №77" });
@@ -130,7 +135,7 @@ describe("вкладка «Обратная связь»", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Агент" }), { target: { value: "card" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Автор" }), { target: { value: "colleague@example.test" } });
 
-    await waitFor(() => expect(Object.fromEntries(journalCalls().at(-1) ?? [])).toMatchObject({
+    await waitFor(() => expect(Object.fromEntries(journalCalls().slice(-1)[0] ?? [])).toMatchObject({
       status: "pending", showcase: "technology", agent: "card", author: "colleague@example.test" }));
   });
 

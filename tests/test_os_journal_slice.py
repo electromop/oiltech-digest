@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from oiltech_digest import cli, feedback_slice
+from oiltech_digest import cli, feed_window, feedback_slice
 from oiltech_digest.db import connection, repository
 from oiltech_digest.feed_window import MSK
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура
-from tests.digest_user_path_support import set_card
+from tests.digest_user_path_support import msk, set_card
 from tests.os_journal_support import (business, cards, entry, improvement, journal, mark, review, settings,
                                       today_settings)
 from tests.otbor_support import contour  # noqa: F401: фикстура
@@ -99,14 +99,16 @@ def test_review_brings_marks_of_all_participants_into_one_card_improvement_with_
     # Сам разбор карточку не меняет; на карточке значок со ссылкой на строку журнала.
     assert cards(colleague)[signal_id]["technology_maturity"] == "прототип"
     assert cards(colleague)[signal_id]["feedback_pending"] == proposal["id"]
-    assert [step["label"] for step in entry(admin, f"mark:{ids[0]}")["path"]] == [
+    colleague_mark = entry(admin, f"mark:{ids[0]}")
+    assert [step["label"] for step in colleague_mark["path"]] == [
         "Записано", f"В предложении №{proposal['id']}: ждёт решения"]
+    assert colleague_mark["status"] == "pending"
 
 
 def test_review_answer_with_foreign_values_or_without_a_quote_is_not_written(issue, contour, monkeypatch):
     admin, colleague, a = issue["admin"], issue["colleague"], issue["a"]
     signal_id, other = business(a["hi"]), business(a["mid"])
-    own = mark(colleague, signal_id, comment="Тема: бурение, а стадия: пилот")["event_id"]
+    own = mark(colleague, signal_id, verdict="watch_later", comment="Тема: бурение, а стадия: пилот")["event_id"]
     foreign = mark(colleague, other, comment="Дата события: сентябрь 2026")["event_id"]
 
     _collect(admin)
@@ -116,6 +118,8 @@ def test_review_answer_with_foreign_values_or_without_a_quote_is_not_written(iss
             improvement("technology_maturity", "пилот/ОПИ", [own], "стадия: опытная эксплуатация"),
             improvement("event_type", "пилот", [foreign], "стадия: пилот"),
             improvement("signal_category", "технология", [own], "Тема: бурение"),
+            # Подпись оценки («Наблюдать») не текст отметки: полю карточки цитатой не служит.
+            improvement("event_type", "пилот", [own], "Наблюдать"),
         ]},
         other: {"answer": "не по схеме"},
     })
@@ -123,7 +127,7 @@ def test_review_answer_with_foreign_values_or_without_a_quote_is_not_written(iss
     assert journal(colleague, kind="signal_proposal") == []
     [last] = _slices(admin)
     assert (last["status"], last["proposals"]) == ("done", 0)
-    assert last["note"] == "не прошло проверку кодом: 5"
+    assert last["note"] == "не прошло проверку кодом: 6"
     assert cards(colleague)[signal_id]["feedback_pending"] is None
 
 
@@ -175,7 +179,14 @@ def test_approved_improvement_is_applied_at_once_modified_in_new_wording_dismiss
     assert _labels(approved) == [(f"Предложено разбором ОС (срез №{slice_id})", None),
                                  ("Согласовано", f"user{admin.id}@example.test"),
                                  ("Применено системой", f"user{admin.id}@example.test")]
-    assert [label for label, _ in _labels(entry(admin, f"action:{proposals[text]['id']}"))][1] == "Изменено"
+    modified = entry(admin, f"action:{proposals[text]['id']}")
+    assert [label for label, _ in _labels(modified)][1] == "Изменено"
+    assert ([one["shown"] for one in modified["changes"]], [one["shown"] for one in modified["proposed_changes"]]) == (
+        ["Суть в словах администратора."], ["Суть по отметкам."])
+    # Что стало с отметкой участника: статус её предложения.
+    assert {signal_id: entry(colleague, f"mark:{marks[signal_id]}")["status"]
+            for signal_id in (stage, text, theme, kind)} == {
+        stage: "applied", text: "applied", theme: "dismissed", kind: "stale"}
     assert [label for label, _ in _labels(entry(admin, f"action:{proposals[kind]['id']}"))][-1] == (
         "Устарело: без решения дольше 30 дней")
     assert admin.post(f"/api/feedback-journal/proposals/{proposals[theme]['id']}/decision",
@@ -184,7 +195,31 @@ def test_approved_improvement_is_applied_at_once_modified_in_new_wording_dismiss
     undone = admin.post(f"/api/feedback-journal/actions/{proposals[stage]['id']}/undo")
     assert undone.status_code == 200, undone.text
     assert cards(colleague)[stage]["technology_maturity"] == "прототип"
-    assert entry(admin, f"action:{proposals[stage]['id']}")["status"] == "undone"
+    after_undo = entry(admin, f"action:{proposals[stage]['id']}")
+    assert after_undo["status"] == "undone"
+    assert [label for label, _ in _labels(after_undo)][1:] == ["Согласовано", "Применено системой", "Отменено"]
+
+
+def test_improvement_does_not_change_a_card_of_a_closed_issue_and_can_be_decided_again(issue, contour, monkeypatch):
+    admin, analyst, colleague, a = issue["admin"], issue["analyst"], issue["colleague"], issue["a"]
+    signal_id = business(a["hi"], technology_maturity="прототип")
+    analyst.mark(a["hi"])
+    event_id = mark(colleague, signal_id, comment="Это уже пилот на месторождении")["event_id"]
+    _collect(admin)
+    review(monkeypatch, {signal_id: {"improvements": [
+        improvement("technology_maturity", "пилот/ОПИ", [event_id], "уже пилот на месторождении")]}})
+    [proposal] = journal(admin, kind="signal_proposal")
+    # Сентябрь закрыт: выпуск сентября только на просмотр, его рубрику, подпись и раздел карточка не меняет.
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 12, 12, 0))
+
+    assert _decide(admin, proposal["id"], "approve")["status"] == "approved"
+
+    assert cards(colleague)[signal_id]["technology_maturity"] == "прототип"
+    refused = entry(admin, proposal["key"])
+    assert [label for label, _ in _labels(refused)][-1] == (
+        "Не применено: Стадия (зрелость): карточка в выпуске закрытого месяца: закрытый выпуск только на просмотр")
+    assert refused["can_decide"] is True
+    assert _decide(admin, proposal["id"], "dismiss")["status"] == "dismissed"
 
 
 def _rejected(key: str, theme: str) -> int:

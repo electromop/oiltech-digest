@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -132,7 +133,7 @@ def _checked(setting: Setting, value: Any) -> Any:
             raise ValueError(f"{label}: да или нет")
         return value
     if setting.kind in ("int", "number"):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f"{label}: нужно число")
         if setting.kind == "int" and float(value) != int(value):
             raise ValueError(f"{label}: нужно целое число")

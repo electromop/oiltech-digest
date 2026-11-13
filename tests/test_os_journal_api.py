@@ -10,9 +10,7 @@
 
 from __future__ import annotations
 
-from oiltech_digest.db import feedback_store
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура
-from tests.digest_user_path_support import set_card
 from tests.os_journal_support import business, cards, entry, journal, mark, settings
 
 
@@ -23,8 +21,8 @@ def _labels(found: dict) -> list[str]:
 def test_journal_shows_marks_of_both_showcases_with_status_path_and_filters(issue):
     admin, colleague = issue["admin"], issue["colleague"]
     feed = business(issue["a"]["hi"])
+    # Находка поиска без категории: на радаре, как её показывает экран.
     finding = issue["s"]["sep"]
-    set_card(finding, signal_category="technology")
 
     edit = mark(admin, feed, verdict="approved", corrected_title="Контракт на сорок скважин")
     rating = mark(colleague, finding, verdict="watch_later", comment="Стадия: пилот, рано в выпуск")
@@ -34,7 +32,8 @@ def test_journal_shows_marks_of_both_showcases_with_status_path_and_filters(issu
     edited, rated = by_key[f"mark:{edit['event_id']}"], by_key[f"mark:{rating['event_id']}"]
     assert (edited["showcase"], edited["status"], edited["author"]) == ("business", "done", "admin@example.test")
     assert _labels(edited) == ["Записано: отметка администратора", "Сразу: Правка: заголовок"]
-    assert (rated["showcase"], rated["status"], rated["author"]) == ("technology", "done", "colleague@example.test")
+    # Отметка участника ждёт среза: «ждёт решения», пока срез её не прочёл.
+    assert (rated["showcase"], rated["status"], rated["author"]) == ("technology", "pending", "colleague@example.test")
     assert _labels(rated) == ["Записано", "Ждёт недельного среза"]
     # Участник видит журнал без кнопок решений.
     assert not any(row.get("can_undo") or row.get("can_decide") for row in rows)
@@ -44,8 +43,9 @@ def test_journal_shows_marks_of_both_showcases_with_status_path_and_filters(issu
     assert [row["key"] for row in journal(colleague, author="colleague@example.test")] == [rated["key"]]
     assert [row["key"] for row in journal(colleague, agent="summary")] == [edited["key"]]
     assert {row["key"] for row in journal(colleague, agent="scores")} == {edited["key"], rated["key"]}
+    assert [row["key"] for row in journal(colleague, showcase="technology")] == [rated["key"]]
     assert journal(colleague, status="undone") == []
-    assert journal(colleague, status="pending") == []
+    assert [row["key"] for row in journal(colleague, status="pending")] == [rated["key"]]
     assert colleague.get("/api/feedback-journal", params={"status": "maybe"}).status_code == 422
 
 
@@ -122,8 +122,8 @@ def test_undo_of_a_merge_splits_the_cards_and_writes_a_pair_not_the_same_event(i
 
     shown = cards(analyst)
     assert (duplicate in shown, shown[root]["merged_count"], shown[duplicate]["merged_count"]) == (True, 0, 1)
-    assert [(pair["signal_id"], pair["other_signal_id"], pair["same_event"])
-            for pair in feedback_store.pairs(duplicate)] == [(duplicate, root, False)]
+    assert _labels(entry(admin, f"mark:{saved['event_id']}"))[-1] == (
+        f"Отменено; для «Дедупа» записано «не одно событие» с №{root}")
 
 
 def test_undo_of_not_relevant_brings_back_the_previous_otbor_decision_and_return_closes_it_too(issue):

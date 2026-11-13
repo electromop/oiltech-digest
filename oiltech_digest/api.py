@@ -32,6 +32,8 @@ from oiltech_digest import (contract, feedback_changes, feedback_journal, feedba
                             network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
                             signal_summary)
 from oiltech_digest import material_signals
+from oiltech_digest import feedback_journal_api
+from oiltech_digest.api_access import require_admin, require_user
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -64,6 +66,8 @@ setup_logging("api")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OilTech Digest API")
+# Журнал ОС, недельный срез и настройки контура (#189): маршруты в своём модуле.
+app.include_router(feedback_journal_api.router)
 if (FRONTEND_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
 
@@ -394,22 +398,6 @@ def brand_font(name: str) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return FileResponse(path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"})
-
-
-def require_user(session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME)) -> dict[str, Any]:
-    if not session_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    user = repository.get_user_by_session(session_token)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
-
-
-def require_admin(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Доступ только администратору (настройка тегов/скоринга/источников, пользователи)."""
-    if (user.get("role") or "user") != "admin":
-        raise HTTPException(status_code=403, detail="Требуются права администратора")
-    return user
 
 
 def _set_session_cookie(response: Response, session_token: str) -> None:
@@ -1389,8 +1377,9 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
-    # Значок «ждёт решения в журнале» (#189) включает и выключает настройка контура ОС.
-    badge = bool(feedback_settings.current()["card_badge"])
+    # Значок «ждёт решения в журнале» (#189) включает и выключает настройка контура ОС; без ждущих предложений на
+    # странице настройку не читаем.
+    badge = any(row.get("feedback_pending") for row in cards) and bool(feedback_settings.current()["card_badge"])
     # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
@@ -3047,6 +3036,3 @@ def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
         "created_at": row.get("created_at"),
     })
 
-
-# Журнал ОС, недельный срез и настройки контура (#189): маршруты в своём модуле, на этом же приложении.
-from oiltech_digest import feedback_journal_api  # noqa: E402,F401

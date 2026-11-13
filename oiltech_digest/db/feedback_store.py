@@ -178,42 +178,49 @@ def attach_job(slice_id: int, job_id: int) -> None:
         conn.commit()
 
 
-def finish_slice(slice_id: int, *, status: str, proposals: int = 0, note: str | None = None, conn=None) -> None:
-    sql = ("UPDATE feedback_slices SET status = %s, proposals = proposals + %s, note = COALESCE(%s, note),"
-           " finished_at = now() WHERE id = %s")
-    params = (status, int(proposals), note, int(slice_id))
-    if conn is not None:
-        conn.execute(sql, params)
-        return
-    with connection.get_connection() as own:
-        own.execute(sql, params)
-        own.commit()
+def finish_slice(slice_id: int, *, status: str, note: str | None = None) -> None:
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE feedback_slices SET status = %s, note = COALESCE(%s, note), finished_at = now()"
+                     " WHERE id = %s", (status, note, int(slice_id)))
+        conn.commit()
 
 
 def add_proposals(slice_id: int, count: int, *, conn) -> None:
     conn.execute("UPDATE feedback_slices SET proposals = proposals + %s WHERE id = %s", (int(count), int(slice_id)))
 
 
-def get_slice(slice_id: int) -> dict[str, Any] | None:
-    with connection.get_connection() as conn:
-        return conn.cursor(row_factory=dict_row).execute(
-            "SELECT * FROM feedback_slices WHERE id = %s", (int(slice_id),)).fetchone()
+# Срез «идёт», а его задача упала, пропала из очереди (ON DELETE SET NULL) или так и не поставлена (процесс
+# остановился между заведением среза и постановкой задачи): срез не выполнен, его окно возьмёт следующий.
+_SLICE_FAILED_SQL = ("(f.status = 'running' AND (j.status = 'failed' OR (f.job_id IS NULL"
+                     " AND f.created_at < now() - interval '10 minutes')))")
+_SLICE_NOTE_SQL = (f"CASE WHEN {_SLICE_FAILED_SQL} THEN COALESCE(j.error_message, 'задача разбора ОС не поставлена или"
+                   " пропала из очереди') ELSE f.note END")
 
 
 def slices(*, limit: int = 10) -> list[dict[str, Any]]:
-    """Последние срезы с состоянием их задачи: упавшая задача делает срез упавшим (его окно возьмёт следующий)."""
+    """Последние срезы; у среза, чья задача не выполнена, статус «не выполнен» (только чтение)."""
     with connection.get_connection() as conn:
-        conn.execute(
-            "UPDATE feedback_slices f SET status = 'failed', finished_at = now(),"
-            " note = COALESCE(j.error_message, 'задача разбора ОС не выполнена')"
-            " FROM background_jobs j WHERE j.id = f.job_id AND f.status = 'running' AND j.status = 'failed'")
-        conn.execute(
-            "UPDATE feedback_slices SET status = 'failed', finished_at = now(),"
-            " note = 'задача разбора ОС пропала из очереди' WHERE status = 'running' AND job_id IS NOT NULL"
-            " AND NOT EXISTS (SELECT 1 FROM background_jobs j WHERE j.id = feedback_slices.job_id)")
-        conn.commit()
         return conn.cursor(row_factory=dict_row).execute(
-            "SELECT * FROM feedback_slices WHERE trigger <> 'seed' ORDER BY id DESC LIMIT %s", (int(limit),)).fetchall()
+            f"""
+            SELECT f.id, f.trigger, CASE WHEN {_SLICE_FAILED_SQL} THEN 'failed' ELSE f.status END AS status,
+                   f.window_from, f.window_to, f.week_start, f.job_id, f.signals, f.proposals,
+                   {_SLICE_NOTE_SQL} AS note, f.author, f.created_at, f.finished_at
+            FROM feedback_slices f LEFT JOIN background_jobs j ON j.id = f.job_id
+            WHERE f.trigger <> 'seed'
+            ORDER BY f.id DESC
+            LIMIT %s
+            """, (int(limit),)).fetchall()
+
+
+def settle_failed_slices() -> None:
+    """Записать «не выполнен» срезам, чья задача не выполнена: иначе «идёт» держал бы следующие срезы."""
+    with connection.get_connection() as conn:
+        # Целевая строка f и её копия s с задачей j: в условии и причине поля f (той же строки).
+        conn.execute(
+            f"UPDATE feedback_slices f SET status = 'failed', finished_at = now(), note = {_SLICE_NOTE_SQL}"
+            f" FROM feedback_slices s LEFT JOIN background_jobs j ON j.id = s.job_id"
+            f" WHERE s.id = f.id AND {_SLICE_FAILED_SQL}")
+        conn.commit()
 
 
 def db_now() -> datetime:
@@ -231,7 +238,7 @@ def last_done_window_end() -> datetime | None:
 
 
 def running_slice() -> dict[str, Any] | None:
-    slices(limit=1)
+    settle_failed_slices()
     with connection.get_connection() as conn:
         return conn.cursor(row_factory=dict_row).execute(
             "SELECT * FROM feedback_slices WHERE status = 'running' ORDER BY id DESC LIMIT 1").fetchone()
@@ -297,30 +304,57 @@ def marks_by_id(event_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
 # --- Журнал --------------------------------------------------------------------------------------
 
 
+# Витрина карточки так, как её видят экраны: находка поиска без категории живёт на радаре (_radar_quality_sql).
+SHOWCASE_SQL = "COALESCE(s.signal_category, CASE WHEN s.origin = 'radar' THEN 'technology' END)"
+# Статус отметки в журнале: у отметки с явным действием администратора: его статус; у отметки участника после выката
+# одной формы ОС (history_end): статус предложения, в которое она вошла, а до среза (slice_end) «ждёт решения»; у
+# остальных: «сделано».
+_MARK_STATUS_SQL = (
+    "CASE WHEN im.id IS NOT NULL THEN im.status"
+    " WHEN NOT sfe.applied AND sfe.created_at > COALESCE(%(history_end)s::timestamptz, '-infinity')"
+    f" THEN COALESCE(pr.status, CASE WHEN sfe.created_at > COALESCE(%(slice_end)s::timestamptz, '-infinity')"
+    f" THEN '{PENDING}' ELSE '{DONE}' END)"
+    f" ELSE '{DONE}' END"
+)
+
+
+def slice_bounds() -> tuple[datetime | None, datetime | None]:
+    """(конец истории: окно seed, выкат одной формы ОС; конец окна последнего выполненного среза)."""
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            "SELECT max(window_to) FILTER (WHERE trigger = 'seed'), max(window_to) FILTER (WHERE status = 'done')"
+            " FROM feedback_slices").fetchone()
+    return (row[0], row[1]) if row else (None, None)
+
+
 def journal_marks(*, status: str | None, showcase: str | None, agent: str | None, author: str | None,
-                  signal_id: int | None, limit: int) -> list[dict[str, Any]]:
-    """Отметки журнала ОС, новые сверху, с явным действием администратора по отметке (im_*), если оно было."""
-    clauses, params = [JOURNAL_MARK_SQL], []
+                  signal_id: int | None, limit: int, history_end: datetime | None,
+                  slice_end: datetime | None) -> list[dict[str, Any]]:
+    """Отметки журнала ОС, новые сверху: с явным действием администратора по отметке (im_*), если оно было, и
+    статусом последнего предложения, в которое отметка вошла (proposal_status)."""
+    params: dict[str, Any] = {"history_end": history_end, "slice_end": slice_end, "limit": int(limit)}
+    clauses = [JOURNAL_MARK_SQL]
     if status:
-        clauses.append(f"COALESCE(im.status, '{DONE}') = %s")
-        params.append(status)
+        clauses.append(f"({_MARK_STATUS_SQL}) = %(status)s")
+        params["status"] = status
     if showcase:
-        clauses.append("s.signal_category = %s")
-        params.append(showcase)
+        clauses.append(f"{SHOWCASE_SQL} = %(showcase)s")
+        params["showcase"] = showcase
     if agent:
-        clauses.append(f"%s = ANY({MARK_AGENTS_SQL})")
-        params.append(agent)
+        clauses.append(f"%(agent)s = ANY({MARK_AGENTS_SQL})")
+        params["agent"] = agent
     if author:
-        clauses.append(f"{_AUTHOR_SQL} = %s")
-        params.append(author)
+        clauses.append(f"{_AUTHOR_SQL} = %(author)s")
+        params["author"] = author
     if signal_id is not None:
-        clauses.append("sfe.signal_id = %s")
-        params.append(int(signal_id))
+        clauses.append("sfe.signal_id = %(signal_id)s")
+        params["signal_id"] = int(signal_id)
     with connection.get_connection() as conn:
         return conn.cursor(row_factory=dict_row).execute(
             f"""
             SELECT {_MARK_FIELDS}, {_AUTHOR_SQL} AS author, {MARK_AGENTS_SQL} AS agents,
-                   COALESCE(s.title_ru, s.title) AS signal_title, s.signal_category,
+                   COALESCE(s.title_ru, s.title) AS signal_title, {SHOWCASE_SQL} AS showcase,
+                   {_FEEDBACK_IS_BLOCK_SQL} AS is_block, {_MARK_STATUS_SQL} AS status, pr.status AS proposal_status,
                    im.id AS im_id, im.status AS im_status, im.details AS im_details
             FROM signal_feedback_events sfe
             LEFT JOIN users u ON u.id = sfe.user_id
@@ -330,10 +364,15 @@ def journal_marks(*, status: str | None, showcase: str | None, agent: str | None
               WHERE fa.kind = '{IMMEDIATE}' AND fa.event_ids @> ARRAY[sfe.id]
               ORDER BY fa.id DESC LIMIT 1
             ) im ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT fa.status FROM feedback_actions fa
+              WHERE fa.kind = '{PROPOSAL}' AND fa.event_ids @> ARRAY[sfe.id]
+              ORDER BY fa.id DESC LIMIT 1
+            ) pr ON TRUE
             WHERE {' AND '.join(clauses)}
             ORDER BY sfe.created_at DESC, sfe.id DESC
-            LIMIT %s
-            """, (*params, int(limit))).fetchall()
+            LIMIT %(limit)s
+            """, params).fetchall()
 
 
 def journal_actions(*, status: str | None, showcase: str | None, agent: str | None, author: str | None,
@@ -344,7 +383,7 @@ def journal_actions(*, status: str | None, showcase: str | None, agent: str | No
         clauses.append("fa.status = %s")
         params.append(status)
     if showcase:
-        clauses.append("s.signal_category = %s")
+        clauses.append(f"{SHOWCASE_SQL} = %s")
         params.append(showcase)
     if agent:
         clauses.append("%s = ANY(fa.agents)")
@@ -359,7 +398,7 @@ def journal_actions(*, status: str | None, showcase: str | None, agent: str | No
     with connection.get_connection() as conn:
         return conn.cursor(row_factory=dict_row).execute(
             f"""
-            SELECT fa.*, COALESCE(s.title_ru, s.title) AS signal_title, s.signal_category
+            SELECT fa.*, COALESCE(s.title_ru, s.title) AS signal_title, {SHOWCASE_SQL} AS showcase
             FROM feedback_actions fa
             LEFT JOIN signals s ON s.id = fa.signal_id
             WHERE {' AND '.join(clauses)}
@@ -386,13 +425,6 @@ def write_pair(signal_id: int, other_signal_id: int, *, same_event: bool, source
         "INSERT INTO signal_event_pairs (signal_id, other_signal_id, same_event, source, action_id, author)"
         " VALUES (%s, %s, %s, %s, %s, %s)",
         (int(signal_id), int(other_signal_id), bool(same_event), source, action_id, author))
-
-
-def pairs(signal_id: int) -> list[dict[str, Any]]:
-    with connection.get_connection() as conn:
-        return conn.cursor(row_factory=dict_row).execute(
-            "SELECT * FROM signal_event_pairs WHERE signal_id = %s OR other_signal_id = %s ORDER BY id",
-            (int(signal_id), int(signal_id))).fetchall()
 
 
 # --- Карточки для разбора ОС ---------------------------------------------------------------------
@@ -436,9 +468,10 @@ def record_usage(job_id: int | None, rows: Sequence[dict[str, Any]], *, stage: s
         conn.commit()
 
 
-def rejected_by_otbor(since: datetime, *, limit: int = 3000) -> list[dict[str, Any]]:
+def rejected_by_otbor(since: datetime, *, seed: str, limit: int = 600) -> list[dict[str, Any]]:
     """Публикации, отклонённые «Отбором» с даты поступления (раздел отклонённого «Отбора», без убранного людьми): пул
-    ежемесячной выборки на просмотр эксперту."""
+    ежемесячной выборки на просмотр эксперту. Случайно по всему месяцу и воспроизводимо: порядок по хэшу seed и
+    номера, а не первые по номеру (отклонённых за месяц бывают тысячи)."""
     from oiltech_digest.db.rejected_sections import _NOT_SHOWN_SQL
     from oiltech_digest.feed_window import OTBOR_REJECT
 
@@ -452,6 +485,6 @@ def rejected_by_otbor(since: datetime, *, limit: int = 3000) -> list[dict[str, A
             FROM signals s
             WHERE {_NOT_SHOWN_SQL} AND s.otbor_decision = '{OTBOR_REJECT}' AND s.human_removal IS NULL
               AND s.first_seen_at >= %s
-            ORDER BY s.id
+            ORDER BY md5(%s || ':' || s.id::text), s.id
             LIMIT %s
-            """, (since, int(limit))).fetchall()
+            """, (since, seed, int(limit))).fetchall()

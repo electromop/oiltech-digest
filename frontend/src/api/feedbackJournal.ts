@@ -70,6 +70,8 @@ export type JournalEntry = {
   quote?: string | null;
   event_ids?: number[];
   changes?: JournalChange[];
+  // «Изменить»: что предлагал разбор ОС, когда на карточку легла формулировка администратора (changes).
+  proposed_changes?: JournalChange[] | null;
   basis?: JournalBasis[];
   can_decide?: boolean;
   // Задача выборки.

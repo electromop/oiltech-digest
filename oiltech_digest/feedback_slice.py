@@ -85,8 +85,13 @@ def run(*, trigger: str, author: str | None, now: datetime, settings: dict[str, 
     slice_id = feedback_store.create_slice(status="running", signals=len(signal_ids), **common)
     if slice_id is None:
         return {"skipped": "срез этой недели уже есть"}
-    job = feedback_review.enqueue(slice_id, signal_ids, since=window_to - timedelta(days=days), until=window_to,
-                                  model=str(settings["review_model"]))
+    try:
+        job = feedback_review.enqueue(slice_id, signal_ids, since=window_to - timedelta(days=days), until=window_to,
+                                      model=str(settings["review_model"]))
+    except Exception as exc:
+        # Срез без задачи не держит следующие: не выполнен, его окно возьмёт следующий.
+        feedback_store.finish_slice(slice_id, status="failed", note=f"задача разбора ОС не поставлена: {exc}"[:500])
+        raise
     feedback_store.attach_job(slice_id, int(job["id"]))
     return {"slice_id": slice_id, "status": "running", "signals": len(signal_ids), "job_id": int(job["id"])}
 
@@ -143,7 +148,7 @@ def sample_task(now: datetime, settings: dict[str, Any]) -> dict[str, Any] | Non
     month = local.strftime("%Y-%m")
     if size <= 0 or feedback_store.task_in_month(SAMPLE_TASK, month):
         return None
-    pool = feedback_store.rejected_by_otbor(now - timedelta(days=_SAMPLE_POOL_DAYS))
+    pool = feedback_store.rejected_by_otbor(now - timedelta(days=_SAMPLE_POOL_DAYS), seed=month)
     tags = repository.list_enabled_tags()
     themes = set(signal_themes.names(tags))
     items = []
