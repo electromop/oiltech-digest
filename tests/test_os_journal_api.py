@@ -217,3 +217,40 @@ def test_admin_returns_a_card_from_any_rejected_section_and_undoes_it_from_the_j
     assert dropped not in cards(analyst, "technology")
     assert _rejected(admin)[dropped] == sections[dropped]
     assert entry(admin, row["key"])["status"] == "undone"
+
+
+def _return_body(category: str) -> dict:
+    return {"industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
+            "signal_category": category}
+
+
+def test_return_shows_the_card_or_refuses_and_undo_spares_a_card_chosen_for_the_issue(issue):
+    """Вернуть значит показать: возврат, после которого карточку не видно ни в одной витрине (категория «другое»),
+    получает отказ и ничего не меняет; архивная карточка возвращается из архива, а отмена уводит её обратно. Карточку,
+    которую после возврата выбрали «в дайджест», отмена не прячет (выбранное не прячет ничто)."""
+    from oiltech_digest.db import repository
+    from tests.digest_user_path_support import add_signal, feed_signal, msk
+    from tests.os_journal_support import card
+
+    admin, analyst, a = issue["admin"], issue["analyst"], issue["a"]
+    other = card(feed_signal(a["mid"]), category="other")
+    archived = add_signal("archived", first_seen=msk(2026, 9, 12, 0, 20))
+    repository.archive_signals([archived], reason="early-free-theme")
+    sections = _rejected(admin)
+
+    refused = admin.post(f"/api/signals/{other}/return", json=_return_body("other"))
+    assert refused.status_code == 409 and refused.json()["detail"].startswith("Вернуть некуда")
+    assert _rejected(admin)[other] == sections[other]
+    for signal_id, category in ((other, "business"), (archived, "technology")):
+        assert admin.post(f"/api/signals/{signal_id}/return", json=_return_body(category)).status_code == 200
+    assert other in cards(analyst, "business") and archived in cards(analyst, "technology")
+
+    rows = {row["signal_id"]: row for row in journal(admin, kind="immediate")}
+    assert admin.post(f"/api/feedback-journal/actions/{rows[archived]['id']}/undo").status_code == 200
+    assert archived not in cards(analyst, "technology")
+    assert _rejected(admin)[archived] == sections[archived]
+
+    analyst.mark(a["mid"])
+    undo = admin.post(f"/api/feedback-journal/actions/{rows[other]['id']}/undo")
+    assert undo.status_code == 409 and "в дайджест" in undo.json()["detail"]
+    assert other in cards(analyst, "business")

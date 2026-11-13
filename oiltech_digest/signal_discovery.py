@@ -907,9 +907,11 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             continue
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
-        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")
+                      or owner.get("otbor_decision") is not None):
             # Склеенная отсеянная: событие уже найдено снова, повтор отсева её не оживляет и не
-            # уводит ссылку от забравшей.
+            # уводит ссылку от забравшей. С решением «Отбора» (её вернул человек кнопкой «Вернуть», #189): повтор
+            # отсева её не перезаписывает.
             continue
         if url and _links_held_elsewhere([url], key):
             # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события

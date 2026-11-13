@@ -1271,7 +1271,7 @@ def signal_key_owners(keys: list[str]) -> dict[str, dict]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT s.signal_key, s.id, s.merged_into_signal_id, s.filter_stage, {reviewed} AS reviewed
+            SELECT s.signal_key, s.id, s.merged_into_signal_id, s.filter_stage, s.otbor_decision, {reviewed} AS reviewed
             FROM signals s
             WHERE s.signal_key = ANY(%s)
             """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s")),

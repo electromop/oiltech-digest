@@ -55,16 +55,6 @@ def record_immediate(event_id: int, signal_id: int, changes: list[dict[str, Any]
                                         author=author, user_id=user_id)
 
 
-def record_return(signal_id: int, change: dict[str, Any] | None, *, author: str | None,
-                  user_id: int | None) -> int | None:
-    """Строка «сразу» к кнопке «Вернуть» в «Отклонённых» (решение владельца 13.11): отметки у неё нет, строка своя;
-    отмена из журнала уводит карточку обратно в её раздел."""
-    if not change:
-        return None
-    return feedback_store.create_action(IMMEDIATE, DONE, signal_id=signal_id, agents=["otbor"],
-                                        details={"changes": [change]}, author=author, user_id=user_id)
-
-
 def after_restore(signal_id: int, *, author: str | None, user_id: int | None) -> None:
     """«Вернуть» в «Убрано людьми» мимо журнала: уборка, которую вернули, в журнале отменена."""
     action = feedback_store.latest_with_change(signal_id, "removed")

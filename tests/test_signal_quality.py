@@ -278,9 +278,9 @@ def _feedback(signal_id, event_type, verdict=None):
 
 def _return(signal_id, category="technology"):
     """Кнопка «Вернуть» в «Отклонённых» (#132; с #189 из любого раздела): решение человека «брать» с полями «Отбора»."""
-    from oiltech_digest.db import otbor_store
+    from oiltech_digest.db import human_return
 
-    return otbor_store.human_return(signal_id, {"industry": "oil_gas", "oilfield_relevance": "direct",
+    return human_return.human_return(signal_id, {"industry": "oil_gas", "oilfield_relevance": "direct",
                                                 "oilfield_application": "", "category": category},
                                     author="admin@example.test")
 
@@ -288,7 +288,7 @@ def _return(signal_id, category="technology"):
 def test_rating_does_not_bring_back_a_card_the_machine_hid_but_the_return_button_does(isolated_db):
     """Правило 05.10 снято (решение владельца 13.11, #189): положительная оценка спрятанное машиной не возвращает, и
     причина скрытия видна целиком; вернуть карточку может кнопка «Вернуть» в «Отклонённых»."""
-    from oiltech_digest.db import otbor_store
+    from oiltech_digest.db import human_return
 
     card = _store("rated", signal_category="business", oilfield_relevance="none")
     _feedback(card, "verdict", "approved")
@@ -297,7 +297,7 @@ def test_rating_does_not_bring_back_a_card_the_machine_hid_but_the_return_button
     hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
     assert hidden == {card: "бизнес-сигнал, не технология; не про нефтесервис"}
 
-    assert _return(card) == otbor_store.RETURNED
+    assert _return(card) == human_return.RETURNED
     assert card in _visible_ids()
 
 
@@ -462,6 +462,19 @@ def test_filtered_card_without_link_rescued_by_a_human_goes_on_the_radar(isolate
 
     assert card in _visible_ids()
     assert card not in _filtered()
+
+
+def test_search_drop_again_does_not_overwrite_a_card_a_human_returned(isolated_db):
+    # Вернули кнопкой «Вернуть» (#189), а следующий прогон снова отсеял ту же ссылку: возврат человека остаётся.
+    url = "https://example.com/returned"
+    _apply_run([_search_drop("Returned once", url)])
+    (card,) = _filtered()
+    _return(card)
+
+    _apply_run([_search_drop("Dropped again", url)])
+
+    assert card in _visible_ids()
+    assert (_column(card, "otbor_decision"), _column(card, "title")) == ("accept", "Returned once")
 
 
 def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_duplicate(isolated_db):

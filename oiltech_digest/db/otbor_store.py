@@ -37,9 +37,6 @@ FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено: публикацию выбрали «в дайджест», а повтор «Отбора» решения людей не
 # перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»); не изменено: решение человека (#132).
 DECIDED, KEPT_IN_DIGEST, KEPT_BY_HUMAN = "decided", "kept_in_digest", "kept_by_human"
-# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором»: возвращать нечего; убрано людьми
-# (#188): его возвращает «Вернуть» раздела «Убрано людьми» прежним решением (removed_by_people.restore).
-RETURNED, NOT_REJECTED, REMOVED_BY_PEOPLE = "returned", "not_rejected", "removed_by_people"
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение: в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
 
@@ -371,73 +368,6 @@ def write_signal_decision(signal_id: int, values: dict[str, Any], *, disputed: s
                                   recipe=recipe, chosen_sql=marks.signal_marked_sql("%s", "digest"))
         conn.commit()
     return written
-
-
-def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) -> str | None:
-    """Вернуть карточку из «Отклонённых» решением человека (#132, спека #128; с #189 из любого раздела, решение
-    владельца 13.11: «если карточка уходит, администратор возвращает её кнопкой»): человек вписал то, что ставит
-    «Отбор»: отрасль, связь и применение, категорию (проверены: otbor_answer.return_problems). Решение: «брать»,
-    источник всех полей, человек, пометка «спорное» с тем, откуда вернули («„Отбор“ не взял бы: причина» или раздел
-    «Отклонённых»); «Решение платформы»: по ступени, когда будут баллы. Дальше публикация идёт по остатку конвейера:
-    суть и перевод, оба вызова «Карточки», «Дедуп»; карточка, спрятанная до «Отбора», встаёт на его путь (selector),
-    а заголовок, который поиск оставил непереведённым, переведёт «Суть и перевод». RETURNED; NOT_REJECTED: карточки
-    нет в «Отклонённых» (вернуть можно только оттуда); REMOVED_BY_PEOPLE: её возвращает «Вернуть» прежним решением;
-    None: сигнала нет."""
-    from oiltech_digest.db.rejected_sections import everything
-    from oiltech_digest.otbor_answer import code_label
-    from oiltech_digest.otbor_pack_format import load_dictionaries
-    from oiltech_digest.processing.pipeline import _needs_translation
-
-    label = partial(code_label, load_dictionaries())
-    section = everything()
-
-    with connection.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(f"SELECT s.id, s.origin, s.origin_article_id, s.otbor_decision, s.reject_reason, s.card_set_by,"
-                    f" s.human_removal, s.selector, s.title, s.title_ru, ({section.condition}) AS rejected,"
-                    f" ({section.short_reason}) AS section_reason FROM signals s WHERE s.id = %s FOR UPDATE OF s",
-                    (int(signal_id),))
-        row = cur.fetchone()
-        if row is None:
-            return None
-        if row["human_removal"] is not None:
-            return REMOVED_BY_PEOPLE
-        if row["otbor_decision"] != OTBOR_REJECT and not row["rejected"]:
-            return NOT_REJECTED
-        disputed = (f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
-                    if row["otbor_decision"] == OTBOR_REJECT else f"Было в «Отклонённых»: {row['section_reason']}")
-        # Находка радара, спрятанная до «Отбора», встаёт на его путь; её непереведённый заголовок (поиск копирует
-        # исходный) переведёт «Суть и перевод». Сигнал ленты суть и перевод получает обработкой статьи: путь прежний.
-        radar_before = row["origin"] == SIGNAL_ORIGIN_RADAR and row["selector"] is None
-        title_ru = row["title_ru"]
-        if radar_before and title_ru == row["title"] and _needs_translation(row["title"] or ""):
-            title_ru = None
-        application = values.get("oilfield_application") if values["oilfield_relevance"] == "transferable" else None
-        relevance = label("oilfield_relevance", values["oilfield_relevance"])
-        step = {"stage": "Человек", "text": (
-            f"Вернул{f' {author}' if author else ''}: отрасль «{label('industry', values['industry'])}», связь "
-            f"«{relevance}»{f' ({application})' if application else ''}, категория "
-            f"«{label('category', values['category'])}». {disputed}")}
-        set_by = {**(row["card_set_by"] or {}),
-                  **{column: CARD_SET_BY_HUMAN for column in (*_SET_BY_COLUMNS, "otbor_decision")}}
-        cur.execute(
-            f"""
-            UPDATE signals
-            SET industry = %s, oilfield_relevance = %s, oilfield_application = %s, signal_category = %s,
-                otbor_decision = '{OTBOR_ACCEPT}', accepted_at = now(), reject_reason = NULL, otbor_disputed = %s,
-                otbor_failure = NULL, otbor_failure_reason = NULL, card_set_by = %s,
-                selector = CASE WHEN %s THEN '{SIGNAL_SELECTOR_OTBOR}' ELSE selector END, title_ru = %s,
-                decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
-            WHERE id = %s
-            """,
-            (values["industry"], values["oilfield_relevance"], application, values["category"], disputed,
-             Json(set_by), radar_before, title_ru, Json([step]), row["id"]),
-        )
-        refresh_platform_decisions([row["id"]], conn=conn)
-        conn.commit()
-    # Принятая статья: снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
-    sync_feed_article(row)
-    return RETURNED
 
 
 def sync_feed_article(row: dict[str, Any]) -> None:
