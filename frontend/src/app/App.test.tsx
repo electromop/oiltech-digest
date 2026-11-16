@@ -749,6 +749,37 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войти" }));
   }
 
+  // Пункты бокового и мобильного меню участника; feedback_tab: открыта ли ему вкладка «Обратная связь».
+  async function participantMenus(feedbackTab: boolean) {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/auth/login"
+        ? Promise.resolve(jsonResponse({
+          ok: true, user: { id: 2, email: "user@example.com", role: "user", feedback_tab: feedbackTab },
+        }))
+        : base(input, init));
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    await screen.findByRole("heading", { name: "Бизнес-лента" });
+    return [".sidebar", ".mobileNav"].map((selector) =>
+      within(document.querySelector(selector) as HTMLElement).getAllByRole("button").map((one) => one.textContent));
+  }
+
+  it("участнику, которому настройка контура закрыла вкладку, пункта «Обратная связь» нет ни в одном меню", async () => {
+    for (const menu of await participantMenus(false)) {
+      expect(menu).toContain("Бизнес-лента");
+      expect(menu).not.toContain("Обратная связь");
+    }
+  });
+
+  it("участнику с открытой вкладкой пункт «Обратная связь» виден, разделов администратора нет", async () => {
+    for (const menu of await participantMenus(true)) {
+      expect(menu).toContain("Обратная связь");
+      expect(menu).not.toContain("Пользователи");
+    }
+  });
+
   it("прошлый выпуск в дайджесте — только просмотр и выгрузка", async () => {
     withArchiveMocks();
     const user = userEvent.setup();

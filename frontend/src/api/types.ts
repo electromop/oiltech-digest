@@ -3,6 +3,8 @@ export type User = {
   email: string;
   role?: "admin" | "user";
   created_at?: string;
+  // Открыта ли учётке вкладка «Обратная связь» (настройка контура ОС, ответ входа и сессии); нет поля: открыта.
+  feedback_tab?: boolean;
 };
 
 export type Source = {

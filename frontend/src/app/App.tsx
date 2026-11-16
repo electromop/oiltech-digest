@@ -154,8 +154,9 @@ export function App() {
   const [toast, setToast] = useState<{ text: string; tone: "default" | "error" } | null>(null);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
   const isAdmin = (user?.role ?? "user") === "admin";
-  // Пункт меню виден, если роль пускает.
-  const screenInMenu = (screenId: ScreenId) => isAdmin || !ADMIN_SCREENS.has(screenId);
+  // Пункт меню виден, если роль пускает; «Обратную связь» участнику может закрыть настройка контура ОС (16.11).
+  const screenInMenu = (screenId: ScreenId) => isAdmin
+    || (!ADMIN_SCREENS.has(screenId) && (screenId !== "feedback-journal" || user?.feedback_tab !== false));
 
   useEffect(() => {
     void loadSession();

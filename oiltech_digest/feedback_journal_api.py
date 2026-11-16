@@ -24,10 +24,18 @@ router = APIRouter()
 
 def _reader(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Журнал видят все допущенные; настройка контура может закрыть вкладку участникам."""
-    if feedback_settings.current()["tab_visible_to"] == "admin" and not _is_admin(user):
+    if not tab_open_to(user):
         raise HTTPException(status_code=403, detail="Вкладку «Обратная связь» настройка контура открыла только "
                                                     "администратору")
     return user
+
+
+def tab_open_to(user: dict[str, Any], values: dict[str, Any] | None = None) -> bool:
+    """Открыта ли учётке вкладка «Обратная связь»: администратору всегда, участнику, пока её не закрыла настройка
+    контура «Кто видит вкладку». values: уже прочитанные настройки контура."""
+    if _is_admin(user):
+        return True
+    return (values if values is not None else feedback_settings.current())["tab_visible_to"] != "admin"
 
 
 def _is_admin(user: dict[str, Any]) -> bool:

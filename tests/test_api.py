@@ -911,6 +911,9 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     monkeypatch.setattr(api.repository, "delete_user_session", lambda token: sessions.pop(token, None))
     # Учётка допущена: шаг кода допуска (#113) проверяет tests/test_admission.py.
     monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
+    # Настройки контура ОС без базы: умолчания, вкладка «Обратная связь» открыта всем (закрытую участнику проверяет
+    # tests/test_os_journal_slice.py).
+    monkeypatch.setattr(api.feedback_settings, "current", api.feedback_settings.defaults)
 
     client = TestClient(app)
     register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})
@@ -921,6 +924,7 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     me_response = client.get("/api/auth/me")
     assert me_response.status_code == 200
     assert me_response.json()["user"]["email"] == "user@example.com"
+    assert me_response.json()["user"]["feedback_tab"] is True
 
     login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"})
     assert login_response.status_code == 200

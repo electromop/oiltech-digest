@@ -105,6 +105,32 @@ def test_review_brings_marks_of_all_participants_into_one_card_improvement_with_
     assert colleague_mark["status"] == "pending"
 
 
+def test_tab_closed_to_participants_takes_away_their_menu_item_and_card_badge_but_not_the_admins(
+        issue, contour, monkeypatch):
+    """Решение владельца 16.11: вкладку «Обратная связь» видит только администратор. С ней у участника уходят пункт
+    меню (флаг сессии feedback_tab) и значок «ждёт решения в журнале» на карточке: он вёл бы на закрытую вкладку."""
+    admin, colleague = issue["admin"], issue["colleague"]
+    signal_id = business(issue["a"]["hi"], technology_maturity="прототип")
+    ids = [mark(colleague, signal_id, comment="Это уже пилот у оператора, не прототип")["event_id"]]
+    _collect(admin)
+    review(monkeypatch, {signal_id: {"improvements": [
+        improvement("technology_maturity", "пилот/ОПИ", ids, "уже пилот у оператора")]}})
+    [proposal] = journal(admin, kind="signal_proposal")
+
+    def seen(person) -> tuple:
+        response = person.get("/api/auth/me")
+        assert response.status_code == 200, response.text
+        return response.json()["user"]["feedback_tab"], cards(person)[signal_id]["feedback_pending"]
+
+    assert seen(colleague) == (True, proposal["id"])
+    settings(admin, tab_visible_to="admin")
+    assert seen(colleague) == (False, None)
+    assert seen(admin) == (True, proposal["id"])
+    # Вкладка снова всем, а значок выключен своей настройкой: пункт меню вернулся, значка нет ни у кого.
+    settings(admin, tab_visible_to="all", card_badge=False)
+    assert (seen(colleague), seen(admin)) == ((True, None), (True, None))
+
+
 def test_review_answer_with_foreign_values_or_without_a_quote_is_not_written(issue, contour, monkeypatch):
     admin, colleague, a = issue["admin"], issue["colleague"], issue["a"]
     signal_id, other = business(a["hi"]), business(a["mid"])
@@ -149,7 +175,8 @@ def test_approved_improvement_is_applied_at_once_modified_in_new_wording_dismiss
                                                             "это контракт")["event_id"]
              for signal_id in (stage, text, theme, kind)}
     quote = "пилот на месторождении"
-    _collect(admin)
+    # Номер этого среза, а не последнего: в понедельник после времени среза шаг планировщика ниже соберёт ещё один.
+    slice_id = _collect(admin)["slice_id"]
     review(monkeypatch, {
         stage: {"improvements": [improvement("technology_maturity", "пилот/ОПИ", [marks[stage]], quote)]},
         text: {"improvements": [improvement("summary", "Суть по отметкам.", [marks[text]], quote)]},
@@ -175,7 +202,6 @@ def test_approved_improvement_is_applied_at_once_modified_in_new_wording_dismiss
     statuses = {row["signal_id"]: row["status"] for row in journal(colleague, kind="signal_proposal")}
     assert statuses == {stage: "applied", text: "applied", theme: "dismissed", kind: "stale"}
     approved = entry(admin, f"action:{proposals[stage]['id']}")
-    slice_id = _slices(admin)[0]["id"]
     assert _labels(approved) == [(f"Предложено разбором ОС (срез №{slice_id})", None),
                                  ("Согласовано", f"user{admin.id}@example.test"),
                                  ("Применено системой", f"user{admin.id}@example.test")]
