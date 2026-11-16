@@ -8,6 +8,22 @@
 	# JSON каталога сигналов (тысячи строк) ужимается в ~5-10 раз.
 	encode zstd gzip
 
+	# Предел тела запроса (защита входа 16.11.2026), сверх него 413. Числа и почему они такие: oiltech_digest/request_guard.py,
+	# там же второй слой в приложении; тест сверяет числа с этим файлом. После правки файла:
+	# docker exec -i oiltech_caddy caddy reload --config /dev/stdin --adapter caddyfile < Caddyfile
+	@auth_body path /api/auth/*
+	request_body @auth_body {
+		max_size 64KB
+	}
+	@large_body path /api/documents /api/external-worker/*
+	request_body @large_body {
+		max_size 32MB
+	}
+	@other_body not path /api/auth/* /api/documents /api/external-worker/*
+	request_body @other_body {
+		max_size 2MB
+	}
+
 	reverse_proxy app:8000
 }
 

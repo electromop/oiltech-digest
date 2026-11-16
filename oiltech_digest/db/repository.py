@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 import logging
 from pathlib import Path
 import re
-from typing import Literal, NamedTuple, get_args
+from typing import Any, Literal, NamedTuple, get_args
 from urllib.parse import urlsplit
 
 from psycopg import errors as pg_errors
@@ -2560,7 +2560,11 @@ class UserExists(ValueError):
 
 
 class RegistrationsCapped(Exception):
-    """Потолок регистраций за час исчерпан."""
+    """Потолок регистраций за час исчерпан; retry_after: через сколько секунд старшая заявка выйдет из часа."""
+
+    def __init__(self, retry_after: Any = None) -> None:
+        super().__init__("потолок регистраций за час исчерпан")
+        self.retry_after = retry_after
 
 
 # Ключ pg_advisory_xact_lock (16.11.2026): регистрации идут по одной, подсчёт потолка и вставка под одним замком.
@@ -2608,12 +2612,14 @@ def register_user(email: str, password: str, per_hour: int) -> dict:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (_REGISTRATION_LOCK,))
         cur.execute(
             """
-            SELECT count(*) AS recent FROM users
+            SELECT count(*) AS recent, extract(epoch FROM min(created_at) + interval '1 hour' - now()) AS retry_after
+            FROM users
             WHERE self_registered AND admitted_at IS NULL AND created_at > now() - interval '1 hour'
             """
         )
-        if cur.fetchone()["recent"] >= per_hour:
-            raise RegistrationsCapped
+        row = cur.fetchone()
+        if row["recent"] >= per_hour:
+            raise RegistrationsCapped(row["retry_after"])
         user = _insert_user(cur, email, digest, "user", self_registered=True)
         conn.commit()
     return user
@@ -2628,11 +2634,13 @@ def authenticate_user(email: str, password: str) -> dict | None:
             (email,),
         )
         user = cur.fetchone()
-        if user is None:
-            return None
-        if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
-            return None
-        return {"id": user["id"], "email": user["email"], "role": user["role"], "created_at": user["created_at"]}
+    if user is None:
+        # Почты нет: та же проверка по фиктивному хэшу, иначе по времени ответа видно, есть ли учётка (16.11.2026).
+        auth.burn_password_check(password)
+        return None
+    if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
+        return None
+    return {"id": user["id"], "email": user["email"], "role": user["role"], "created_at": user["created_at"]}
 
 
 def create_user_session(user_id: int) -> str:

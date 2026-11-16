@@ -6,7 +6,6 @@ import base64
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
-import hmac
 import json
 import logging
 from pathlib import Path
@@ -14,14 +13,16 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import admission, auth, background_jobs, brand_fonts, colleague_materials, config, feed_window
+from oiltech_digest import admission, auth, auth_limits, background_jobs, brand_fonts, colleague_materials, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -34,7 +35,8 @@ from oiltech_digest import (contract, feedback_changes, feedback_journal, feedba
                             signal_summary)
 from oiltech_digest import material_signals
 from oiltech_digest import feedback_journal_api
-from oiltech_digest.api_access import require_admin, require_user
+from oiltech_digest import request_guard
+from oiltech_digest.api_access import external_worker_refusal, optional_user, require_admin, require_user
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -67,6 +69,9 @@ setup_logging("api")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OilTech Digest API")
+# Ворота тела (защита входа 16.11.2026, request_guard.py): предел размера и вход до чтения тела. Добавлены раньше журнала
+# запросов: последний добавленный слой внешний, поэтому журнал видит и отказы ворот (413, 401).
+app.add_middleware(request_guard.RequestGuard)
 # Журнал ОС, недельный срез и настройки контура (#189): маршруты в своём модуле.
 app.include_router(feedback_journal_api.router)
 if (FRONTEND_DIST_DIR / "assets").exists():
@@ -424,10 +429,33 @@ def auth_options() -> dict[str, Any]:
     return {"self_registration": config.AUTH_ALLOW_SELF_REGISTRATION}
 
 
+def _client_ip(request: Request) -> str | None:
+    """Адрес клиента для лимитов входа (auth_limits.client_address): uvicorn ставит его по X-Forwarded-For от Caddy."""
+    return auth_limits.client_address(request.client.host if request.client else None)
+
+
+def _too_many(exc: auth_limits.Refused) -> HTTPException:
+    return HTTPException(status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after)})
+
+
+def _sign_in(kind: auth_limits.SignInKind, payload: AuthPayload | AdmitPayload,
+             request: Request) -> tuple[dict[str, Any], int]:
+    """Вход и шаг кода: лимиты и пароль (auth_limits.authenticate). Сверх лимита 429, неверный пароль 401; верный:
+    учётка и номер попытки, итог которой пишет вызывающий."""
+    try:
+        user, attempt = auth_limits.authenticate(kind, _client_ip(request), payload.email, payload.password)
+    except auth_limits.Refused as exc:
+        raise _too_many(exc) from None
+    if user is None:
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    return user, attempt
+
+
 @app.post("/api/auth/register")
-def auth_register(payload: AuthPayload) -> dict[str, Any]:
+def auth_register(payload: AuthPayload, request: Request) -> dict[str, Any]:
     """Самостоятельная регистрация (снова открыта 16.11, ворота: код допуска #113). Учётка с ролью user, без
-    допуска и с пометкой self_registered; сессии нет, ответ «нужен код допуска»."""
+    допуска и с пометкой self_registered; сессии нет, ответ «нужен код допуска». С одного адреса не больше
+    AUTH_REGISTER_PER_IP_HOUR заявок в час (auth_limits), слабый пароль не принимается."""
     if not config.AUTH_ALLOW_SELF_REGISTRATION:
         # Регистрацию закрыли флагом (по умолчанию она открыта, решение владельца 16.11). Учётки
         # заводит администратор: экран «Пользователи» или CLI create-user. 403, а не 404: путь
@@ -436,13 +464,18 @@ def auth_register(payload: AuthPayload) -> dict[str, Any]:
     email = auth.normalize_email(payload.email)
     if not auth.validate_email(email):
         raise HTTPException(status_code=400, detail="Некорректный email")
-    if not auth.validate_password(payload.password):
-        raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
+    problem = auth.password_problem(payload.password, email)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    try:
+        auth_limits.record_registration(_client_ip(request), email)
+    except auth_limits.Refused as exc:
+        raise _too_many(exc) from None
     try:
         # Роль всегда user: другие поля запроса модель AuthPayload отбрасывает.
         user = repository.register_user(email, payload.password, config.AUTH_SELF_REGISTRATION_PER_HOUR)
-    except repository.RegistrationsCapped:
-        raise HTTPException(status_code=429, detail="Сейчас слишком много новых регистраций, попробуйте позже")
+    except repository.RegistrationsCapped as exc:
+        raise _too_many(auth_limits.Refused(auth_limits.REGISTRATIONS_CAPPED, exc.retry_after)) from None
     except repository.UserExists:
         # Честный ответ: скрыть занятую почту без подтверждения почты письмом нельзя (вход тем же паролем всё
         # равно отличит), а владелец, чью почту заняли, должен узнать об этом сразу. Учётка не меняется.
@@ -457,23 +490,23 @@ def auth_register(payload: AuthPayload) -> dict[str, Any]:
 
 
 @app.post("/api/auth/login")
-def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
-    user = repository.authenticate_user(payload.email, payload.password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+def auth_login(payload: AuthPayload, request: Request, response: Response) -> dict[str, Any]:
+    user, attempt = _sign_in(auth_limits.LOGIN, payload, request)
+    auth_limits.finish_sign_in(attempt, auth_limits.OK)
     return _login_or_admission(user, response)
 
 
 @app.post("/api/auth/admit")
-def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
-    """Шаг «код допуска» (#113): почта, пароль и код одним запросом: допуск и сессия."""
-    user = repository.authenticate_user(payload.email, payload.password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+def auth_admit(payload: AdmitPayload, request: Request, response: Response) -> dict[str, Any]:
+    """Шаг «код допуска» (#113): почта, пароль и код одним запросом: допуск и сессия. Неверный код идёт в лимит
+    адреса, почту не закрывает: у кода свой счёт попыток."""
+    user, attempt = _sign_in(auth_limits.ADMIT, payload, request)
     try:
         admission.redeem(int(user["id"]), payload.code)
     except admission.AdmissionRefused as exc:
+        auth_limits.finish_sign_in(attempt, auth_limits.BAD_CODE)
         raise HTTPException(status_code=400, detail=str(exc))
+    auth_limits.finish_sign_in(attempt, auth_limits.OK)
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
     return _session_payload(user)
@@ -514,8 +547,9 @@ def create_user_endpoint(payload: UserCreate, user: dict[str, Any] = Depends(req
     email = auth.normalize_email(payload.email)
     if not auth.validate_email(email):
         raise HTTPException(status_code=400, detail="Некорректный email")
-    if not auth.validate_password(payload.password):
-        raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
+    problem = auth.password_problem(payload.password, email)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     try:
         created = repository.create_user(email, payload.password, payload.role)
     except ValueError as exc:
@@ -528,14 +562,17 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
     target = repository.get_user_by_id(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    # Пароль проверяется до любых изменений: отказ по паролю не должен оставить сменённую роль.
+    problem = (auth.password_problem(payload.password, str(target.get("email") or ""))
+               if payload.password is not None else None)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     if payload.role is not None:
         new_role = payload.role if payload.role in ("admin", "user") else "user"
         if target["role"] == "admin" and new_role != "admin" and repository.count_admins() <= 1:
             raise HTTPException(status_code=400, detail="Нельзя снять роль у последнего администратора")
         repository.set_user_role(user_id, new_role)
     if payload.password is not None:
-        if not auth.validate_password(payload.password):
-            raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
         repository.set_user_password(user_id, payload.password)
         if int(user["id"]) != user_id:
             # Чужой пароль сменён, под ним мог войти кто угодно: снова через код допуска (#113).
@@ -564,15 +601,19 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/readiness")
-def readiness() -> JSONResponse:
+def readiness(viewer: dict[str, Any] | None = Depends(optional_user)) -> JSONResponse:
+    """Готовность к работе. Без входа только ok и код (защита входа 16.11.2026): список таблиц и задачи видит
+    администратор, текст ошибки базы уходит в журнал сервера. Опрашивать здоровье: /api/health (так делают проверка
+    здоровья compose и скрипты выката), readiness ими не читается."""
     try:
         payload = readiness_check()
-    except Exception as exc:  # noqa: BLE001 - readiness must return a clear 503 payload
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "database": {"ok": False}, "error": str(exc)},
-        )
-    return JSONResponse(status_code=200 if payload["ok"] else 503, content=_clean(payload))
+    except Exception:  # noqa: BLE001 - readiness must return a clear 503 payload
+        logger.exception("readiness: проверка не прошла")
+        return JSONResponse(status_code=503, content={"ok": False})
+    status_code = 200 if payload["ok"] else 503
+    if (viewer or {}).get("role") != "admin":
+        return JSONResponse(status_code=status_code, content={"ok": bool(payload["ok"])})
+    return JSONResponse(status_code=status_code, content=_clean(payload))
 
 
 @app.get("/api/articles")
@@ -2028,13 +2069,10 @@ def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Dep
 
 
 def require_external_worker(authorization: str | None = Header(default=None)) -> None:
-    if not config.EXTERNAL_WORKER_TOKEN_HASH:
-        raise HTTPException(status_code=503, detail="External worker auth is not configured")
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="External worker token required")
-    if not hmac.compare_digest(_sha256_hex(token), config.EXTERNAL_WORKER_TOKEN_HASH):
-        raise HTTPException(status_code=401, detail="Invalid external worker token")
+    # Тот же отказ ворота тела (request_guard) дают раньше, до чтения тела; здесь он для маршрута.
+    refusal = external_worker_refusal(authorization)
+    if refusal is not None:
+        raise HTTPException(status_code=refusal[0], detail=refusal[1])
 
 
 def _sha256_hex(value: str) -> str:
@@ -2757,22 +2795,37 @@ def _documents_dir() -> Path:
     return directory
 
 
+_FORM_TRUE = frozenset({"1", "true", "yes", "on", "t", "y"})
+
+
 @app.post("/api/documents")
-async def upload_document(
-    file: UploadFile = File(...),
-    attested: bool = Form(False),
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
+async def upload_document(request: Request, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Загрузка документа (поля формы file и attested). Форму эндпоинт читает сам, после проверки входа: с параметрами
+    File и Form FastAPI прочитал бы её раньше зависимостей, и без входа сервер принимал бы файл до 32 МБ во временный
+    файл (защита входа 16.11.2026, request_guard.py)."""
     if not config.UPLOAD_DOCS_ENABLED:
         raise HTTPException(status_code=503, detail="Приём файлов временно выключен")
     # Внешний контур выключен → отклоняем НА ВХОДЕ. Поставленная задача без внешнего
     # исполнителя не откладывается, а гибнет: её заберёт локальный воркер и завалит.
     if network_policy.route_ai_processing().execution_region != "external":
         raise HTTPException(status_code=503, detail="Внешний контур обработки недоступен — загрузка отключена")
-    if not attested:
-        raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
+    try:
+        form = await request.form(max_files=1, max_fields=10)
+    except StarletteHTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - битая форма или обрыв загрузки: 400, как отвечал FastAPI до 16.11
+        raise HTTPException(status_code=400, detail="Не удалось прочитать форму загрузки") from exc
+    try:
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(status_code=422, detail="Нет файла: поле формы file")
+        if str(form.get("attested") or "").strip().lower() not in _FORM_TRUE:
+            raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
+        data = await file.read()
+        filename = file.filename
+    finally:
+        await form.close()
 
-    data = await file.read()
     if len(data) > config.UPLOAD_MAX_FILE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -2804,7 +2857,7 @@ async def upload_document(
 
     document_id = documents_repo.create_document(
         owner_user_id=int(user["id"]),
-        filename=(file.filename or "документ")[:300],
+        filename=(filename or "документ")[:300],
         storage_path=str(storage_path),
         kind=kind,
         size_bytes=len(data),

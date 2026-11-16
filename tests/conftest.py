@@ -31,6 +31,14 @@ config.OPENAI_REPRINT_MODEL = "test-reprint-model"
 # Радар раз в N суток (решение владельца 04.11): тесты суточного шага идут с N=1, как по умолчанию в коде, а не с .env
 # разработчика или прода; правило N суток проверяют свои тесты (test_background_jobs).
 config.SIGNAL_DISCOVERY_DAILY_EVERY_DAYS = 1
+# Лимиты входа (защита входа 16.11.2026): тесты идут с умолчаниями кода, а не с .env разработчика; свои пороги ставит
+# tests/test_auth_limits.py.
+config.AUTH_REGISTER_PER_IP_HOUR = 5
+config.AUTH_FAILURES_PER_IP_HOUR = 20
+config.AUTH_FAILURES_PER_EMAIL = 10
+config.AUTH_EMAIL_WINDOW_MINUTES = 15
+config.AUTH_KNOWN_ADDRESS_DAYS = 30
+config.AUTH_ATTEMPTS_RETENTION_DAYS = 30
 
 
 @pytest.fixture(scope="session")

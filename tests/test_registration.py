@@ -99,7 +99,8 @@ def test_registrations_over_hourly_cap_get_429_and_create_nothing(isolated_db, m
     response = _register(client, email="three@example.test")
 
     assert response.status_code == 429
-    assert "попробуйте позже" in response.json()["detail"]
+    assert "Попробуйте через 60 мин." in response.json()["detail"]
+    assert 3500 < int(response.headers["Retry-After"]) <= 3600
     assert _sql("SELECT count(*) FROM users WHERE self_registered")[0][0] == 2
     # Допущенные в потолок тоже не идут: подтверждающие разобрали заявки, регистрация снова открыта.
     _sql("UPDATE users SET admitted_at = now()")

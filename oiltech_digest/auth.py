@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from functools import lru_cache
 import hashlib
 import hmac
+from pathlib import Path
 import re
 import secrets
 
@@ -30,6 +33,95 @@ def validate_password(password: str) -> bool:
     return len(password or "") >= 8
 
 
+PASSWORD_TOO_SHORT = "Пароль должен быть не короче 8 символов"
+WEAK_PASSWORD = ("Пароль слишком простой: такие подбирают первыми. Не берите частые пароли, ряды клавиш и цифр, повторы, "
+                 "даты, номер телефона, название сервиса и свою почту.")
+# Слабый пароль (защита входа 16.11.2026): лимиты входа его не спасают, 10 попыток на почту за 15 минут хватает на
+# 12345678. Правила по NIST SP 800-63B: частые пароли, повторы и последовательности, даты и телефоны, слова сервиса и
+# сама почта. Случайные цифры (4829173650) проходят.
+_COMMON_PASSWORDS_FILE = Path(__file__).with_name("common_passwords.txt")
+# Сердцевина пароля без цифр и знаков по краям (Password2026! даёт password): частые слова и начала паролей.
+_COMMON_CORES = frozenset({
+    "password", "passw0rd", "p@ssword", "p@ssw0rd", "pass", "qwerty", "qwertz", "azerty", "admin", "administrator",
+    "welcome", "iloveyou", "letmein", "monkey", "dragon", "master", "shadow", "sunshine", "princess", "football",
+    "baseball", "superman", "batman", "trustno", "hello", "love", "test", "user", "login", "secret", "changeme",
+    "default", "root", "guest", "abc", "abcd", "summer", "winter", "spring", "autumn", "пароль", "привет", "любовь",
+    "лето", "зима", "весна", "осень", "oil", "neft", "нефть", "digest", "дайджест",
+})
+_SERVICE_WORDS = ("oiltech", "oil-tech", "oil_tech", "ойлтех")
+_KEYBOARD_RUNS = (
+    "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm", "йцукенгшщзхъ", "фывапролджэ", "ячсмитьбю",
+    "qazwsxedcrfvtgbyhnujmikolp", "1qaz2wsx3edc4rfv5tgb6yhn7ujm8ik9ol0p", "zaq1xsw2cde3vfr4bgt5nhy6mju7",
+    "1q2w3e4r5t6y7u8i9o0p", "q1w2e3r4t5y6u7i8o9p0", "qweasdzxc", "йфяцычувскамепинртгоьшлбщдюзжхэ",
+)
+_EDGE_CHARS = "0123456789!@#$%^&*()_+-=.,?;:~`'\"[]{}<>/\\| "
+
+
+def password_problem(password: str, email: str = "") -> str | None:
+    """Почему пароль не годится (текст для человека) или None. Регистрация, заведение учётки и смена пароля; вход
+    правило не проверяет: действующие пароли не трогаются."""
+    if not validate_password(password):
+        return PASSWORD_TOO_SHORT
+    return WEAK_PASSWORD if _is_weak(password, normalize_email(email)) else None
+
+
+def _is_weak(password: str, email: str) -> bool:
+    value = password.strip().lower()
+    core = value.strip(_EDGE_CHARS)
+    if value in _common_passwords() or core in _COMMON_CORES:
+        return True
+    if len(set(value)) <= 2 or _is_sequence(value) or _is_repeated_block(value):
+        return True
+    if _is_date_or_phone(value):
+        return True
+    if any(_on_keyboard_run(part) for part in (value, core) if len(part) >= 3):
+        return True
+    if any(word in value.replace(" ", "") for word in _SERVICE_WORDS):
+        return True
+    local = email.split("@", 1)[0]
+    return bool(local) and (value == email or _letters(value) == _letters(local) or _letters(core) == _letters(local))
+
+
+@lru_cache(maxsize=1)
+def _common_passwords() -> frozenset[str]:
+    lines = _COMMON_PASSWORDS_FILE.read_text(encoding="utf-8").splitlines()
+    return frozenset(line.strip().lower() for line in lines if line.strip() and not line.startswith("#"))
+
+
+def _is_sequence(value: str) -> bool:
+    steps = {ord(b) - ord(a) for a, b in zip(value, value[1:])}
+    return steps in ({1}, {-1})
+
+
+def _is_repeated_block(value: str) -> bool:
+    return any(value == (value[:size] * (len(value) // size + 1))[:len(value)] for size in range(1, 5))
+
+
+def _is_date_or_phone(value: str) -> bool:
+    """Только цифры и разделители: дата (16.11.2026, 01011990, 1990-01-31, 31.12.99) или номер мобильного
+    (89991234567, +7 999 123-45-67, 9991234567)."""
+    if not re.fullmatch(r"[\d\s.\-/+()]+", value):
+        return False
+    digits = re.sub(r"\D", "", value)
+    if (len(digits) == 11 and digits[0] in "78" and digits[1] == "9") or (len(digits) == 10 and digits[0] == "9"):
+        return True
+    for layout in {8: ("%d%m%Y", "%Y%m%d", "%m%d%Y"), 6: ("%d%m%y", "%y%m%d")}.get(len(digits), ()):
+        try:
+            datetime.strptime(digits, layout)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _on_keyboard_run(part: str) -> bool:
+    return any(part in run or part in run[::-1] for run in _KEYBOARD_RUNS)
+
+
+def _letters(value: str) -> str:
+    return re.sub(r"[^0-9a-zа-яё]", "", value)
+
+
 def hash_password(password: str, salt_hex: str | None = None) -> tuple[str, str]:
     salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ROUNDS)
@@ -39,6 +131,17 @@ def hash_password(password: str, salt_hex: str | None = None) -> tuple[str, str]
 def verify_password(password: str, salt_hex: str, password_hash: str) -> bool:
     _, digest = hash_password(password, salt_hex=salt_hex)
     return hmac.compare_digest(digest, password_hash)
+
+
+# Фиктивная учётка для почты, которой нет (защита входа 16.11.2026): PBKDF2 занимает 116 мс на проде, и без него ответ
+# на неизвестную почту приходил сразу: по времени было видно, есть ли учётка.
+_DUMMY_SALT = "00" * 16
+_DUMMY_HASH = "0" * 64
+
+
+def burn_password_check(password: str) -> None:
+    """Та же работа, что у проверки настоящего пароля; результат не нужен."""
+    verify_password(password, _DUMMY_SALT, _DUMMY_HASH)
 
 
 def create_session_token() -> str:

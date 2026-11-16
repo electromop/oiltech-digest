@@ -302,7 +302,8 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
 - Выпуск: `monthly_digests` (общий черновик на месяц), `monthly_digest_items`, `issue_highlights` («Главное в
   выпуске»), `export_jobs`.
 - Документы: `documents`, `document_anchors`, `document_cards`, `document_facts`.
-- Пользователи: `users`, `user_sessions`, `admission_codes`.
+- Пользователи: `users`, `user_sessions`, `admission_codes`, `auth_attempts` (попытки входа и регистрации для лимитов,
+  30 дней).
 - Служебное: `background_jobs` (очередь, регион исполнения, аренда, попытки), `external_worker_consumers`,
   `ai_processing_runs` (аудит каждого вызова модели и его стоимости).
 - История: `article_tags`, `article_scores`, `article_score_items` (теги и баллы статей до 08.11); таблицы
@@ -324,6 +325,21 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
 команда). Каждое сообщение с кодом такой учётке говорит подтверждающим, что её завели сами; `init-db` не делает её
 первым администратором. Учётку заводит и администратор на экране «Пользователи» (там видно, кто ждёт кода и кто
 зарегистрировался сам) или командой `create-user`. Отчёты о расходе ИИ (`/api/reports/*`) только администратору.
+
+Защита входа (16.11.2026, [`auth_limits.py`](../oiltech_digest/auth_limits.py), таблица `auth_attempts`). Адрес
+клиента: uvicorn берёт его из X-Forwarded-For только от внутренних адресов (`FORWARDED_ALLOW_IPS` у `app` в
+compose), а Caddy пишет туда адрес собеседника и отбрасывает присланный клиентом заголовок. С одного адреса за час не
+больше `AUTH_REGISTER_PER_IP_HOUR` заявок регистрации (5) и `AUTH_FAILURES_PER_IP_HOUR` неудачных попыток входа и
+ввода кода (20; удачные не в счёт: офис заказчика за одним адресом). На одну почту, и несуществующую, не больше
+`AUTH_FAILURES_PER_EMAIL` неудачных паролей за `AUTH_EMAIL_WINDOW_MINUTES` (10 за 15 минут) после последнего верного;
+с адреса, откуда за `AUTH_KNOWN_ADDRESS_DAYS` дней входили с верным паролем этой почты, пауза не действует. Попытка
+пишется до проверки пароля под замками адреса и почты, отказ 429 с Retry-After приходит до хэша. Внутренний адрес
+клиента значит, что заголовку не поверили: лимит адреса тогда не действует, в журнале предупреждение. Неизвестная почта
+проверяется по фиктивному хэшу (время ответа то же). Пароль при регистрации, заведении и смене не из простых
+(`auth.password_problem`: частые, ряды клавиш, повторы, даты, номера мобильного, слова сервиса, своя почта). Тело запроса: Caddy и
+приложение (`request_guard.py`) режут вход и регистрацию по 64 КБ, загрузку документа и воркеров NL по 32 МБ (у них
+токен или сессия проверяются до чтения тела), остальное по 2 МБ. `/api/readiness` без входа отдаёт только `ok`.
+Команды: `auth-attempts`, `auth-unlock`; попытки старше `AUTH_ATTEMPTS_RETENTION_DAYS` удаляет `maintenance-cleanup`.
 
 Войти может только допущенная учётка ([`admission.py`](../oiltech_digest/admission.py)). Новая учётка после верного
 пароля получает ответ «нужен код допуска»: восемь цифр, 24 часа, до пяти попыток, в базе только отпечаток кода;
@@ -402,6 +418,8 @@ stats
 | `ADMISSION_NOTIFY_ENABLED`; `ADMISSION_TELEGRAM_*` | ядро; NL | отправка кода допуска и её бот |
 | `ADMISSION_NOTIFY_PER_HOUR` | ядро | потолок сообщений с кодом учёткам из регистрации за час (20) |
 | `AUTH_ALLOW_SELF_REGISTRATION`; `AUTH_SELF_REGISTRATION_PER_HOUR` | ядро | регистрация на экране входа (`0` закрывает) и потолок заявок за час (10) |
+| `AUTH_REGISTER_PER_IP_HOUR`, `AUTH_FAILURES_PER_IP_HOUR`, `AUTH_FAILURES_PER_EMAIL`, `AUTH_EMAIL_WINDOW_MINUTES`, `AUTH_KNOWN_ADDRESS_DAYS`, `AUTH_ATTEMPTS_RETENTION_DAYS` | ядро | лимиты попыток входа и регистрации (5, 20, 10, 15 мин, 30 дн., 30 дн.) |
+| `FORWARDED_ALLOW_IPS` | ядро, compose | от каких адресов uvicorn верит X-Forwarded-For (внутренние, то есть Caddy) |
 | `TG_MATERIALS_BOT_TOKEN`, `TG_MATERIALS_CHAT_IDS` | NL | бот «Материалы коллег» |
 | `DIGEST_BRANDING_PATH`, `BRAND_FONTS_DIR` | ядро | брендинг выпуска и шрифт бренда (compose ставит путь в том `branding`) |
 | `FEED_ROLLOVER_DAY` | ядро | с какого дня месяца лента перестаёт показывать прошлый месяц (по умолчанию 11) |
