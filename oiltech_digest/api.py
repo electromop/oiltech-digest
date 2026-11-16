@@ -381,7 +381,7 @@ class UserUpdate(BaseModel):
 def _session_payload(user: dict[str, Any]) -> dict[str, Any]:
     """Ответ входа и проверки сессии. feedback_tab: открыта ли учётке вкладка «Обратная связь» (настройка контура ОС);
     по нему интерфейс прячет пункт меню у участника, которому вкладка закрыта."""
-    return {"ok": True, "user": {**_clean(user), "feedback_tab": feedback_settings.tab_open_to(user)}}
+    return {"ok": True, "user": {**_clean(user), "feedback_tab": feedback_journal_api.tab_open_to(user)}}
 
 
 @app.get("/", response_model=None)
@@ -1385,7 +1385,7 @@ def list_signals(
     badge = False
     if any(row.get("feedback_pending") for row in cards):
         values = feedback_settings.current()
-        badge = bool(values["card_badge"]) and feedback_settings.tab_open_to(user, values)
+        badge = bool(values["card_badge"]) and feedback_journal_api.tab_open_to(user, values)
     # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
