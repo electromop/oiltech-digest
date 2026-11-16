@@ -5,15 +5,21 @@ import {
   collectNow,
   decideProposal,
   journalOverview,
+  listExpertRules,
   listJournal,
+  recheckRule,
+  rollbackRule,
   undoAction,
+  type ExpertRulesOverview,
   type JournalEntry,
   type JournalOverview,
   type JournalPage,
   type ProposalDecision,
+  type RuleDecisionExtra,
 } from "../../api/feedbackJournal";
 import { SkeletonList } from "../shared/Skeleton";
 import { ContourSettingsPanel } from "./ContourSettingsPanel";
+import { ExpertRulesPanel } from "./ExpertRulesPanel";
 import { AGENT_LABELS, formatMoment, JournalEntryCard, SHOWCASE_LABELS, STATUS_LABELS } from "./JournalEntryCard";
 
 // Вкладка «Обратная связь» (#189, спека #187): журнал ОС по обеим витринам, недельный срез и настройки контура.
@@ -41,6 +47,7 @@ export function FeedbackJournalPage({ onUnauthorized, showToast, isAdmin = false
   const [filters, setFilters] = useState<Filters>(filtersFromUrl);
   const [page, setPage] = useState<JournalPage | null>(null);
   const [overview, setOverview] = useState<JournalOverview | null>(null);
+  const [rules, setRules] = useState<ExpertRulesOverview | null>(null);
   const [closed, setClosed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const highlighted = useMemo(actionFromUrl, []);
@@ -57,12 +64,14 @@ export function FeedbackJournalPage({ onUnauthorized, showToast, isAdmin = false
   // перерисовка App (тост) перечитывала бы журнал.
   const reload = useCallback(async () => {
     try {
-      const [loaded, state] = await Promise.all([
+      const [loaded, state, agents] = await Promise.all([
         listJournal({ ...filters, signal_id: filters.signal ? Number(filters.signal) : undefined, limit: 200 }),
         journalOverview(),
+        listExpertRules(),
       ]);
       setPage(loaded);
       setOverview(state);
+      setRules(agents);
       setClosed(null);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) setClosed(error.message);
@@ -95,10 +104,20 @@ export function FeedbackJournalPage({ onUnauthorized, showToast, isAdmin = false
     }
   }
 
-  function decide(entry: JournalEntry, decision: ProposalDecision, changes: Array<{ field: string; value: string }> = []) {
-    const done = { approve: "Согласовано: система применила улучшение", modify: "Новая формулировка применена",
-      dismiss: "Предложение убрано, остаётся в журнале" }[decision];
-    void act(() => decideProposal(entry.id, decision, changes), done);
+  function decide(entry: JournalEntry, decision: ProposalDecision, changes: Array<{ field: string; value: string }> = [],
+                  extra: RuleDecisionExtra = {}) {
+    const rule = entry.kind === "rule_proposal";
+    const done = {
+      approve: rule ? "Согласовано: система выпустила новую версию набора правил агента"
+        : "Согласовано: система применила улучшение",
+      modify: rule ? "Новая формулировка правила согласована" : "Новая формулировка применена",
+      dismiss: "Предложение убрано, остаётся в журнале",
+    }[decision];
+    void act(() => decideProposal(entry.id, decision, changes, extra), done);
+  }
+
+  function rollback(proposalId: number) {
+    void act(() => rollbackRule(proposalId), "Откат: действует прежняя версия набора правил");
   }
 
   const authors = page?.authors ?? [];
@@ -146,7 +165,8 @@ export function FeedbackJournalPage({ onUnauthorized, showToast, isAdmin = false
               </p>
             ) : null}
             <p className="metaText">
-              Расход разбора ОС в этом месяце: ${overview.month_spend_usd.toFixed(2)} из ${overview.ceiling_usd.toFixed(2)}.
+              Расход контура ОС (разбор и автопроверка) в этом месяце: ${overview.month_spend_usd.toFixed(2)} из
+              {" "}${overview.ceiling_usd.toFixed(2)}.
             </p>
             {overview.warning ? <div className="documentAlert warn" role="alert">{overview.warning}</div> : null}
           </div>
@@ -198,10 +218,14 @@ export function FeedbackJournalPage({ onUnauthorized, showToast, isAdmin = false
               onDecide={decide}
               onUndo={(one) => void act(() => undoAction(one.kind === "mark" ? Number(one.action_id) : one.id),
                 "Отменено: карточка в прежнем состоянии")}
-              onClose={(one) => void act(() => closeTask(one.id), "Задача выборки закрыта")} />
+              onClose={(one) => void act(() => closeTask(one.id), "Задача выборки закрыта")}
+              onRollback={(one) => rollback(one.id)}
+              onRecheck={(one) => void act(() => recheckRule(one.id), "Автопроверка поставлена: итог появится в журнале")} />
           ))}
         </div>
       </section>
+
+      <ExpertRulesPanel rules={rules} busy={busy} onRollback={rollback} />
 
       {isAdmin && overview?.can_configure ? <ContourSettingsPanel onError={handleError} showToast={showToast} /> : null}
     </section>

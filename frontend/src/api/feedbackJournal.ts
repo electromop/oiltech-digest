@@ -4,8 +4,9 @@ import { apiFetch } from "./client";
 // выборки одним журналом; решения, отмена и настройки только у администратора (сервер отвечает остальным 403).
 
 export type JournalStatus = "done" | "pending" | "approved" | "modified" | "dismissed" | "applied" | "undone" | "stale";
-// immediate: явное действие администратора без отметки (кнопка «Вернуть» в «Отклонённых»).
-export type JournalKind = "mark" | "signal_proposal" | "sample_task" | "immediate";
+// immediate: явное действие администратора без отметки (кнопка «Вернуть» в «Отклонённых»). rule_proposal: предложение
+// правила эксперта агенту, set_check: ежемесячная проверка всего набора правил агента (#190).
+export type JournalKind = "mark" | "signal_proposal" | "sample_task" | "immediate" | "rule_proposal" | "set_check";
 
 export type JournalStep = { label: string; at: string | null; author: string | null };
 
@@ -39,6 +40,54 @@ export type JournalPublication = {
   theme: string | null;
   reason: string | null;
   origin: string | null;
+};
+
+// Правило эксперта (#190): агент и шаг, при нужде категория, у поиска тема; текст правила.
+export type JournalRule = {
+  agent: string;
+  agent_label: string;
+  step: string;
+  step_label: string;
+  category: string | null;
+  category_label: string | null;
+  topic: string | null;
+  text: string;
+};
+
+// Строка автопроверки, которая сдвинулась (или «было / стало» у «Сути и перевода», найдено ли у поиска).
+export type JournalCheckSample = {
+  signal_id: number;
+  label: string | null;
+  field?: string | null;
+  kind?: string | null;
+  expected?: unknown;
+  expert?: string | null;
+  before?: unknown;
+  after?: unknown;
+  direction?: "toward" | "away" | null;
+  with?: boolean;
+  without?: boolean;
+};
+
+// Итог автопроверки правила на эталоне ОС: к эталону, от эталона, без изменений, совет; «мало данных» при малом числе строк.
+export type JournalCheck = {
+  id: number;
+  status: "queued" | "done" | "postponed" | "failed";
+  mode: "rule" | "set";
+  rows: number;
+  toward: number;
+  away: number;
+  unchanged: number;
+  advice: string | null;
+  note: string | null;
+  // Совет «согласовать» (по нему цвет совета на экране, а не по тексту).
+  advises_approval: boolean;
+  little_data: boolean;
+  no_count: boolean;
+  baseline: { accepted: number; computed: number } | null;
+  samples: JournalCheckSample[];
+  search: Record<string, { found: number; error: string | null }> | null;
+  finished_at: string | null;
 };
 
 export type JournalEntry = {
@@ -79,6 +128,20 @@ export type JournalEntry = {
   publications?: JournalPublication[];
   month?: string | null;
   can_close?: boolean;
+  // Предложение правила эксперта (#190) и проверка набора правил.
+  rule?: JournalRule | null;
+  proposed_rule?: JournalRule | null;
+  rule_kind?: "new" | "refine" | "merge";
+  replaced?: Array<JournalRule & { id: number }>;
+  check?: JournalCheck | null;
+  // Почему согласование требует отдельного подтверждения (мало данных, перевес «от эталона», проверки нет).
+  confirm_reasons?: string[];
+  version?: number | null;
+  can_rollback?: boolean;
+  can_recheck?: boolean;
+  seed?: string | null;
+  set_agent?: string;
+  set_agent_label?: string;
 };
 
 export type JournalFilters = {
@@ -125,7 +188,6 @@ export type ContourSettingField = {
   default: unknown;
   low: number | null;
   high: number | null;
-  later: boolean;
   choices: Array<{ value: string; label: string }>;
 };
 
@@ -153,12 +215,52 @@ export function collectNow() {
 
 export type ProposalDecision = "approve" | "modify" | "dismiss";
 
+// Решение по предложению. У предложения правила (#190): text: новая формулировка правила, confirm: отдельное
+// подтверждение согласования без готовой проверки, с «мало данных» или с перевесом «от эталона».
+export type RuleDecisionExtra = { text?: string; confirm?: boolean };
+
 export function decideProposal(proposalId: number, decision: ProposalDecision,
-                               changes: Array<{ field: string; value: string }> = []) {
-  return apiFetch<{ status: JournalStatus; refused?: Array<{ label: string; reason: string }> }>(
+                               changes: Array<{ field: string; value: string }> = [], extra: RuleDecisionExtra = {}) {
+  return apiFetch<{ status: JournalStatus; version?: number; refused?: Array<{ label: string; reason: string }> }>(
     `/api/feedback-journal/proposals/${proposalId}/decision`,
-    { method: "POST", body: JSON.stringify({ decision, changes }) },
+    { method: "POST", body: JSON.stringify({ decision, changes, ...extra }) },
   );
+}
+
+export function rollbackRule(proposalId: number) {
+  return apiFetch<{ status: JournalStatus; from_version: number; to_version: number }>(
+    `/api/feedback-journal/proposals/${proposalId}/rollback`, { method: "POST" });
+}
+
+export function recheckRule(proposalId: number) {
+  return apiFetch<{ check_id: number; status: string }>(`/api/feedback-journal/proposals/${proposalId}/check`,
+    { method: "POST" });
+}
+
+// Правила эксперта по агентам (#190): действующая версия набора, её правила и прежние версии.
+export type ExpertRuleView = JournalRule & { id: number; approved_by: string | null; approved_at: string };
+export type ExpertRuleSetVersion = {
+  version: number;
+  rules: number;
+  current: boolean;
+  previous_version: number;
+  author: string | null;
+  at: string;
+  action_id: number | null;
+};
+export type ExpertRulesAgent = {
+  agent: string;
+  label: string;
+  steps: Array<{ step: string; label: string }>;
+  version: number;
+  action_id: number | null;
+  rules: ExpertRuleView[];
+  history: ExpertRuleSetVersion[];
+};
+export type ExpertRulesOverview = { agents: ExpertRulesAgent[]; limit: number; can_rollback: boolean };
+
+export function listExpertRules() {
+  return apiFetch<ExpertRulesOverview>("/api/feedback-journal/rules");
 }
 
 export function undoAction(actionId: number) {

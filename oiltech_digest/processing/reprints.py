@@ -83,11 +83,14 @@ def configured_model() -> str:
     return config.OPENAI_REPRINT_MODEL
 
 
-def judge_pair(left: dict, right: dict, client) -> AIResponse:
+def judge_pair(left: dict, right: dict, client, rules_block: Any = None) -> AIResponse:
     """Спросить модель, одно ли это событие. Тела режем: решение принимается по
-    факту, а не по объёму, и длинный хвост только удорожает вызов."""
+    факту, а не по объёму, и длинный хвост только удорожает вызов. rules_block: правила эксперта «Дедупа» (#190),
+    все с пометкой категории; правил нет: инструкция прежняя."""
+    from oiltech_digest import expert_rules
+
     return client.complete_json(
-        REPRINT_INSTRUCTIONS,
+        expert_rules.with_rules(REPRINT_INSTRUCTIONS, rules_block, every_category=True),
         _pair_prompt(left, right),
         REPRINT_SCHEMA,
         max_output_tokens=output_budget(700, config.OPENAI_REPRINT_REASONING),

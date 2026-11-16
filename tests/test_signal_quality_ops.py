@@ -146,7 +146,8 @@ def test_apply_writes_radar_usage_only_for_a_real_run(isolated_db, monkeypatch):
     signal_discovery.apply_discovery(signal_discovery.SignalDiscoveryConfig(dry_run=False, background_job_id=5),
                                      {"topics": [], "ai_usage": usage})
 
-    assert written == [(5, usage)]
+    # Версия набора правил эксперта поиска (#190) едет в запись расхода: рецепта у поиска нет.
+    assert written == [(5, [{**usage[0], "recipe": {"expert_rules_version": 0}}])]
 
 
 def test_statistics_split_radar_from_the_feed(isolated_db):

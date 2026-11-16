@@ -11,7 +11,7 @@ from typing import Any
 
 import logging
 
-from oiltech_digest import config
+from oiltech_digest import config, expert_rules
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
@@ -143,11 +143,23 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
     return stats
 
 
+# Шаги «Сути и перевода» в правилах эксперта (#190): вызов сути и вызов заголовка; термины: в обоих.
+SUMMARY_RULE_STEPS, TITLE_RULE_STEPS = ("summary", "terms"), ("title", "terms")
+
+
+def with_expert_rules(instructions: str, article: dict, steps: tuple[str, ...]) -> str:
+    """Инструкция вызова с правилами эксперта своего шага и категории публикации (#190): блок правил кладёт в
+    публикацию воркер (article["expert_rules"]); нет его или правил: инструкция прежняя."""
+    return expert_rules.with_rules(instructions, article.get("expert_rules"), steps=steps,
+                                   category=article.get("signal_category"))
+
+
 def summarize_article(article: dict, client) -> AIResponse:
     prompt = _article_prompt(article, otbor=True)
+    instructions = with_expert_rules(SUMMARY_INSTRUCTIONS, article, SUMMARY_RULE_STEPS)
     return _complete_one_script(
         lambda extra: client.complete_json(
-            SUMMARY_INSTRUCTIONS,
+            instructions,
             prompt + extra,
             SUMMARY_SCHEMA,
             max_output_tokens=output_budget(1200, config.OPENAI_SUMMARY_REASONING),
@@ -211,8 +223,10 @@ def edit_title_article(article: dict, client) -> AIResponse:
 
 
 def _title_call(article: dict, client, instructions: str, schema: dict) -> AIResponse:
-    """Вызов модели заголовка (перевод или правка): вход _title_prompt, модель и уровень перевода, словарь."""
+    """Вызов модели заголовка (перевод или правка): вход _title_prompt, модель и уровень перевода, словарь; правила
+    эксперта шага «заголовок» (#190)."""
     prompt = _title_prompt(article)
+    instructions = with_expert_rules(instructions, article, TITLE_RULE_STEPS)
     return _complete_one_script(
         lambda extra: client.complete_json(
             instructions,

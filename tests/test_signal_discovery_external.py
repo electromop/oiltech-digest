@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from oiltech_digest import background_jobs, external_worker, signal_discovery, signal_research
-from oiltech_digest.db import repository
+from oiltech_digest import background_jobs, expert_rules, external_worker, signal_discovery, signal_research
+from oiltech_digest.db import expert_rules_store, repository
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.signal_research import PAGE_NOT_FETCHED
 
@@ -45,6 +45,8 @@ def core_repository(monkeypatch):
     monkeypatch.setattr(repository, "list_feed_signals_for_dedup", lambda **kwargs: [])
     monkeypatch.setattr(repository, "collected_url_keys_since", lambda **kwargs: [])
     monkeypatch.setattr(repository, "covered_collection_sites", lambda **kwargs: [])
+    # Правила эксперта поиска и «Дедупа» (#190): набор пуст, как на ядре до первого согласования.
+    monkeypatch.setattr(expert_rules_store, "payload_block", lambda agent, **kwargs: expert_rules.block(agent, 0, []))
 
 
 def _take_database_away(monkeypatch):

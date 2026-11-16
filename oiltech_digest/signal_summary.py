@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from oiltech_digest import config
+from oiltech_digest import config, expert_rules
 from oiltech_digest.db import repository, signal_summary_store
 from oiltech_digest.db.repository import SIGNAL_ORIGIN_MATERIAL
 from oiltech_digest.processing.external_ai import StopRequested, _core_glossary
@@ -24,6 +24,8 @@ from oiltech_digest.processing.pipeline import _needs_translation, make_client, 
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = signal_summary_store.KIND
+# Агент в правилах эксперта (#190, expert_rules.AGENTS).
+AGENT = "summary"
 # Шаг этапа в «Ходе решения» сигнала.
 STAGE = "Суть и перевод"
 # Потолки ответа воркера (недоверенный ввод): суть: несколько предложений, заголовок: как у перевода ленты.
@@ -67,9 +69,13 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
 
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Самодостаточный пакет для воркера без базы: публикации сигналов, поля «Отбора», чего не хватает."""
+    """Самодостаточный пакет для воркера без базы: публикации сигналов, поля «Отбора», чего не хватает; действующие
+    правила эксперта агента (#190)."""
+    from oiltech_digest.db import expert_rules_store
+
     items = [_item(row) for row in signal_summary_store.summary_inputs(job_payload.get("signal_ids") or [])]
-    return {"kind": KIND, "items": [item for item in items if item["needs"]]}
+    return {"kind": KIND, "items": [item for item in items if item["needs"]],
+            "expert_rules": expert_rules_store.payload_block(AGENT)}
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
@@ -101,8 +107,11 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     """Сторона воркера: суть и перевод заголовка: что нужно сигналу; ответы модели: как есть."""
     client = make_client()
     summaries: list[dict[str, Any]] = []
-    result = {"signal_summary": True, "kind": KIND, "summaries": summaries}
+    rules = payload.get("expert_rules")
+    result = {"signal_summary": True, "kind": KIND, "expert_rules_version": expert_rules.version(rules),
+              "summaries": summaries}
     for item in payload.get("items") or []:
+        item = {**item, "expert_rules": rules}
         if heartbeat:
             try:
                 heartbeat(result)
@@ -143,7 +152,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     expected = None if signal_ids is None else {str(value) for value in signal_ids}
     ids = [signal_id for row in rows if (signal_id := _signal_id(row, expected)) is not None]
     contexts = {int(row["signal_id"]): row for row in signal_summary_store.summary_inputs(ids)}
-    signal_summary_store.record_usage(job_id, [usage for row in rows for usage in _usage(row, expected)])
+    from oiltech_digest.db import expert_rules_store
+
+    recipe = {"expert_rules_version": expert_rules_store.known_version(AGENT, result.get("expert_rules_version", 0))}
+    signal_summary_store.record_usage(job_id, [usage for row in rows for usage in _usage(row, expected)],
+                                      recipe=recipe)
     applied: dict[str, Any] = {"written": 0, "errors": []}
     for row in rows:
         signal_id = _signal_id(row, expected)

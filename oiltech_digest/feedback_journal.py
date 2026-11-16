@@ -15,10 +15,11 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from oiltech_digest import feedback_changes, feedback_settings
-from oiltech_digest.db import connection, feedback_store
+from oiltech_digest import feedback_changes, feedback_rules, feedback_settings
+from oiltech_digest.db import connection, feedback_store, rule_check_store
 from oiltech_digest.db.feedback_store import (APPLIED, APPLIED_STATUS, APPROVED, DECISION, DISMISSED, DONE, IMMEDIATE,
-                                              MODIFIED, PENDING, PROPOSAL, SAMPLE_TASK, STALE, UNDO, UNDONE)
+                                              MODIFIED, PENDING, PROPOSAL, RULE_PROPOSAL, SAMPLE_TASK, SET_CHECK, STALE,
+                                              UNDO, UNDONE)
 from oiltech_digest.feedback_review import REVIEW_AUTHOR
 
 logger = logging.getLogger(__name__)
@@ -104,8 +105,9 @@ def entries(*, is_admin: bool, status: str | None = None, showcase: str | None =
                                     + [row["im_id"] for row in mark_rows if row["im_id"]])
     proposals = feedback_store.proposals_for_events([row["id"] for row in mark_rows])
     basis = feedback_store.marks_by_id([one for row in action_rows for one in row["event_ids"]])
+    checks = rule_check_store.latest([row["id"] for row in action_rows if row["kind"] in (RULE_PROPOSAL, SET_CHECK)])
     built = [(_mark_entry(row, steps, proposals, (history_end, slice_end), is_admin) if kind_ == "mark"
-              else _action_entry(row, steps, basis, is_admin)) for kind_, row in rows]
+              else _action_entry(row, steps, basis, is_admin, checks)) for kind_, row in rows]
     return {"entries": built, "authors": feedback_store.mark_authors()}
 
 
@@ -159,7 +161,7 @@ def _done_at_once(row: dict[str, Any], history: bool) -> list[str]:
 
 
 def _action_entry(row: dict[str, Any], steps: dict[int, list[dict[str, Any]]], basis: dict[int, dict[str, Any]],
-                  is_admin: bool) -> dict[str, Any]:
+                  is_admin: bool, checks: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     details = row["details"] or {}
     entry = {
         "key": f"action:{row['id']}", "kind": row["kind"], "id": int(row["id"]), "at": _iso(row["created_at"]),
@@ -168,6 +170,11 @@ def _action_entry(row: dict[str, Any], steps: dict[int, list[dict[str, Any]]], b
         "status": row["status"], "quote": row["quote"], "event_ids": [int(one) for one in row["event_ids"] or []],
     }
     own_steps = steps.get(row["id"], [])
+    if row["kind"] == RULE_PROPOSAL:
+        return feedback_rules.entry(row, own_steps, [_basis(basis[one]) for one in entry["event_ids"] if one in basis],
+                                    (checks or {}).get(int(row["id"])), is_admin, entry)
+    if row["kind"] == SET_CHECK:
+        return feedback_rules.set_check_entry(row, (checks or {}).get(int(row["id"])), entry)
     if row["kind"] == IMMEDIATE:
         system = [feedback_changes.describe(change) for change in details.get("changes") or []]
         path = [_step("Сразу: " + "; ".join(system), row["created_at"], row["author"])]
@@ -253,14 +260,20 @@ def _decidable(proposal: dict[str, Any], steps: list[dict[str, Any]]) -> bool:
 
 
 def decide(proposal_id: int, decision: str, *, author: str | None, user_id: int | None,
-           changes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+           changes: list[dict[str, Any]] | None = None, text: str | None = None,
+           confirm: bool = False) -> dict[str, Any]:
     """«Согласовать», «изменить» (новая формулировка тех же полей) или «убрать». Согласованное и изменённое система
-    применяет к карточке сразу записью журнала с именем администратора; убранное остаётся в журнале."""
+    применяет к карточке сразу записью журнала с именем администратора; убранное остаётся в журнале. Предложение
+    правила (#190): text: новая формулировка правила, confirm: отдельное подтверждение (feedback_rules.decide)."""
     from oiltech_digest import feedback_review
 
     status = DECISIONS.get(decision)
     if status is None:
         raise JournalRefused("решение: согласовать, изменить или убрать")
+    found = feedback_store.get_action(proposal_id)
+    if found is not None and found["kind"] == RULE_PROPOSAL:
+        return feedback_rules.decide(proposal_id, decision, author=author, user_id=user_id, text=text,
+                                     confirm=confirm)
     with connection.get_connection() as conn:
         proposal = feedback_store.get_action(proposal_id, for_update=True, conn=conn)
         if proposal is None or proposal["kind"] != PROPOSAL:
@@ -375,4 +388,4 @@ def close_task(action_id: int, *, author: str | None, user_id: int | None) -> di
 def expire_stale() -> int:
     """Предложения без решения дольше срока жизни из настроек: «устарело», остаются в журнале."""
     days = int(feedback_settings.current()["proposal_lifetime_days"])
-    return feedback_store.expire_pending(kinds=(PROPOSAL,), older_than_days=days)
+    return feedback_store.expire_pending(kinds=(PROPOSAL, RULE_PROPOSAL), older_than_days=days)

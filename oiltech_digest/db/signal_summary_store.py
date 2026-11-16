@@ -125,9 +125,10 @@ def write_summary(signal_id: int, values: dict[str, str], *, log: list[dict[str,
     return list(updates)
 
 
-def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
+def record_usage(job_id: int | None, rows: list[dict[str, Any]], *, recipe: dict[str, Any] | None = None) -> None:
     """Расход этапа, в ai_processing_runs строкой на (задача, сигнал, стадия): повторное применение итога той же
-    задачи счёт не удваивает (частичный уникальный индекс по signal_id)."""
+    задачи счёт не удваивает (частичный уникальный индекс по signal_id). recipe: версия набора правил эксперта, по
+    которой шёл вызов (#190: рецепта у сути нет, версия в записи расхода)."""
     if not rows:
         return
     with connection.get_connection() as conn:
@@ -135,11 +136,12 @@ def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
             conn.execute(
                 """
                 INSERT INTO ai_processing_runs
-                  (job_id, signal_id, stage, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, status)
-                VALUES (%s, %s, %s, 'openai', %s, %s, %s, %s, %s, 'ok')
+                  (job_id, signal_id, stage, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, status,
+                   recipe)
+                VALUES (%s, %s, %s, 'openai', %s, %s, %s, %s, %s, 'ok', %s)
                 ON CONFLICT (job_id, signal_id, stage) WHERE signal_id IS NOT NULL DO NOTHING
                 """,
                 (job_id, row["signal_id"], row["stage"], row.get("model"), row["input_tokens"], row["output_tokens"],
-                 row["input_tokens"] + row["output_tokens"], row["cost_usd"]),
+                 row["input_tokens"] + row["output_tokens"], row["cost_usd"], Json(recipe) if recipe else None),
             )
         conn.commit()

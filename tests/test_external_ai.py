@@ -1,5 +1,7 @@
 import pytest
 
+from oiltech_digest import expert_rules
+from oiltech_digest.db import expert_rules_store
 from oiltech_digest.processing import external_ai
 
 
@@ -220,6 +222,8 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
     """Старая суть попадала в промпт (_article_prompt кладёт summary), и модель повторяла брак. Задача пересчёта после
     полного текста, поставленная до снятия тега и балла (суть, тег и балл), выдаётся с одной сутью, а не падает."""
     article = {"id": 7, "title": "Power prices", "summary": "Цены на электроэнergyю выросли.", "raw_text": "x"}
+    # Правила эксперта «Сути и перевода» (#190): набор пуст, как до первого согласования; базы в тесте нет.
+    monkeypatch.setattr(expert_rules_store, "payload_block", lambda agent, **kwargs: expert_rules.block(agent, 0, []))
     monkeypatch.setattr(external_ai.repository, "reserve_process_articles", lambda job_id, **kwargs: [7])
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [dict(article)])
 

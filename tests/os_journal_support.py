@@ -18,14 +18,19 @@ MODEL = "gpt-6-sol"
 
 class ReviewModel:
     """Подставная модель разбора ОС: ответ по номеру карточки из первой строки входа («Карточка №N»); нет заготовки:
-    улучшать нечего. Вызовы запоминает."""
+    улучшать нечего. Вызов о правилах эксперта (#190, после сигналов): правил нет. Вызовы по сигналам запоминает в
+    calls, о правилах: в rules_calls."""
 
     def __init__(self, answers):
         self.answers = answers
         self.calls = []
+        self.rules_calls = []
 
     def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
                       reasoning_effort=None):
+        if schema["name"] == "feedback_rules":
+            self.rules_calls.append({"input": user_input, "model": model})
+            return AIResponse(data={"rules": []}, model=f"{model}-2026-11-01", input_tokens=4000, output_tokens=50)
         self.calls.append({"instructions": instructions, "input": user_input, "schema": schema, "model": model})
         number = int(user_input.splitlines()[0].split("№", 1)[1])
         reply = self.answers.get(number, {"improvements": []})

@@ -53,7 +53,14 @@
    12 (#189): вид задачи feedback_review, агент «Разбор ОС» недельного среза контура ОС. Сборка контракта 11 отказала
    бы ему ошибкой «Unsupported external job kind» после выдачи: ядро ей задачу не выдаёт, а валит с причиной. Заодно из
    задачи радара снят пустой снимок памяти ОС (поле memory, #188): сборки NL до #188 на воркерах нет с 13.11 (все на
-   39f23a3), а сборка после #188 поле не читает, поэтому прогону радара по-прежнему хватает контракта 11.
+   39f23a3), а сборка после #188 поле не читает, поэтому прогону радара по-прежнему хватает контракта 11;
+   13 (#190): правила эксперта. В задачах шести агентов («Отбор», «Суть и перевод» сигналов и статей ленты,
+   «Карточка», баллы, «Дедуп» прогона радара и судья перепечаток, поиск радара) блок expert_rules: действующий набор
+   правил агента; воркер дописывает к инструкции правила своего шага и категории и возвращает номер версии набора.
+   Сборка контракта 12 блок молча пропустила бы, и согласованное правило не действовало бы: задачу с правилами ядро
+   ей не выдаёт; без правил (набор пуст) задача прежняя и годится любой сборке. Вид задачи rule_check (автопроверка
+   правила на эталоне ОС) сборке 12 незнаком: ядро ей его не выдаёт. Разбор ОС с вызовом о правилах (поле rules_review)
+   сборка 12 исполнила бы без него, молча: такой задачи ядро ей тоже не выдаёт.
    Совместимые добавки номер не меняют, старая сторона их молча пропускает: 28.09: поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002): profile у критериев в payload и profile + criteria_snapshot в
@@ -80,7 +87,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 12
+CONTRACT = 13
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
@@ -96,8 +103,21 @@ def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     контракт 11: путь «Отбора» без поля otbor в задаче (снятие старой цепочки 08.11), широкий промпт и модель поиска из
     задачи (#138), сверка находок с лентой в «Дедупе» (04.11). Пакету статей ленты любой формы тоже 11: суть и перевод
     без гейта, тега и балла (снятие старой цепочки 08.11). Разбору ОС (#189) нужен контракт 12: сборка постарше
-    этого вида задачи не знает. 0: подойдёт любая сборка, в том числе без заголовка контракта, прежние формы задач
-    номера не требуют."""
+    этого вида задачи не знает. Задаче с правилами эксперта (#190, непустой блок expert_rules) и автопроверке нужен
+    контракт 13. 0: подойдёт любая сборка, в том числе без заголовка контракта, прежние формы задач номера не
+    требуют."""
+    from oiltech_digest import expert_rules
+
+    needed = _required(kind, worker_payload)
+    # Разбор ОС с вызовом о правилах (#190): сборка 12 поле rules_review молча пропустила бы, и срез прошёл бы без
+    # предложений правил.
+    if (kind == "rule_check" or expert_rules.has_rules(worker_payload.get("expert_rules"))
+            or (kind == "feedback_review" and worker_payload.get("rules_review"))):
+        return max(needed, 13)
+    return needed
+
+
+def _required(kind: str | None, worker_payload: dict[str, Any]) -> int:
     if kind == "feedback_review":
         return 12
     if kind == "process_articles":
@@ -221,6 +241,9 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
                            "feedback_review": "reviews"}[kind]) or []
         answered = {str(row.get("signal_id")) for row in rows if isinstance(row, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
+        if not left and kind == "feedback_review" and result.get("rules_pending"):
+            # Сигналы разобраны, вызов о правилах эксперта (#190) не сделан: задача возвращается только за ним.
+            return {**rest, "signal_ids": []}
         return {**rest, "signal_ids": left} if left else None
     if kind == "otbor":
         answered = {str(item.get("ref")) for item in result.get("decisions") or [] if isinstance(item, dict)}

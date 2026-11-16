@@ -27,7 +27,7 @@ AGENTS = "external-agents"
 NOTIFY = "external-notify"
 
 _AI_KINDS = frozenset({"process_articles", "translate_titles", "process_document", "reprint_review",
-                       "signal_card", "otbor", "signal_summary", "signal_scores", "feedback_review"})
+                       "signal_card", "otbor", "signal_summary", "signal_scores", "feedback_review", "rule_check"})
 _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
 _AGENT_KINDS = frozenset({"signal_discovery"})
 
@@ -38,8 +38,9 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
     # истории (#96, #98), тоже пересчёт: новые сигналы идут потоком дня. «Отбор» (#130) названных статей:
     # повтор после разбора сбоя: новые статьи идут потоком дня. Так же «Суть и перевод» названных сигналов (#131), баллы
     # «Карточки» названных сигналов и возврат в «Отбор» из «Карточки» (#132).
+    # Автопроверка правил эксперта (#190): до 150 строк эталона по одному-два вызова агента, тоже пересчёт.
     AI_BULK: frozenset({"process_articles", "translate_titles", "signal_card", "otbor", "signal_summary",
-                        "signal_scores"}),
+                        "signal_scores", "rule_check"}),
     FETCH: _FETCH_KINDS,
     BROWSER: _FETCH_KINDS,
     # Радар (ADR 0001): прогон радара длится минуты, а не секунды, и в общей полосе пакет статей дня ждал бы его,

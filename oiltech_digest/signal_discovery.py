@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from oiltech_digest import config as app_config
-from oiltech_digest import signal_dedup, signal_research
+from oiltech_digest import expert_rules, signal_dedup, signal_research
 from oiltech_digest.db import repository, search_trial_store
 from oiltech_digest.ingestion import publisher_page
 from oiltech_digest.ingestion.normalize import url_key as article_url_key
@@ -362,6 +362,10 @@ _TAGS_SNAPSHOT: ContextVar[list[dict[str, Any]] | None] = ContextVar("signal_dis
 # Расход ИИ прогона по стадиям (поиск и «Дедуп»): копится на NL, едет ядру в итоге (run.ai_usage), ядро пишет в
 # ai_processing_runs, и экран «Статистика» видит радар отдельно от ленты.
 _USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("signal_discovery_usage", default=None)
+# Правила эксперта прогона (#190): блоки поиска (подсказки по темам) и «Дедупа» из задачи; нет: прогон без правил.
+_EXPERT_RULES: ContextVar[dict[str, Any]] = ContextVar("signal_discovery_expert_rules", default={})
+# Стадия расхода прогона → агент правил эксперта: версия набора идёт в запись расхода (рецепта у них нет).
+_USAGE_AGENTS = {"radar_research": "search", "radar_dedup": "dedup"}
 
 
 def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
@@ -470,15 +474,22 @@ def run_discovery(
     snapshot: dict[str, Any],
     *,
     heartbeat: Callable[[], None] | None = None,
+    rules: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Средний слой: без базы. Возвращает находки поиска по каждой теме."""
+    """Средний слой: без базы. Возвращает находки поиска по каждой теме. rules: правила эксперта поиска и «Дедупа»
+    (#190), блоки из задачи."""
     if not config.offline:
         signal_dedup.configured_model()  # без модели дедупа: сбой до оплаченного поиска, а не после него
     beat = heartbeat or (lambda: None)
     usage_token = _USAGE.set({})
+    rules = rules if isinstance(rules, dict) else {}
+    rules_token = _EXPERT_RULES.set(rules)
     try:
-        return _run_discovery_topics(config, snapshot, beat)
+        run = _run_discovery_topics(config, snapshot, beat)
+        run["expert_rules_versions"] = {agent: expert_rules.version(rules.get(agent)) for agent in ("search", "dedup")}
+        return run
     finally:
+        _EXPERT_RULES.reset(rules_token)
         _USAGE.reset(usage_token)
 
 
@@ -591,6 +602,7 @@ def _dedupe_run(
         client_factory=_radar_client,
         heartbeat=beat,
         max_pairs=int(snapshot.get("dedup_max_pairs") or signal_dedup.MAX_JUDGED_PAIRS),
+        rules_block=_EXPERT_RULES.get().get("dedup"),
     )
     stats = result["stats"]
     _record_usage("radar_dedup", app_config.SIGNAL_DEDUP_MODEL, calls=int(stats.get("judged") or 0),
@@ -635,6 +647,18 @@ def _finding_dedup_view(signal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _usage_with_recipe(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Расход прогона с версией набора правил эксперта поиска и «Дедупа» (#190): итог воркера: недоверенный ввод,
+    неизвестная версия не пишется."""
+    from oiltech_digest.db import expert_rules_store
+
+    versions = run.get("expert_rules_versions") if isinstance(run.get("expert_rules_versions"), dict) else {}
+    known = {agent: expert_rules_store.known_version(agent, versions.get(agent, 0))
+             for agent in set(_USAGE_AGENTS.values())}
+    return [{**row, "recipe": {"expert_rules_version": known[_USAGE_AGENTS[row.get("stage")]]}}
+            if row.get("stage") in _USAGE_AGENTS else row for row in run.get("ai_usage") or []]
+
+
 def apply_discovery(
     config: SignalDiscoveryConfig,
     run: dict[str, Any],
@@ -643,7 +667,7 @@ def apply_discovery(
 ) -> dict[str, Any]:
     """Ядро: записать находки из результата run_discovery и собрать итог."""
     if not config.dry_run and run.get("ai_usage"):
-        repository.record_radar_ai_usage(config.background_job_id, run["ai_usage"])
+        repository.record_radar_ai_usage(config.background_job_id, _usage_with_recipe(run))
     all_signals: list[dict[str, Any]] = []
     topic_results = []
     duplicates: list[tuple[str, dict[str, Any]]] = []
@@ -1140,11 +1164,16 @@ def build_external_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
         problem = research_problem(config.research_model, config.research_reasoning)
         if problem:
             raise SearchSetupError(problem)
+    from oiltech_digest.db import expert_rules_store
+
     config_dict = {key: value for key, value in asdict(config).items() if key != "background_job_id"}
     return {
         "kind": "signal_discovery",
         "config": config_dict,
         "snapshot": build_discovery_snapshot(config, for_external=True),
+        # Правила эксперта (#190): подсказки поиска по темам и правила «Дедупа» прогона.
+        "expert_rules": {"search": expert_rules_store.payload_block("search"),
+                         "dedup": expert_rules_store.payload_block("dedup")},
     }
 
 
@@ -1154,7 +1183,7 @@ def process_external_payload(payload: dict[str, Any], heartbeat: Callable[[], No
     config = SignalDiscoveryConfig(**{
         key: value for key, value in (payload.get("config") or {}).items() if key in allowed
     })
-    run = run_discovery(config, payload.get("snapshot") or {}, heartbeat=heartbeat)
+    run = run_discovery(config, payload.get("snapshot") or {}, heartbeat=heartbeat, rules=payload.get("expert_rules"))
     return {"signal_discovery": True, "config": payload.get("config") or {}, "run": run}
 
 
@@ -1412,9 +1441,11 @@ def _topic_web_evidence(
     feedback = "\n\n".join(part for part in (signal_research.covered_sites_block(covered or []),
                                              known_titles_block(known_titles)) if part)
     _, period_end = _research_window(config)
+    # Подсказки эксперта по теме (#190): только добавляют, что искать ещё; свободного текста в них нет (О-7).
+    hints = expert_rules.search_hints(_EXPERT_RULES.get().get("search"), topic_name)
     research = signal_research.research_topic(topic_name, days=_research_days(config), period_end=period_end,
                                               limit=config.research_limit or None, topic_context=topic_context,
-                                              heartbeat=heartbeat, feedback=feedback,
+                                              heartbeat=heartbeat, feedback=feedback, hints=hints,
                                               model=config.research_model, reasoning=config.research_reasoning)
     heartbeat()
     # Докачка проверяет, живая ли ссылка и о том ли она; текст страницы идёт «Отбору». Срока на тему нет: находка без
