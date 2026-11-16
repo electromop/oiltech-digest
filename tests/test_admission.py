@@ -132,12 +132,6 @@ def test_failed_enqueue_leaves_no_code_so_next_login_retries(newcomer, notify_on
     assert len(_notify_jobs()) == 1
 
 
-def test_self_registration_stays_closed(isolated_db):
-    response = _client().post("/api/auth/register", json={"email": "x@example.test", "password": PASSWORD})
-
-    assert response.status_code == 403
-
-
 # --- код и задача на отправку ---------------------------------------------------------------
 
 
@@ -153,6 +147,8 @@ def test_login_puts_notify_job_with_platform_account_number_full_email_code_and_
     text = payload["text"]
     assert text.splitlines()[0] == "OilTech Digest: запрос кода допуска"
     assert f"Учётка №{newcomer['id']} {EMAIL} ждёт допуска." in text
+    # Учётку завёл администратор: строки о регистрации нет.
+    assert admission.REGISTERED_LINE not in text
     assert re.search(r"\b\d{8}\b", text)
     assert "действует до" in text
     assert _code_row(newcomer["id"])[2] == jobs[0][0]

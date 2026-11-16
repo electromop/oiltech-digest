@@ -366,6 +366,50 @@
   outline-offset: -2px;
 }
 
+/* Текст ошибки под полем (Carbon: подпись поля, цвет ошибки). */
+.field .fieldError {
+  color: var(--ot-text-error);
+}
+
+/* «Показать пароль» (PasswordInput в Carbon): кнопка-иконка у правого края поля, поле оставляет ей
+   место справа. Правило стоит после правил поля: при равной специфичности побеждает порядок. */
+.passwordControl {
+  position: relative;
+}
+
+.field .passwordControl input {
+  padding-inline-end: var(--ot-control-md);
+}
+
+/* Своя кнопка Edge у поля пароля дала бы второй глаз рядом с нашим. */
+.passwordControl input::-ms-reveal {
+  display: none;
+}
+
+.passwordToggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: var(--ot-control-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ot-icon-secondary);
+}
+
+.passwordToggle:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .passwordToggle:hover {
+    color: var(--ot-icon-primary);
+  }
+}
+
 input[type="checkbox"],
 input[type="radio"] {
   width: 1rem;

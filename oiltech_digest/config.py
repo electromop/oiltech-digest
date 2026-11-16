@@ -411,13 +411,18 @@ AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))
 # Флаг Secure на сессионной cookie. Прод за HTTPS (Caddy) → должно быть True (тех-долг T8).
 # Для локальной разработки по http:// выставить AUTH_COOKIE_SECURE=0, иначе браузер
 # не сохранит cookie и вход не сработает.
-# Открытая регистрация: по умолчанию ЗАКРЫТА. Платформа выходит на корпоративный
-# портал заказчика, и /api/auth/register позволял любому завести себе учётку:
-# предусловие релиза #33. Пользователей заводит администратор: экран «Пользователи»
-# или CLI create-user. Первый администратор создаётся так же, до открытия доступа.
+# Самостоятельная регистрация: по умолчанию ОТКРЫТА (решение владельца 16.11; с 17.09 по #33 была закрыта).
+# Ворота теперь код допуска (#113, admission.py): новая учётка с ролью user после регистрации получает
+# шаг «код допуска», сессии без кода нет, код уходит подтверждающим. AUTH_ALLOW_SELF_REGISTRATION=0
+# закрывает регистрацию (аварийно, например поток заявок в чат подтверждающих): /api/auth/register
+# отвечает 403, учётки заводит администратор (экран «Пользователи» или CLI create-user).
 AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
-    "AUTH_ALLOW_SELF_REGISTRATION", "false"
+    "AUTH_ALLOW_SELF_REGISTRATION", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
+# Потолок регистраций: учёток из регистрации без допуска, заведённых за последний час (repository.register_user).
+# Сверх него /api/auth/register отвечает 429: поток ботов не наполняет «Пользователей».
+# Потолок общий, без адреса клиента: поток с одного адреса закрывает регистрацию всем на час (тогда флаг выше).
+AUTH_SELF_REGISTRATION_PER_HOUR = max(1, int(os.environ.get("AUTH_SELF_REGISTRATION_PER_HOUR", "10")))
 
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")
 
@@ -425,6 +430,9 @@ AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower(
 # в очереди external-notify; включать на ядре после пересборки NL (контракт 3): старая сборка такую
 # задачу отказывает. Выключено: код выдаёт только команда admission-code.
 ADMISSION_NOTIFY_ENABLED = os.environ.get("ADMISSION_NOTIFY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Потолок сообщений с кодом учёткам из регистрации за последний час (admission.notify_quota_spent): сверх него код
+# такой учётке не выдаётся, его выдают командой admission-code. Учётки от администратора потолок не трогает.
+ADMISSION_NOTIFY_PER_HOUR = max(1, int(os.environ.get("ADMISSION_NOTIFY_PER_HOUR", "20")))
 # Читает воркер NL (.env.external-worker): бот и закрытый чат подтверждающих.
 ADMISSION_TELEGRAM_BOT_TOKEN = os.environ.get("ADMISSION_TELEGRAM_BOT_TOKEN", "").strip()
 ADMISSION_TELEGRAM_CHAT_ID = os.environ.get("ADMISSION_TELEGRAM_CHAT_ID", "").strip()

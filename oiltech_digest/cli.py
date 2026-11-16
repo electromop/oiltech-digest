@@ -36,8 +36,13 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 
 def cmd_create_user(args: argparse.Namespace) -> None:
+    from oiltech_digest import auth
     from oiltech_digest.db import repository
 
+    # Правила те же, что у экрана «Пользователи» и регистрации (auth.validate_email, validate_password).
+    if not auth.validate_email(args.email) or not auth.validate_password(args.password):
+        print("Почта не по образцу или пароль короче 8 символов")
+        raise SystemExit(1)
     role = "admin" if args.admin else "user"
     user = repository.create_user(args.email, args.password, role)
     print(f"Создан пользователь id={user['id']} {user['email']} роль={user['role']}")
@@ -58,7 +63,9 @@ def cmd_list_users(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     for u in repository.list_users():
-        print(f"  id={u['id']:>3}  {u['role']:<6}  {u['email']}")
+        admission = "допуск есть" if u.get("admitted_at") else "ждёт кода "
+        origin = "регистрация  " if u.get("self_registered") else "администратор"
+        print(f"  id={u['id']:>3}  {u['role']:<6}  {admission}  {origin}  {u['email']}")
 
 
 def cmd_admission_code(args: argparse.Namespace) -> None:
@@ -76,7 +83,8 @@ def cmd_admission_code(args: argparse.Namespace) -> None:
         print("Учётка не найдена")
         raise SystemExit(1)
     code, expires_at = admission.issue_code(int(target["id"]), force=True)
-    print(admission.notify_text(int(target["id"]), target["email"], code, expires_at))
+    print(admission.notify_text(int(target["id"]), target["email"], code, expires_at,
+                                registered=admission.is_self_registered(int(target["id"]))))
 
 
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:

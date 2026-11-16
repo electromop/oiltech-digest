@@ -187,8 +187,9 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 
 Все адреса в [`api.py`](../oiltech_digest/api.py); роли в [architecture.md](architecture.md), раздел 6.
 
-- Вход: `POST /api/auth/login`, `POST /api/auth/admit` (код допуска), `POST /api/auth/logout`,
-  `GET /api/auth/me`; учётки: `/api/users`.
+- Вход: `POST /api/auth/login`, `POST /api/auth/register` (регистрация, затем код допуска), `POST /api/auth/admit`
+  (код допуска), `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/options` (без входа: открыта ли
+  регистрация); учётки: `/api/users`.
 - Служебное: `GET /api/health`, `GET /api/readiness`, `/api/jobs`, `/api/maintenance/*`.
 - Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,

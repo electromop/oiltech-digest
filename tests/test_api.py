@@ -897,37 +897,51 @@ def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
 
 
 def test_auth_register_login_me_and_logout(monkeypatch):
-    # Самостоятельная регистрация по умолчанию закрыта (#33): здесь включаем её
-    # явно, чтобы проверять сам сценарий, а не запрет.
-    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", True)
+    # Самостоятельная регистрация открыта по умолчанию (решение владельца 16.11): флаг не трогаем.
     app = api.app
     sessions = {}
     users = {"user@example.com": {"id": 1, "email": "user@example.com"}}
+    created, requested = [], []
 
-    monkeypatch.setattr(api.repository, "create_user", lambda email, password: users[email])
+    def register_user(email, password, per_hour):
+        created.append((email, per_hour))
+        return users[email]
+
+    def request_code(user):
+        requested.append(user["id"])
+        return api.admission.REQUIRED
+
+    monkeypatch.setattr(api.repository, "register_user", register_user)
+    monkeypatch.setattr(api.admission, "request_code", request_code)
     monkeypatch.setattr(api.repository, "authenticate_user", lambda email, password: users.get(email))
     monkeypatch.setattr(api.repository, "create_user_session", lambda user_id: f"session-{user_id}")
     monkeypatch.setattr(api.repository, "get_user_by_session", lambda token: sessions.get(token))
     monkeypatch.setattr(api.repository, "delete_user_session", lambda token: sessions.pop(token, None))
-    # Учётка допущена: шаг кода допуска (#113) проверяет tests/test_admission.py.
-    monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
     # Настройки контура ОС без базы: умолчания, вкладка «Обратная связь» открыта всем (закрытую участнику проверяет
     # tests/test_os_journal_slice.py).
     monkeypatch.setattr(api.feedback_settings, "current", api.feedback_settings.defaults)
 
     client = TestClient(app)
+    # Регистрация сессию не открывает никогда: новая учётка ждёт кода допуска (#113, tests/test_admission.py).
     register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})
     assert register_response.status_code == 200
-    assert register_response.json()["user"]["email"] == "user@example.com"
+    assert register_response.json() == {"ok": False, "admission_required": True, "detail": api.admission.REQUIRED}
+    assert api.config.AUTH_COOKIE_NAME not in register_response.cookies
+    assert created == [("user@example.com", api.config.AUTH_SELF_REGISTRATION_PER_HOUR)]
+    assert requested == [1]
 
+    assert client.get("/api/auth/me").status_code == 401
+
+    # Дальше учётка допущена: вход как прежде, сессия из входа.
+    monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
     sessions["session-1"] = users["user@example.com"]
+    login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"})
+    assert login_response.status_code == 200
+
     me_response = client.get("/api/auth/me")
     assert me_response.status_code == 200
     assert me_response.json()["user"]["email"] == "user@example.com"
     assert me_response.json()["user"]["feedback_tab"] is True
-
-    login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"})
-    assert login_response.status_code == 200
 
     logout_response = client.post("/api/auth/logout")
     assert logout_response.status_code == 200
@@ -939,15 +953,46 @@ def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch):
 
     assert client.get("/api/auth/me").status_code == 401
 
-    # Закрытая регистрация отвечает 403 ДО валидации полей: путь существует, но выключен.
-    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 403
-
-    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", True)
+    # Правила полей те же, что у учётки от администратора: почта по образцу, пароль не короче 8 знаков.
+    # До базы такой запрос не доходит: проверка полей раньше потолка регистраций.
     assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 400
     assert client.post("/api/auth/register", json={"email": "user@example.com", "password": "1234567"}).status_code == 400
+    # Почта уходит подтверждающим в Telegram и на экраны: разметка, кавычки и управляющие символы не проходят.
+    for email in ('<b>x</b>@example.com', 'a"b@example.com', "a\x1b[31m@example.com", "a@example.com\x00",
+                  "a@exa mple.com", "a@" + "b" * 250 + ".com"):
+        assert client.post("/api/auth/register", json={"email": email, "password": "12345678"}).status_code == 400, email
+
+    # Закрытая флагом регистрация отвечает 403 ДО валидации полей: путь существует, но выключен.
+    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", False)
+    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 403
 
     monkeypatch.setattr(api.repository, "authenticate_user", lambda email, password: None)
     assert client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"}).status_code == 401
+
+
+def test_ai_cost_reports_are_admin_only(monkeypatch):
+    """Расход ИИ видят только администраторы, как «Статистику»: учётки из регистрации расширили круг пользователей."""
+    monkeypatch.setattr(api.repository, "ai_cost_report", lambda: [])
+    monkeypatch.setattr(api.repository, "ai_article_cost_report", lambda limit, complete_only: [])
+    client = TestClient(api.app)
+    try:
+        api.app.dependency_overrides[api.require_user] = lambda: {"id": 5, "email": "member@example.com", "role": "user"}
+        assert client.get("/api/reports/ai-cost").status_code == 403
+        assert client.get("/api/reports/ai-article-cost").status_code == 403
+        api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "admin@example.com", "role": "admin"}
+        assert client.get("/api/reports/ai-cost").status_code == 200
+        assert client.get("/api/reports/ai-article-cost").status_code == 200
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+
+def test_auth_options_tell_login_screen_whether_registration_is_open(monkeypatch):
+    """Без входа: экран входа прячет ссылку «Зарегистрируйтесь», когда флаг закрыл регистрацию."""
+    client = TestClient(api.app)
+
+    assert client.get("/api/auth/options").json() == {"self_registration": True}
+    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", False)
+    assert client.get("/api/auth/options").json() == {"self_registration": False}
 
 
 def test_enqueue_digest_export_endpoint(monkeypatch):
@@ -2022,12 +2067,3 @@ def test_external_worker_complete_applies_signal_discovery_and_keeps_only_summar
     assert applied == [(worker_result, {"job_id": 10})]
     # В задаче остаётся итог, а не мегабайты кандидатов.
     assert completed[0][1]["result"] == {"signal_discovery": True, "applied": {"signals": 2, "topics": []}}
-def test_self_registration_closed_by_default():
-    """Предусловие релиза #33: платформа выходит на корпоративный портал заказчика,
-    и /api/auth/register позволял любому завести себе учётку."""
-    client = TestClient(api.app)
-    response = client.post(
-        "/api/auth/register", json={"email": "stranger@example.com", "password": "12345678"}
-    )
-    assert response.status_code == 403
-    assert "администратор" in response.json()["detail"]

@@ -99,14 +99,43 @@ def issue_code(user_id: int, *, force: bool = False) -> tuple[str, datetime] | N
     return (code, row[0]) if row else None
 
 
+def is_self_registered(user_id: int) -> bool:
+    """Учётку завели сами на экране входа (users.self_registered, регистрация с 16.11)."""
+    with connection.get_connection() as conn:
+        row = conn.execute("SELECT self_registered FROM users WHERE id = %s", (user_id,)).fetchone()
+    return bool(row and row[0])
+
+
+def notify_quota_spent() -> bool:
+    """Сообщений с кодом учёткам из регистрации за последний час не меньше ADMISSION_NOTIFY_PER_HOUR. Такие учётки
+    заводит кто угодно, и поток заявок не должен засыпать чат подтверждающих; учётки от администратора потолок
+    не трогает. Сверх него код не выдаётся: человеку ответ «попросите у подтверждающих», код выдают командой."""
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT count(*) FROM background_jobs j
+            JOIN users u ON u.id = (j.payload_json->>'user_id')::bigint
+            WHERE j.kind = %s AND j.created_at > now() - interval '1 hour' AND u.self_registered
+            """,
+            (KIND,),
+        ).fetchone()
+    return int(row[0]) >= config.ADMISSION_NOTIFY_PER_HOUR
+
+
 def request_code(user: dict[str, Any]) -> str:
     """Вход недопущенной учётки с верным паролем: выдать код и поставить отправку, если пора.
     Возвращает пояснение для экрана входа.
 
-    Без флага отправки код не выдаётся: его некому доставить, выдаёт команда на сервере."""
+    Без флага отправки код не выдаётся: его некому доставить, выдаёт команда на сервере. Учётке из регистрации
+    сообщение каждый раз говорит, что её завели сами, и для неё действует потолок сообщений за час."""
     if not config.ADMISSION_NOTIFY_ENABLED:
         return REQUIRED_ASK
     user_id = int(user["id"])
+    registered = is_self_registered(user_id)
+    if registered and notify_quota_spent():
+        logger.warning("admission: потолок %s сообщений за час исчерпан, учётке №%s код не выдан",
+                       config.ADMISSION_NOTIFY_PER_HOUR, user_id)
+        return REQUIRED_ASK
     issued = issue_code(user_id)
     if issued is None:
         return REQUIRED
@@ -116,7 +145,8 @@ def request_code(user: dict[str, Any]) -> str:
     try:
         job = background_jobs.enqueue(
             KIND,
-            {"user_id": user_id, "text": notify_text(user_id, str(user.get("email") or ""), code, expires_at)},
+            {"user_id": user_id,
+             "text": notify_text(user_id, str(user.get("email") or ""), code, expires_at, registered=registered)},
             queue_name=lanes.NOTIFY,
             execution_region="external",
             capability=None,
@@ -133,14 +163,19 @@ def request_code(user: dict[str, Any]) -> str:
     return REQUIRED
 
 
-def notify_text(user_id: int, email: str, code: str, expires_at: datetime) -> str:
+REGISTERED_LINE = "Учётку завели сами через регистрацию на сайте: прежде чем передать код, убедитесь, чья она."
+
+
+def notify_text(user_id: int, email: str, code: str, expires_at: datetime, *, registered: bool = False) -> str:
     """Сообщение подтверждающим: откуда код (платформа), чей он (номер учётки и полная почта), код
     и срок. Полная почта: решение владельца 20.10: по одному началу почты подтверждающий не понимал,
-    кому передать код (прежде: история 40 спеки #110)."""
+    кому передать код (прежде: история 40 спеки #110). Учётке из регистрации (16.11) строка об этом в каждом
+    коде: администратор за неё не ручался, решают подтверждающие."""
     until = expires_at.astimezone(_MSK).strftime("%d.%m.%Y %H:%M")
     return ("OilTech Digest: запрос кода допуска\n"
             f"Учётка №{user_id} {email} ждёт допуска.\n"
-            f"Код: {code}, действует до {until} МСК, не больше {MAX_ATTEMPTS} попыток ввода.\n"
+            + (f"{REGISTERED_LINE}\n" if registered else "")
+            + f"Код: {code}, действует до {until} МСК, не больше {MAX_ATTEMPTS} попыток ввода.\n"
             "Передайте код владельцу учётки.")
 
 

@@ -7,7 +7,13 @@ import hmac
 import re
 import secrets
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Почта: до @ латиница, цифры и . _ % + -, после @ метки домена через точку (после normalize_email: строчные).
+# Регистрация открыта (16.11), адрес вводит посторонний человек, а почта уходит в сообщение подтверждающим в
+# Telegram, в вывод команды на сервере и на экран «Пользователи». Прежнее правило «что угодно без пробела»
+# пропускало < > " ' и управляющие символы. Длина по RFC 5321: всего до 254, до @ до 64. Нынешние адреса
+# прода (16.11) проходят все.
+_EMAIL_RE = re.compile(r"[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+_EMAIL_MAX_LENGTH = 254
 _PBKDF2_ROUNDS = 200_000
 
 
@@ -16,7 +22,8 @@ def normalize_email(email: str) -> str:
 
 
 def validate_email(email: str) -> bool:
-    return bool(_EMAIL_RE.match(normalize_email(email)))
+    value = normalize_email(email)
+    return len(value) <= _EMAIL_MAX_LENGTH and _EMAIL_RE.fullmatch(value) is not None
 
 
 def validate_password(password: str) -> bool:

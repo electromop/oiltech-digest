@@ -2555,26 +2555,68 @@ def update_source_request_state(
 #  auth
 # ---------------------------------------------------------------------------
 
+class UserExists(ValueError):
+    """Почта уже занята. ValueError: экран «Пользователи» показывает текст как прежде."""
+
+
+class RegistrationsCapped(Exception):
+    """Потолок регистраций за час исчерпан."""
+
+
+# Ключ pg_advisory_xact_lock (16.11.2026): регистрации идут по одной, подсчёт потолка и вставка под одним замком.
+_REGISTRATION_LOCK = 16112026
+
+
+def _insert_user(cur, email: str, password_digest: tuple[str, str], role: str, self_registered: bool) -> dict:
+    """Проверка почты и вставка одним запросом: две одновременные заявки на одну почту не дают 500 на
+    уникальности, вторая получает UserExists. Хэш пароля считает вызывающий заранее, вне транзакции."""
+    salt_hex, password_hash = password_digest
+    cur.execute(
+        """
+        INSERT INTO users (email, password_salt, password_hash, role, self_registered)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (email) DO NOTHING
+        RETURNING id, email, role, created_at, self_registered
+        """,
+        (auth.normalize_email(email), salt_hex, password_hash, role, self_registered),
+    )
+    user = cur.fetchone()
+    if user is None:
+        raise UserExists("Пользователь с таким email уже существует")
+    return user
+
+
 def create_user(email: str, password: str, role: str = "user") -> dict:
-    email = auth.normalize_email(email)
+    """Учётку заводит администратор (экран «Пользователи», CLI create-user)."""
     role = role if role in ("admin", "user") else "user"
-    salt_hex, password_hash = auth.hash_password(password)
+    digest = auth.hash_password(password)
+    with get_connection() as conn:
+        user = _insert_user(conn.cursor(row_factory=dict_row), email, digest, role, self_registered=False)
+        conn.commit()
+    return user
+
+
+def register_user(email: str, password: str, per_hour: int) -> dict:
+    """Регистрация на экране входа (16.11): роль user, без допуска, self_registered. Потолок: учёток из
+    регистрации без допуска за последний час меньше per_hour. Подсчёт и вставка в одной транзакции под замком:
+    иначе пачка одновременных запросов прошла бы мимо потолка. Сверх потолка RegistrationsCapped, занятая
+    почта UserExists; в обоих случаях ничего не пишется. Хэш пароля (PBKDF2) до замка: под замком только
+    подсчёт и вставка."""
+    digest = auth.hash_password(password)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-        if cur.fetchone() is not None:
-            raise ValueError("Пользователь с таким email уже существует")
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_REGISTRATION_LOCK,))
         cur.execute(
             """
-            INSERT INTO users (email, password_salt, password_hash, role)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id, email, role, created_at
-            """,
-            (email, salt_hex, password_hash, role),
+            SELECT count(*) AS recent FROM users
+            WHERE self_registered AND admitted_at IS NULL AND created_at > now() - interval '1 hour'
+            """
         )
-        user = cur.fetchone()
+        if cur.fetchone()["recent"] >= per_hour:
+            raise RegistrationsCapped
+        user = _insert_user(cur, email, digest, "user", self_registered=True)
         conn.commit()
-        return user
+    return user
 
 
 def authenticate_user(email: str, password: str) -> dict | None:
@@ -2654,9 +2696,11 @@ def count_users() -> int:
 
 
 def list_users() -> list[dict]:
+    # admitted_at и self_registered: экран «Пользователи» и list-users показывают, кто ждёт кода допуска и
+    # завёл ли учётку сам на экране входа (регистрация с 16.11).
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, email, role, created_at FROM users ORDER BY id")
+        cur.execute("SELECT id, email, role, created_at, admitted_at, self_registered FROM users ORDER BY id")
         return cur.fetchall()
 
 
@@ -2698,12 +2742,15 @@ def count_admins() -> int:
 
 def ensure_admin_bootstrap() -> int | None:
     """Если админов нет, а пользователи есть: назначить админом самого первого
-    (по id). Возвращает id назначенного админа или None. Идемпотентно."""
+    (по id). Возвращает id назначенного админа или None. Идемпотентно.
+
+    Учётку из регистрации (self_registered) не берёт: на свежей установке посторонний мог зарегистрироваться
+    раньше, чем завели администратора. Тогда администратора заводит create-user --admin."""
     with get_connection() as conn:
         has_admin = conn.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
         if has_admin:
             return None
-        row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+        row = conn.execute("SELECT id FROM users WHERE NOT self_registered ORDER BY id LIMIT 1").fetchone()
         if not row:
             return None
         conn.execute("UPDATE users SET role = 'admin', updated_at = now() WHERE id = %s", (row[0],))
