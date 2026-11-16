@@ -379,8 +379,9 @@ class UserUpdate(BaseModel):
 
 
 def _session_payload(user: dict[str, Any]) -> dict[str, Any]:
-    """Ответ входа и проверки сессии."""
-    return {"ok": True, "user": _clean(user)}
+    """Ответ входа и проверки сессии. feedback_tab: открыта ли учётке вкладка «Обратная связь» (настройка контура ОС);
+    по нему интерфейс прячет пункт меню у участника, которому вкладка закрыта."""
+    return {"ok": True, "user": {**_clean(user), "feedback_tab": feedback_settings.tab_open_to(user)}}
 
 
 @app.get("/", response_model=None)
@@ -1378,9 +1379,13 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
-    # Значок «ждёт решения в журнале» (#189) включает и выключает настройка контура ОС; без ждущих предложений на
-    # странице настройку не читаем.
-    badge = any(row.get("feedback_pending") for row in cards) and bool(feedback_settings.current()["card_badge"])
+    # Значок «ждёт решения в журнале» (#189) включает и выключает настройка контура ОС; ведёт он на вкладку «Обратная
+    # связь», поэтому участнику, которому она закрыта, значка нет (16.11). Без ждущих предложений на странице настройку
+    # не читаем.
+    badge = False
+    if any(row.get("feedback_pending") for row in cards):
+        values = feedback_settings.current()
+        badge = bool(values["card_badge"]) and feedback_settings.tab_open_to(user, values)
     # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то

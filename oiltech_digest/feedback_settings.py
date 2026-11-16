@@ -99,6 +99,15 @@ def current() -> dict[str, Any]:
     return values
 
 
+def tab_open_to(user: dict[str, Any], values: dict[str, Any] | None = None) -> bool:
+    """Открыта ли учётке вкладка «Обратная связь»: администратору всегда, участнику, пока настройка «Кто видит
+    вкладку» её не закрыла. С вкладкой у участника уходят пункт меню и значок «ждёт решения в журнале» на карточке
+    (решение владельца 16.11): значок вёл бы на закрытую вкладку. values: уже прочитанные настройки."""
+    if (user.get("role") or "user") == "admin":
+        return True
+    return (values if values is not None else current())["tab_visible_to"] != "admin"
+
+
 def save(changes: dict[str, Any], *, author: str | None) -> dict[str, Any]:
     """Сохранить правку администратора поверх действующих: новой строкой. ValueError: незнакомая настройка или неверное
     значение, словами для ответа; ничего не сохранено."""
