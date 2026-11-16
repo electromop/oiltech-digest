@@ -387,10 +387,12 @@ def test_maintenance_cleanup_command_uses_defaults(monkeypatch, capsys):
     monkeypatch.setattr("oiltech_digest.db.repository.delete_expired_user_sessions", lambda: 3)
     monkeypatch.setattr("oiltech_digest.db.repository.cleanup_finished_background_jobs", lambda days: days // 7)
     monkeypatch.setattr("oiltech_digest.db.repository.cleanup_finished_export_jobs", lambda days: days // 7)
+    monkeypatch.setattr("oiltech_digest.auth_limits.prune", lambda: 4)
 
     cli.main(["maintenance-cleanup"])
 
     output = capsys.readouterr().out
+    assert "auth_attempts=4" in output
     assert "expired_sessions=3" in output
     assert "background_jobs=3" in output
     assert "background_job_days=21" in output
@@ -402,6 +404,7 @@ def test_maintenance_cleanup_command_accepts_overrides(monkeypatch, capsys):
     monkeypatch.setattr("oiltech_digest.db.repository.delete_expired_user_sessions", lambda: 1)
     monkeypatch.setattr("oiltech_digest.db.repository.cleanup_finished_background_jobs", lambda days: days)
     monkeypatch.setattr("oiltech_digest.db.repository.cleanup_finished_export_jobs", lambda days: days)
+    monkeypatch.setattr("oiltech_digest.auth_limits.prune", lambda: 0)
 
     cli.main(["maintenance-cleanup", "--background-job-days", "10", "--export-job-days", "5"])
 

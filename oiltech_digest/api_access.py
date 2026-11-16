@@ -4,12 +4,44 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import logging
 from typing import Any
 
 from fastapi import Cookie, Depends, HTTPException
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
+
+logger = logging.getLogger(__name__)
+
+
+def external_worker_refusal(authorization: str | None) -> tuple[int, str] | None:
+    """Почему запрос воркера NL не пускать (код и текст) или None. Один отказ на зависимость маршрутов
+    (api.require_external_worker) и ворота тела (request_guard), которые проверяют токен до чтения тела."""
+    if not config.EXTERNAL_WORKER_TOKEN_HASH:
+        return 503, "External worker auth is not configured"
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return 401, "External worker token required"
+    if not hmac.compare_digest(hashlib.sha256(token.encode("utf-8")).hexdigest(), config.EXTERNAL_WORKER_TOKEN_HASH):
+        return 401, "Invalid external worker token"
+    return None
+
+
+def optional_user(
+    session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME),
+) -> dict[str, Any] | None:
+    """Кто вошёл, если вошёл: для ответов, где без входа видно меньше (readiness). Ошибка базы: гость, ответы с
+    require_user решают доступ сами."""
+    if not session_token:
+        return None
+    try:
+        return repository.get_user_by_session(session_token)
+    except Exception:  # noqa: BLE001 - необязательный вход не валит ответ, который нужен и без базы
+        logger.warning("optional_user: сессию не проверить", exc_info=True)
+        return None
 
 
 def require_user(session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME)) -> dict[str, Any]:

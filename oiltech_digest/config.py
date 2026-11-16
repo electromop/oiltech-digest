@@ -421,8 +421,20 @@ AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 # Потолок регистраций: учёток из регистрации без допуска, заведённых за последний час (repository.register_user).
 # Сверх него /api/auth/register отвечает 429: поток ботов не наполняет «Пользователей».
-# Потолок общий, без адреса клиента: поток с одного адреса закрывает регистрацию всем на час (тогда флаг выше).
+# Потолок общий; один адрес займёт не больше AUTH_REGISTER_PER_IP_HOUR мест (ниже), заполнить потолок можно только с
+# нескольких адресов (тогда флаг выше).
 AUTH_SELF_REGISTRATION_PER_HOUR = max(1, int(os.environ.get("AUTH_SELF_REGISTRATION_PER_HOUR", "10")))
+# Лимиты попыток (защита входа 16.11.2026, auth_limits.py, счётчики в таблице auth_attempts). С одного адреса за час:
+# заявок регистрации (ошибки ввода не в счёт) и неудачных попыток входа и ввода кода (удачные не в счёт: офис заказчика
+# за одним адресом). На одну почту, и несуществующую: неудачных паролей за окно, считая после последнего верного; с
+# адреса, откуда за AUTH_KNOWN_ADDRESS_DAYS дней входили с верным паролем этой почты, пауза почты не действует.
+AUTH_REGISTER_PER_IP_HOUR = max(1, int(os.environ.get("AUTH_REGISTER_PER_IP_HOUR", "5")))
+AUTH_FAILURES_PER_IP_HOUR = max(1, int(os.environ.get("AUTH_FAILURES_PER_IP_HOUR", "20")))
+AUTH_FAILURES_PER_EMAIL = max(1, int(os.environ.get("AUTH_FAILURES_PER_EMAIL", "10")))
+AUTH_EMAIL_WINDOW_MINUTES = max(1, int(os.environ.get("AUTH_EMAIL_WINDOW_MINUTES", "15")))
+AUTH_KNOWN_ADDRESS_DAYS = max(1, int(os.environ.get("AUTH_KNOWN_ADDRESS_DAYS", "30")))
+# Сколько дней хранить строки auth_attempts (адрес и почта): не меньше AUTH_KNOWN_ADDRESS_DAYS.
+AUTH_ATTEMPTS_RETENTION_DAYS = max(AUTH_KNOWN_ADDRESS_DAYS, int(os.environ.get("AUTH_ATTEMPTS_RETENTION_DAYS", "30")))
 
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")
 

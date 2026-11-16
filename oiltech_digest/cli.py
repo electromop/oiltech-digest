@@ -39,9 +39,13 @@ def cmd_create_user(args: argparse.Namespace) -> None:
     from oiltech_digest import auth
     from oiltech_digest.db import repository
 
-    # Правила те же, что у экрана «Пользователи» и регистрации (auth.validate_email, validate_password).
-    if not auth.validate_email(args.email) or not auth.validate_password(args.password):
-        print("Почта не по образцу или пароль короче 8 символов")
+    # Правила те же, что у экрана «Пользователи» и регистрации (auth.validate_email, auth.password_problem).
+    if not auth.validate_email(args.email):
+        print("Почта не по образцу")
+        raise SystemExit(1)
+    problem = auth.password_problem(args.password, args.email)
+    if problem:
+        print(problem)
         raise SystemExit(1)
     role = "admin" if args.admin else "user"
     user = repository.create_user(args.email, args.password, role)
@@ -85,6 +89,20 @@ def cmd_admission_code(args: argparse.Namespace) -> None:
     code, expires_at = admission.issue_code(int(target["id"]), force=True)
     print(admission.notify_text(int(target["id"]), target["email"], code, expires_at,
                                 registered=admission.is_self_registered(int(target["id"]))))
+
+
+def cmd_auth_attempts(args: argparse.Namespace) -> None:
+    """Кто и откуда ошибался при входе и регистрации (защита входа 16.11.2026, auth_limits): адреса, почты, лимиты."""
+    from oiltech_digest import auth_limits
+
+    print(auth_limits.format_report(auth_limits.report(args.hours), args.hours))
+
+
+def cmd_auth_unlock(args: argparse.Namespace) -> None:
+    """Снять паузу почте или лимит адресу раньше срока: их неудачи и заявки больше не считаются."""
+    from oiltech_digest import auth_limits
+
+    print(f"Неудачных попыток и заявок снято: {auth_limits.unlock(email=args.email, ip=args.ip)}")
 
 
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
@@ -1765,7 +1783,8 @@ def cmd_scheduler_lock(args: argparse.Namespace) -> None:
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
-    from oiltech_digest import config
+    """Шаг планировщика (docker-scheduler.sh): сессии, задачи, выгрузки и попытки входа старше срока хранения."""
+    from oiltech_digest import auth_limits, config
     from oiltech_digest.db import repository
 
     background_job_days = (
@@ -1781,13 +1800,16 @@ def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
     deleted_sessions = repository.delete_expired_user_sessions()
     deleted_background_jobs = repository.cleanup_finished_background_jobs(background_job_days)
     deleted_export_jobs = repository.cleanup_finished_export_jobs(export_job_days)
+    # Адрес и почта попыток входа (защита входа 16.11.2026) хранятся AUTH_ATTEMPTS_RETENTION_DAYS дней.
+    deleted_auth_attempts = auth_limits.prune()
     print(
         "maintenance-cleanup: "
         f"expired_sessions={deleted_sessions}, "
         f"background_jobs={deleted_background_jobs}, "
         f"background_job_days={background_job_days}, "
         f"export_jobs={deleted_export_jobs}, "
-        f"export_job_days={export_job_days}"
+        f"export_job_days={export_job_days}, "
+        f"auth_attempts={deleted_auth_attempts}"
     )
 
 
@@ -2788,6 +2810,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_ac_who.add_argument("--user-id", type=int, help="номер учётки")
     p_ac_who.add_argument("--email")
     p_ac.set_defaults(func=cmd_admission_code)
+
+    p_aa = sub.add_parser("auth-attempts", help="неудачные входы и регистрации по адресам и почтам, кто упёрся в лимит")
+    p_aa.add_argument("--hours", type=int, default=24, help="за сколько последних часов (по умолчанию 24)")
+    p_aa.set_defaults(func=cmd_auth_attempts)
+
+    p_au = sub.add_parser("auth-unlock", help="снять паузу почте или лимит адресу раньше срока")
+    p_au.add_argument("--email", help="почта, вход которой на паузе")
+    p_au.add_argument("--ip", help="адрес, упёршийся в лимит")
+    p_au.set_defaults(func=cmd_auth_unlock)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")

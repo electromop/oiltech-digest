@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from oiltech_digest import config
+from oiltech_digest import auth_limits, config
 from oiltech_digest.db import repository
 
 
@@ -29,6 +29,7 @@ def maintenance_status(
             "export_job_days": export_job_days,
         },
         "expired_sessions": repository.count_expired_user_sessions(),
+        "auth_attempts_to_prune": auth_limits.count_prunable(),
         "stale_running_jobs": repository.count_stale_running_background_jobs(stale_minutes),
         "cleanup_candidates": {
             "background_jobs": repository.count_finished_background_jobs_eligible_for_cleanup(
@@ -54,6 +55,8 @@ def maintenance_cleanup(
 
     return {
         "expired_sessions": repository.delete_expired_user_sessions(),
+        # Попытки входа и регистрации (адрес и почта) старше AUTH_ATTEMPTS_RETENTION_DAYS (защита входа 16.11.2026).
+        "auth_attempts": auth_limits.prune(),
         "background_jobs": repository.cleanup_finished_background_jobs(background_job_days),
         "background_job_days": background_job_days,
         "export_jobs": repository.cleanup_finished_export_jobs(export_job_days),

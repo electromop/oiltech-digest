@@ -8,6 +8,24 @@
 	# JSON каталога сигналов (тысячи строк) ужимается в ~5-10 раз.
 	encode zstd gzip
 
+	# Предел тела запроса (защита входа 16.11.2026). Приложение читает тело целиком до проверки входа, поэтому без
+	# предела любой POST без входа принял бы сотни МБ. Те же числа вторым слоем в приложении (request_guard.py), тест
+	# сверяет их с этим файлом. Вход и регистрация: тело меньше 1 КБ. Документы и воркеры NL: файл до 25 МБ, материал
+	# коллег до 20 МБ, итог радара около 3,3 МБ. Остальное: самый большой текст из интерфейса около 1 МБ. Сверх: 413.
+	# После правки файла: docker exec -i oiltech_caddy caddy reload --config /dev/stdin --adapter caddyfile < Caddyfile
+	@auth_body path /api/auth/*
+	request_body @auth_body {
+		max_size 64KB
+	}
+	@large_body path /api/documents /api/external-worker/*
+	request_body @large_body {
+		max_size 32MB
+	}
+	@other_body not path /api/auth/* /api/documents /api/external-worker/*
+	request_body @other_body {
+		max_size 2MB
+	}
+
 	reverse_proxy app:8000
 }
 

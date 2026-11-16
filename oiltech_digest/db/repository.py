@@ -2628,11 +2628,13 @@ def authenticate_user(email: str, password: str) -> dict | None:
             (email,),
         )
         user = cur.fetchone()
-        if user is None:
-            return None
-        if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
-            return None
-        return {"id": user["id"], "email": user["email"], "role": user["role"], "created_at": user["created_at"]}
+    if user is None:
+        # Почты нет: та же проверка по фиктивному хэшу, иначе по времени ответа видно, есть ли учётка (16.11.2026).
+        auth.burn_password_check(password)
+        return None
+    if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
+        return None
+    return {"id": user["id"], "email": user["email"], "role": user["role"], "created_at": user["created_at"]}
 
 
 def create_user_session(user_id: int) -> str:
@@ -2670,6 +2672,15 @@ def get_user_by_session(session_token: str) -> dict | None:
             )
             conn.commit()
         return user
+
+
+def session_is_active(session_token: str) -> bool:
+    """Сессия жива (только чтение): ворота тела пускают большую загрузку лишь с ней (request_guard)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM user_sessions WHERE session_token = %s AND expires_at > now()", (session_token,)
+        ).fetchone()
+    return row is not None
 
 
 def delete_user_session(session_token: str) -> None:

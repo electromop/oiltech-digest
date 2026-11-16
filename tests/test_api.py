@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api, contract, feed_window
@@ -612,57 +613,59 @@ def test_digest_branding_endpoints(monkeypatch):
     assert put_response.json() == {"ok": True, "branding": branding}
 
 
-def test_readiness_endpoint_reports_ok(monkeypatch):
-    app = api.app
-    monkeypatch.setattr(
-        api,
-        "readiness_check",
-        lambda: {
-            "ok": True,
-            "database": {"ok": True},
-            "schema": {"ok": True, "missing_tables": []},
-            "jobs": {"queued_or_running": 0, "stale_running": 0, "stale_minutes": 60},
-            "articles": 10,
-        },
-    )
-    client = TestClient(app)
-    response = client.get("/api/readiness")
+_READY = {
+    "ok": True,
+    "database": {"ok": True},
+    "schema": {"ok": True, "missing_tables": [], "present_tables": ["articles", "users"]},
+    "jobs": {"queued_or_running": 0, "stale_running": 0, "stale_minutes": 60},
+    "articles": 10,
+}
+
+
+def test_readiness_without_login_tells_only_ok(monkeypatch):
+    """Без входа (защита входа 16.11): только ok и код. Список таблиц, задачи и текст ошибки базы видит администратор;
+    readiness никто не опрашивает: проверка здоровья compose и скрипты выката ходят в /api/health."""
+    monkeypatch.setattr(api, "readiness_check", lambda: _READY)
+    response = TestClient(api.app).get("/api/readiness")
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    assert response.json() == {"ok": True}
+
+
+def test_readiness_without_login_returns_503_for_not_ready(monkeypatch):
+    monkeypatch.setattr(api, "readiness_check", lambda: {**_READY, "ok": False,
+                                                         "schema": {"ok": False, "missing_tables": ["background_jobs"]}})
+    response = TestClient(api.app).get("/api/readiness")
+
+    assert response.status_code == 503
+    assert response.json() == {"ok": False}
+
+
+def test_readiness_db_error_goes_to_the_log_not_the_answer(monkeypatch, caplog):
+    monkeypatch.setattr(api, "readiness_check", lambda: (_ for _ in ()).throw(RuntimeError("db down at 10.0.0.5")))
+    with caplog.at_level("ERROR"):
+        response = TestClient(api.app).get("/api/readiness")
+
+    assert response.status_code == 503
+    assert response.json() == {"ok": False}
+    assert "db down at 10.0.0.5" in caplog.text
+
+
+def test_readiness_details_for_admin_only(monkeypatch):
+    monkeypatch.setattr(api, "readiness_check", lambda: {**_READY, "ok": False,
+                                                         "schema": {"ok": False, "missing_tables": ["background_jobs"]}})
+    client = TestClient(api.app)
+    try:
+        api.app.dependency_overrides[api.optional_user] = lambda: {"id": 5, "email": "m@example.test", "role": "user"}
+        assert client.get("/api/readiness").json() == {"ok": False}
+        api.app.dependency_overrides[api.optional_user] = lambda: {"id": 1, "email": "a@example.test", "role": "admin"}
+        response = client.get("/api/readiness")
+    finally:
+        api.app.dependency_overrides.pop(api.optional_user, None)
+
+    assert response.status_code == 503
+    assert response.json()["schema"]["missing_tables"] == ["background_jobs"]
     assert response.json()["jobs"]["stale_running"] == 0
-
-
-def test_readiness_endpoint_returns_503_for_not_ready(monkeypatch):
-    app = api.app
-    monkeypatch.setattr(
-        api,
-        "readiness_check",
-        lambda: {
-            "ok": False,
-            "database": {"ok": True},
-            "schema": {"ok": False, "missing_tables": ["background_jobs"]},
-            "jobs": {"queued_or_running": 3, "stale_running": 1, "stale_minutes": 60},
-            "articles": 10,
-        },
-    )
-    client = TestClient(app)
-    response = client.get("/api/readiness")
-
-    assert response.status_code == 503
-    payload = response.json()
-    assert payload["ok"] is False
-    assert payload["schema"]["missing_tables"] == ["background_jobs"]
-
-
-def test_readiness_endpoint_returns_503_for_db_error(monkeypatch):
-    app = api.app
-    monkeypatch.setattr(api, "readiness_check", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
-    client = TestClient(app)
-    response = client.get("/api/readiness")
-
-    assert response.status_code == 503
-    assert response.json() == {"ok": False, "database": {"ok": False}, "error": "db down"}
 
 
 def test_list_articles_applies_filters_and_score_items(monkeypatch):
@@ -896,7 +899,16 @@ def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
     assert "request/playwright" in response.json()["detail"]
 
 
-def test_auth_register_login_me_and_logout(monkeypatch):
+@pytest.fixture()
+def no_auth_limits(monkeypatch):
+    """Тесты эндпоинтов входа без базы: лимиты попыток (auth_limits, счётчики в базе) проверяет
+    tests/test_auth_limits.py на изолированной схеме."""
+    monkeypatch.setattr(api.auth_limits, "begin_registration", lambda ip, email: None)
+    monkeypatch.setattr(api.auth_limits, "begin_sign_in", lambda kind, ip, email: 0)
+    monkeypatch.setattr(api.auth_limits, "finish_sign_in", lambda attempt_id, outcome: None)
+
+
+def test_auth_register_login_me_and_logout(monkeypatch, no_auth_limits):
     # Самостоятельная регистрация открыта по умолчанию (решение владельца 16.11): флаг не трогаем.
     app = api.app
     sessions = {}
@@ -923,7 +935,7 @@ def test_auth_register_login_me_and_logout(monkeypatch):
 
     client = TestClient(app)
     # Регистрация сессию не открывает никогда: новая учётка ждёт кода допуска (#113, tests/test_admission.py).
-    register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})
+    register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "Kx7#pLm2qRt9"})
     assert register_response.status_code == 200
     assert register_response.json() == {"ok": False, "admission_required": True, "detail": api.admission.REQUIRED}
     assert api.config.AUTH_COOKIE_NAME not in register_response.cookies
@@ -935,7 +947,7 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     # Дальше учётка допущена: вход как прежде, сессия из входа.
     monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
     sessions["session-1"] = users["user@example.com"]
-    login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"})
+    login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "Kx7#pLm2qRt9"})
     assert login_response.status_code == 200
 
     me_response = client.get("/api/auth/me")
@@ -948,26 +960,26 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     assert logout_response.json() == {"ok": True}
 
 
-def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch):
+def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch, no_auth_limits):
     client = TestClient(api.app)
 
     assert client.get("/api/auth/me").status_code == 401
 
     # Правила полей те же, что у учётки от администратора: почта по образцу, пароль не короче 8 знаков.
     # До базы такой запрос не доходит: проверка полей раньше потолка регистраций.
-    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 400
+    assert client.post("/api/auth/register", json={"email": "bad", "password": "Kx7#pLm2qRt9"}).status_code == 400
     assert client.post("/api/auth/register", json={"email": "user@example.com", "password": "1234567"}).status_code == 400
     # Почта уходит подтверждающим в Telegram и на экраны: разметка, кавычки и управляющие символы не проходят.
     for email in ('<b>x</b>@example.com', 'a"b@example.com', "a\x1b[31m@example.com", "a@example.com\x00",
                   "a@exa mple.com", "a@" + "b" * 250 + ".com"):
-        assert client.post("/api/auth/register", json={"email": email, "password": "12345678"}).status_code == 400, email
+        assert client.post("/api/auth/register", json={"email": email, "password": "Kx7#pLm2qRt9"}).status_code == 400, email
 
     # Закрытая флагом регистрация отвечает 403 ДО валидации полей: путь существует, но выключен.
     monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", False)
-    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 403
+    assert client.post("/api/auth/register", json={"email": "bad", "password": "Kx7#pLm2qRt9"}).status_code == 403
 
     monkeypatch.setattr(api.repository, "authenticate_user", lambda email, password: None)
-    assert client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "user@example.com", "password": "Kx7#pLm2qRt9"}).status_code == 401
 
 
 def test_ai_cost_reports_are_admin_only(monkeypatch):

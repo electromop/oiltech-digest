@@ -9,6 +9,8 @@ type PasswordFieldProps = {
   placeholder?: string;
   autoComplete: "current-password" | "new-password";
   error?: string;
+  // Подсказка под полем, пока ошибки нет (правило пароля в форме регистрации).
+  hint?: string;
 };
 
 // Поле пароля с кнопкой «Показать пароль» (как PasswordInput в Carbon): кнопка-иконка у правого края
@@ -18,6 +20,8 @@ export function PasswordField(props: PasswordFieldProps) {
   const [visible, setVisible] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const errorId = `${props.id}-error`;
+  const hintId = `${props.id}-hint`;
+  const describedBy = props.error ? errorId : props.hint ? hintId : undefined;
   const toggleLabel = visible ? "Скрыть пароль" : "Показать пароль";
 
   // При отправке формы пароль снова прячется: открытым текстом браузер мог бы запомнить его в истории полей.
@@ -49,7 +53,7 @@ export function PasswordField(props: PasswordFieldProps) {
           autoCapitalize="none"
           autoCorrect="off"
           aria-invalid={props.error ? true : undefined}
-          aria-describedby={props.error ? errorId : undefined}
+          aria-describedby={describedBy}
         />
         <button
           type="button"
@@ -65,6 +69,10 @@ export function PasswordField(props: PasswordFieldProps) {
       {props.error ? (
         <span id={errorId} className="fieldError">
           {props.error}
+        </span>
+      ) : props.hint ? (
+        <span id={hintId} className="fieldHint">
+          {props.hint}
         </span>
       ) : null}
     </div>

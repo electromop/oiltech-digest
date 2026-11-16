@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { PASSWORD_HINT } from "../features/shared/passwordRules";
 
 const article = {
   id: 101,
@@ -670,15 +671,19 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войдите" }));
     expect(screen.getByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Повторите пароль")).not.toBeInTheDocument();
+    expect(screen.queryByText(PASSWORD_HINT)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Зарегистрируйтесь" }));
     expect(screen.getByLabelText("Эл. почта")).toHaveValue("new.person@example.com");
     expect(screen.getByLabelText("Пароль")).toHaveValue("");
+    // Подсказка о простых паролях видна заранее и связана с полем; отказывает слабым паролям сервер.
+    expect(screen.getByLabelText("Пароль")).toHaveAccessibleDescription(PASSWORD_HINT);
 
     // Короткий пароль: ошибка у поля, запроса нет.
     await user.type(screen.getByLabelText("Пароль"), "1234567");
     await user.type(screen.getByLabelText("Повторите пароль"), "1234567");
     await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
     expect(screen.getByText("Пароль должен быть не короче 8 символов")).toBeInTheDocument();
+    expect(screen.queryByText(PASSWORD_HINT)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Пароль")).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByLabelText("Пароль")).toHaveFocus();
 

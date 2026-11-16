@@ -154,7 +154,8 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 сразу): перед запуском смотреть справку.
 
 - База и учётки: `init-db`, `schema-check`, `seed-sources`, `seed-tags`, `seed-scoring`,
-  `apply-scoring-preset`, `seed-signal-topics`, `create-user`, `set-role`, `list-users`, `admission-code`.
+  `apply-scoring-preset`, `seed-signal-topics`, `create-user`, `set-role`, `list-users`, `admission-code`,
+  `auth-attempts` (неудачные входы и регистрации по адресам и почтам), `auth-unlock` (снять паузу почте или адресу).
 - Сбор: `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
   `enqueue-external-scrape`, `enqueue-external-refetch`, `source-retry`, `stats`.
 - Источники: `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
@@ -189,8 +190,10 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
 
 - Вход: `POST /api/auth/login`, `POST /api/auth/register` (регистрация, затем код допуска), `POST /api/auth/admit`
   (код допуска), `POST /api/auth/logout`, `GET /api/auth/me`, `GET /api/auth/options` (без входа: открыта ли
-  регистрация); учётки: `/api/users`.
-- Служебное: `GET /api/health`, `GET /api/readiness`, `/api/jobs`, `/api/maintenance/*`.
+  регистрация); учётки: `/api/users`. Лимиты попыток с адреса и на почту (429 с Retry-After), слабый пароль 400:
+  architecture.md, раздел 6.
+- Служебное: `GET /api/health` (проверка здоровья compose), `GET /api/readiness` (без входа только `ok`, подробности
+  администратору), `/api/jobs`, `/api/maintenance/*`.
 - Лента и сигналы: `GET /api/articles`, `PATCH /api/articles/{id}`, `GET /api/feed-window`,
   `GET /api/signals` (витрины бизнес-ленты и радара, фильтры), `GET /api/signals/summary`,
   `GET /api/signals/dictionaries`, `PATCH /api/signals/{id}` (отметки), `POST /api/signals/feedback`,

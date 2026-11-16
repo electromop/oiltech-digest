@@ -152,6 +152,8 @@ python -m oiltech_digest.cli admission-code --email <почта>   # печат�
 
 В Docker те же команды идут через `docker compose exec app python -m oiltech_digest.cli ...`. Код вводят на экране входа после пароля. Если включена отправка в Telegram (`ADMISSION_NOTIFY_ENABLED=1`), код сам уходит в закрытый чат подтверждающих.
 
+Пароль не короче 8 символов и не из простых: частые пароли, ряды клавиш, повторы, даты, название сервиса и своя почта не принимаются. Попытки входа и регистрации ограничены с одного адреса и на одну почту; кто упёрся в лимит, показывает `auth-attempts`, снять паузу раньше срока: `auth-unlock --email <почта>` или `--ip <адрес>`.
+
 ### Тесты
 
 ```bash
@@ -279,6 +281,9 @@ assets/                  картинки этого README
 | `ADMISSION_NOTIFY_PER_HOUR` | `20` | потолок сообщений с кодом учёткам из регистрации за час |
 | `AUTH_ALLOW_SELF_REGISTRATION` | `true` | `0` закрывает регистрацию на экране входа |
 | `AUTH_SELF_REGISTRATION_PER_HOUR` | `10` | потолок заявок на регистрацию за час (сверх него 429) |
+| `AUTH_REGISTER_PER_IP_HOUR`, `AUTH_FAILURES_PER_IP_HOUR` | `5`, `20` | с одного адреса за час: заявок регистрации и неудачных попыток входа |
+| `AUTH_FAILURES_PER_EMAIL`, `AUTH_EMAIL_WINDOW_MINUTES` | `10`, `15` | неудачных паролей на одну почту за окно в минутах |
+| `AUTH_KNOWN_ADDRESS_DAYS`, `AUTH_ATTEMPTS_RETENTION_DAYS` | `30`, `30` | знакомый адрес почты и срок хранения попыток входа |
 | `TG_MATERIALS_BOT_TOKEN`, `TG_MATERIALS_CHAT_IDS` | пусто | бот «Материалы коллег» и его рабочие группы, на NL |
 | `PROXY_URL`, `PROXY_HOST_OVERRIDES` | пусто | прокси сбора, общий и по доменам |
 | `AI_OFFLINE` | `0` | `1` гонит суть и перевод ленты на заглушке без API |
