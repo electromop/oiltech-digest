@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
 import hashlib
 import hmac
@@ -34,9 +35,10 @@ def validate_password(password: str) -> bool:
 
 PASSWORD_TOO_SHORT = "Пароль должен быть не короче 8 символов"
 WEAK_PASSWORD = ("Пароль слишком простой: такие подбирают первыми. Не берите частые пароли, ряды клавиш и цифр, повторы, "
-                 "даты, название сервиса и свою почту.")
+                 "даты, номер телефона, название сервиса и свою почту.")
 # Слабый пароль (защита входа 16.11.2026): лимиты входа его не спасают, 10 попыток на почту за 15 минут хватает на
-# 12345678. Правила по NIST SP 800-63B: частые пароли, повторы и последовательности, слова сервиса и сама почта.
+# 12345678. Правила по NIST SP 800-63B: частые пароли, повторы и последовательности, даты и телефоны, слова сервиса и
+# сама почта. Случайные цифры (4829173650) проходят.
 _COMMON_PASSWORDS_FILE = Path(__file__).with_name("common_passwords.txt")
 # Сердцевина пароля без цифр и знаков по краям (Password2026! даёт password): частые слова и начала паролей.
 _COMMON_CORES = frozenset({
@@ -70,8 +72,7 @@ def _is_weak(password: str, email: str) -> bool:
         return True
     if len(set(value)) <= 2 or _is_sequence(value) or _is_repeated_block(value):
         return True
-    # Только цифры и знаки, короче 12: дата, телефон или пин-код.
-    if not core and len(value) < 12:
+    if _is_date_or_phone(value):
         return True
     if any(_on_keyboard_run(part) for part in (value, core) if len(part) >= 3):
         return True
@@ -94,6 +95,23 @@ def _is_sequence(value: str) -> bool:
 
 def _is_repeated_block(value: str) -> bool:
     return any(value == (value[:size] * (len(value) // size + 1))[:len(value)] for size in range(1, 5))
+
+
+def _is_date_or_phone(value: str) -> bool:
+    """Только цифры и разделители: дата (16.11.2026, 01011990, 1990-01-31, 31.12.99) или номер мобильного
+    (89991234567, +7 999 123-45-67, 9991234567)."""
+    if not re.fullmatch(r"[\d\s.\-/+()]+", value):
+        return False
+    digits = re.sub(r"\D", "", value)
+    if (len(digits) == 11 and digits[0] in "78" and digits[1] == "9") or (len(digits) == 10 and digits[0] == "9"):
+        return True
+    for layout in {8: ("%d%m%Y", "%Y%m%d", "%m%d%Y"), 6: ("%d%m%y", "%y%m%d")}.get(len(digits), ()):
+        try:
+            datetime.strptime(digits, layout)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def _on_keyboard_run(part: str) -> bool:
@@ -121,10 +139,9 @@ _DUMMY_SALT = "00" * 16
 _DUMMY_HASH = "0" * 64
 
 
-def burn_password_check(password: str) -> bool:
-    """Та же работа, что у проверки настоящего пароля; всегда False."""
+def burn_password_check(password: str) -> None:
+    """Та же работа, что у проверки настоящего пароля; результат не нужен."""
     verify_password(password, _DUMMY_SALT, _DUMMY_HASH)
-    return False
 
 
 def create_session_token() -> str:

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   client_ip   TEXT,
   email       TEXT NOT NULL,
   outcome     TEXT NOT NULL DEFAULT 'pending',
+  forgiven    BOOLEAN NOT NULL DEFAULT FALSE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_auth_attempts_ip ON auth_attempts (client_ip, created_at);

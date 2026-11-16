@@ -903,7 +903,7 @@ def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
 def no_auth_limits(monkeypatch):
     """Тесты эндпоинтов входа без базы: лимиты попыток (auth_limits, счётчики в базе) проверяет
     tests/test_auth_limits.py на изолированной схеме."""
-    monkeypatch.setattr(api.auth_limits, "begin_registration", lambda ip, email: None)
+    monkeypatch.setattr(api.auth_limits, "record_registration", lambda ip, email: None)
     monkeypatch.setattr(api.auth_limits, "begin_sign_in", lambda kind, ip, email: 0)
     monkeypatch.setattr(api.auth_limits, "finish_sign_in", lambda attempt_id, outcome: None)
 

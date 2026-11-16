@@ -2,9 +2,10 @@
 
 FastAPI читает тело целиком раньше проверки сессии и токена, поэтому без входа любой POST принял бы тело любого
 размера. Пределы по пути стоят в Caddy (Caddyfile) и вторым слоем в приложении (request_guard): Caddyfile смонтирован
-одним файлом и после выката может остаться старым до caddy reload. У больших путей (загрузка документа, воркеры NL)
-токен воркера или сессия проверяются до чтения тела. Здесь же сторожа конфигурации: пределы Caddyfile равны пределам
-приложения, а compose доверяет X-Forwarded-For только от внутренних адресов (так приложение видит адрес клиента)."""
+одним файлом и после выката может остаться старым до caddy reload. Большое тело только со входом: токен воркера NL
+ворота проверяют до чтения тела, загрузка документа читает форму сама после проверки входа. Здесь же сторожа
+конфигурации: пределы Caddyfile равны пределам приложения, а compose доверяет X-Forwarded-For только от внутренних
+адресов (так приложение видит адрес клиента)."""
 
 import hashlib
 import re
@@ -110,20 +111,21 @@ def test_worker_path_without_configured_token_answers_503(monkeypatch):
     assert _client().post("/api/external-worker/claim", content=b"{}").status_code == 503
 
 
-def test_upload_needs_a_live_session_before_reading_the_body(monkeypatch):
-    monkeypatch.setattr(request_guard.repository, "session_is_active", lambda token: token == "good")
-    for cookies in ({}, {config.AUTH_COOKIE_NAME: "bad"}):
-        body = _Body(chunks=3, size=1_000)
-        client = _client()
-        client.cookies.update(cookies)
-        refused = client.post("/api/documents", content=body)
-        assert refused.status_code == 401, cookies
-        assert body.taken == 0, cookies
+def test_upload_reads_the_file_only_after_login():
+    """Загрузка документа читает форму сама, после проверки входа: без входа файл не читается вовсе (с параметрами File
+    и Form FastAPI прочитал бы его раньше зависимостей и принял бы во временный файл)."""
+    body = _Body(chunks=3, size=1_000)
 
-    client = _client()
-    client.cookies.set(config.AUTH_COOKIE_NAME, "good")
-    assert client.post("/api/documents", content=b"x" * 3_000_000).json() == {"bytes": 3_000_000}
-    assert _client().get("/api/documents").json() == {"bytes": 0}
+    refused = TestClient(api.app).post("/api/documents", content=body,
+                                       headers={"Content-Type": "multipart/form-data; boundary=x"})
+
+    assert refused.status_code == 401
+    assert body.taken == 0
+
+
+def test_upload_path_is_not_gated_by_the_guard_itself():
+    """Ворота ставят загрузке только предел 32 МБ; вход проверяет маршрут (подмена входа в тестах действует)."""
+    assert _client().post("/api/documents", content=b"x" * 3_000_000).json() == {"bytes": 3_000_000}
 
 
 def test_app_runs_behind_the_guard(monkeypatch):

@@ -14,7 +14,7 @@ from oiltech_digest import api, auth, cli
     "12345678", "123456789", "1234567890", "password", "Password1", "qwerty123", "QWERTY123", "1q2w3e4r", "1qaz2wsx",
     "iloveyou", "aaaaaaaa", "abababab", "11112222", "abcdefgh", "87654321", "123123123", "qweqweqwe", "qwertyuiop",
     "asdfghjkl", "йцукенгш", "пароль123", "password2026!", "01011990", "89991234567", "oiltech2026", "OilTech-Digest",
-    " 12345678 ",
+    " 12345678 ", "16.11.2026", "1990-01-31", "31.12.99", "+7 999 123-45-67", "9991234567",
 ])
 def test_weak_passwords_are_refused(password):
     assert auth.password_problem(password) == auth.WEAK_PASSWORD
@@ -22,7 +22,7 @@ def test_weak_passwords_are_refused(password):
 
 @pytest.mark.parametrize("password", [
     "Kx7#pLm2qRt9", "лунный-кот-читает-сводки", "correct horse battery staple", "8fG2kq0vNw", "Морошка_на_льду_17",
-    "tundra-Falcon-58", "0987plum!Kiwi",
+    "tundra-Falcon-58", "0987plum!Kiwi", "4829173650", "731958204615", "39871234",
 ])
 def test_ordinary_passwords_pass(password):
     assert auth.password_problem(password) is None
@@ -39,11 +39,6 @@ def test_own_email_is_not_a_password(password):
     assert auth.password_problem(password) in (None, auth.WEAK_PASSWORD)
 
 
-def test_long_digit_string_is_not_weak_but_a_date_is():
-    assert auth.password_problem("731958204615") is None
-    assert auth.password_problem("16.11.2026") == auth.WEAK_PASSWORD
-
-
 def test_unknown_email_costs_the_same_password_check(monkeypatch):
     """Почты нет в базе: проверка всё равно проходит PBKDF2, иначе по времени ответа видно, есть ли учётка."""
     calls = []
@@ -51,7 +46,8 @@ def test_unknown_email_costs_the_same_password_check(monkeypatch):
     monkeypatch.setattr(auth, "hash_password", lambda password, salt_hex=None: calls.append(password) or real(
         password, salt_hex=salt_hex))
 
-    assert auth.burn_password_check("any-password") is False
+    auth.burn_password_check("any-password")
+
     assert calls == ["any-password"]
 
 
@@ -59,7 +55,7 @@ def test_authenticate_unknown_email_runs_the_dummy_check(isolated_db, monkeypatc
     from oiltech_digest.db import repository
 
     calls = []
-    monkeypatch.setattr(auth, "burn_password_check", lambda password: calls.append(password) or False)
+    monkeypatch.setattr(auth, "burn_password_check", lambda password: calls.append(password))
 
     assert repository.authenticate_user("nobody@example.test", "Kx7#pLm2qRt9") is None
     assert calls == ["Kx7#pLm2qRt9"]
@@ -84,16 +80,18 @@ def test_registration_refuses_own_email_as_password(isolated_db):
 
 
 def test_admin_cannot_create_or_set_weak_password(monkeypatch):
-    created, changed = [], []
+    """Отказ по паролю ничего не меняет: и роль из того же запроса остаётся прежней."""
+    created, changed, roles = [], [], []
     monkeypatch.setattr(api.repository, "create_user", lambda *args: created.append(args))
     monkeypatch.setattr(api.repository, "get_user_by_id", lambda user_id: {"id": user_id, "email": "u@example.test",
                                                                            "role": "user"})
     monkeypatch.setattr(api.repository, "set_user_password", lambda *args: changed.append(args))
+    monkeypatch.setattr(api.repository, "set_user_role", lambda *args: roles.append(args))
     api.app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "admin@example.test", "role": "admin"}
     try:
         client = TestClient(api.app)
         created_response = client.post("/api/users", json={"email": "u@example.test", "password": "12345678"})
-        changed_response = client.patch("/api/users/7", json={"password": "password1"})
+        changed_response = client.patch("/api/users/7", json={"role": "admin", "password": "password1"})
     finally:
         api.app.dependency_overrides.pop(api.require_admin, None)
 
@@ -101,7 +99,7 @@ def test_admin_cannot_create_or_set_weak_password(monkeypatch):
     assert created_response.json()["detail"] == auth.WEAK_PASSWORD
     assert changed_response.status_code == 400
     assert changed_response.json()["detail"] == auth.WEAK_PASSWORD
-    assert created == [] and changed == []
+    assert created == [] and changed == [] and roles == []
 
 
 def test_cli_create_user_refuses_weak_password(monkeypatch, capsys):

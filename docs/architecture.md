@@ -302,7 +302,8 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: важны проз�
 - Выпуск: `monthly_digests` (общий черновик на месяц), `monthly_digest_items`, `issue_highlights` («Главное в
   выпуске»), `export_jobs`.
 - Документы: `documents`, `document_anchors`, `document_cards`, `document_facts`.
-- Пользователи: `users`, `user_sessions`, `admission_codes`.
+- Пользователи: `users`, `user_sessions`, `admission_codes`, `auth_attempts` (попытки входа и регистрации для лимитов,
+  30 дней).
 - Служебное: `background_jobs` (очередь, регион исполнения, аренда, попытки), `external_worker_consumers`,
   `ai_processing_runs` (аудит каждого вызова модели и его стоимости).
 - История: `article_tags`, `article_scores`, `article_score_items` (теги и баллы статей до 08.11); таблицы

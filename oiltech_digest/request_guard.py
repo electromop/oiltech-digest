@@ -5,20 +5,17 @@ POST принял бы тело любого размера, а у сервер�
 вторым слоем: Caddyfile смонтирован одним файлом и после выката остаётся старым до caddy reload. Числа одни (тест сверяет
 Caddyfile с этим модулем): вход и регистрация 64 КБ (тело меньше 1 КБ); загрузка документа и воркеры NL 32 МБ (файл до
 25 МБ, материал коллег до 20 МБ, итог прогона радара около 3,3 МБ); остальное 2 МБ (самый большой текст интерфейса,
-импорт справочника компаний до 500 тыс. знаков, около 1 МБ). Большое тело пускается только с входом: у воркеров NL
-токен, у загрузки документа живая сессия, оба проверяются до чтения тела."""
+импорт справочника компаний до 500 тыс. знаков, около 1 МБ). Большое тело только со входом: токен воркера NL ворота
+проверяют до чтения тела, а загрузка документа (api.upload_document) читает форму сама, после проверки входа."""
 
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-import anyio
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 
-from oiltech_digest import config
 from oiltech_digest.api_access import external_worker_refusal
-from oiltech_digest.db import repository
 
 AUTH_BODY_BYTES = 64_000
 LARGE_BODY_BYTES = 32_000_000
@@ -57,17 +54,6 @@ def _declared_length(scope: Scope) -> int | None:
     return None
 
 
-async def _large_body_refusal(scope: Scope, path: str) -> tuple[int, str] | None:
-    """Большое тело только с входом: токен воркера NL или живая сессия у загрузки документа."""
-    connection = HTTPConnection(scope)
-    if path.startswith(_WORKER_PREFIX):
-        return external_worker_refusal(connection.headers.get("authorization"))
-    token = connection.cookies.get(config.AUTH_COOKIE_NAME)
-    if not token or not await anyio.to_thread.run_sync(repository.session_is_active, token):
-        return 401, "Not authenticated"
-    return None
-
-
 class RequestGuard:
     """ASGI-слой перед приложением: заявленный размер больше предела, отказ 413 сразу; без Content-Length счёт
     полученных байт, и сверх предела 413 уходит клиенту, а приложение получает обрыв (его ответ отбрасывается)."""
@@ -85,8 +71,9 @@ class RequestGuard:
         if declared is not None and declared > limit:
             await _too_large(limit)(scope, receive, send)
             return
-        if limit == LARGE_BODY_BYTES and scope.get("method") in _BODY_METHODS:
-            refusal = await _large_body_refusal(scope, path)
+        if path.startswith(_WORKER_PREFIX) and scope.get("method") in _BODY_METHODS:
+            # Тот же отказ, что у зависимости маршрутов воркера (api.require_external_worker), но до чтения тела.
+            refusal = external_worker_refusal(HTTPConnection(scope).headers.get("authorization"))
             if refusal is not None:
                 await JSONResponse({"detail": refusal[1]}, status_code=refusal[0])(scope, receive, send)
                 return

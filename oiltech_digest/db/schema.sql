@@ -409,14 +409,15 @@ CREATE TABLE IF NOT EXISTS admission_codes (
 -- Попытки входа и регистрации (защита входа 16.11.2026, auth_limits.py): лимиты с адреса и на почту считаются по этим
 -- строкам. Почта нормализованная, в том числе несуществующая; адрес NULL, если он внутренний (заголовку адреса не
 -- поверили) или неизвестен. Исход: pending (ждёт итога, считается неудачей), ok (верный пароль), bad_password,
--- bad_code (пароль верный, код допуска нет), forgiven (снято командой auth-unlock), done (заявка регистрации).
--- Строки старше AUTH_ATTEMPTS_RETENTION_DAYS удаляет maintenance-cleanup.
+-- bad_code (пароль верный, код допуска нет), done (заявка регистрации). forgiven: снято командой auth-unlock, в лимиты
+-- не идёт. Строки старше AUTH_ATTEMPTS_RETENTION_DAYS удаляет maintenance-cleanup.
 CREATE TABLE IF NOT EXISTS auth_attempts (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   kind        TEXT NOT NULL,
   client_ip   TEXT,
   email       TEXT NOT NULL,
   outcome     TEXT NOT NULL DEFAULT 'pending',
+  forgiven    BOOLEAN NOT NULL DEFAULT FALSE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_auth_attempts_ip ON auth_attempts (client_ip, created_at);

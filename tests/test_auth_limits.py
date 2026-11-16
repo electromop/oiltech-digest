@@ -312,6 +312,33 @@ def test_unlock_command_clears_the_address_limit(isolated_db, monkeypatch, capsy
     assert _login(HOME, email="c@example.test").status_code == 401
 
 
+def test_unlocking_an_address_keeps_the_email_reset_by_a_right_password(isolated_db, monkeypatch, capsys):
+    """Верный пароль на шаге кода (неверный код) обнулил окно почты. Снятие лимита с адреса прощает его неудачи, но
+    факт верного пароля остаётся: пауза почты от этого не возвращается."""
+    _limits(monkeypatch, per_ip=3, per_email=2)
+    user = repository.create_user(EMAIL, PASSWORD, "user")
+    code, _ = admission.issue_code(int(user["id"]), force=True)
+    wrong = "00000000" if code != "00000000" else "11111111"
+    assert _login(ATTACKERS[0], password="wrong-password").status_code == 401
+    assert _client(HOME).post("/api/auth/admit",
+                              json={"email": EMAIL, "password": PASSWORD, "code": wrong}).status_code == 400
+    assert _login(ATTACKERS[1], password="wrong-password").status_code == 401
+
+    cli.main(["auth-unlock", "--ip", f"::ffff:{HOME}"])
+
+    assert "снято: 1" in capsys.readouterr().out
+    assert _login(OFFICE).status_code == 200
+
+
+def test_unlock_command_needs_a_valid_target(isolated_db, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["auth-unlock"])
+    with pytest.raises(SystemExit):
+        cli.main(["auth-unlock", "--ip", "not-an-address"])
+
+    assert "не адрес" in capsys.readouterr().out
+
+
 def test_attempts_report_shows_addresses_and_emails(member, monkeypatch, capsys):
     _limits(monkeypatch, per_email=2)
     _login(ATTACKERS[0], password="wrong-password")

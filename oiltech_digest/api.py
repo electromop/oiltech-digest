@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -436,16 +437,15 @@ def _too_many(exc: auth_limits.Refused) -> HTTPException:
     return HTTPException(status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after)})
 
 
-def _sign_in(kind: str, email: str, password: str, request: Request) -> tuple[dict[str, Any], int]:
-    """Вход и шаг кода: сначала лимиты адреса и почты (до хэша пароля), затем пароль. Неверный пароль: 401 и неудача в
-    счёт; верный: учётка и номер попытки, итог которой пишет вызывающий."""
+def _sign_in(kind: auth_limits.SignInKind, payload: AuthPayload | AdmitPayload,
+             request: Request) -> tuple[dict[str, Any], int]:
+    """Вход и шаг кода: лимиты и пароль (auth_limits.authenticate). Сверх лимита 429, неверный пароль 401; верный:
+    учётка и номер попытки, итог которой пишет вызывающий."""
     try:
-        attempt = auth_limits.begin_sign_in(kind, _client_ip(request), email)
+        user, attempt = auth_limits.authenticate(kind, _client_ip(request), payload.email, payload.password)
     except auth_limits.Refused as exc:
         raise _too_many(exc) from None
-    user = repository.authenticate_user(email, password)
     if user is None:
-        auth_limits.finish_sign_in(attempt, auth_limits.BAD_PASSWORD)
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
     return user, attempt
 
@@ -467,14 +467,14 @@ def auth_register(payload: AuthPayload, request: Request) -> dict[str, Any]:
     if problem:
         raise HTTPException(status_code=400, detail=problem)
     try:
-        auth_limits.begin_registration(_client_ip(request), email)
+        auth_limits.record_registration(_client_ip(request), email)
     except auth_limits.Refused as exc:
         raise _too_many(exc) from None
     try:
         # Роль всегда user: другие поля запроса модель AuthPayload отбрасывает.
         user = repository.register_user(email, payload.password, config.AUTH_SELF_REGISTRATION_PER_HOUR)
-    except repository.RegistrationsCapped:
-        raise HTTPException(status_code=429, detail="Сейчас слишком много новых регистраций, попробуйте позже")
+    except repository.RegistrationsCapped as exc:
+        raise _too_many(auth_limits.Refused(auth_limits.REGISTRATIONS_CAPPED, exc.retry_after)) from None
     except repository.UserExists:
         # Честный ответ: скрыть занятую почту без подтверждения почты письмом нельзя (вход тем же паролем всё
         # равно отличит), а владелец, чью почту заняли, должен узнать об этом сразу. Учётка не меняется.
@@ -490,7 +490,7 @@ def auth_register(payload: AuthPayload, request: Request) -> dict[str, Any]:
 
 @app.post("/api/auth/login")
 def auth_login(payload: AuthPayload, request: Request, response: Response) -> dict[str, Any]:
-    user, attempt = _sign_in("login", payload.email, payload.password, request)
+    user, attempt = _sign_in(auth_limits.LOGIN, payload, request)
     auth_limits.finish_sign_in(attempt, auth_limits.OK)
     return _login_or_admission(user, response)
 
@@ -499,7 +499,7 @@ def auth_login(payload: AuthPayload, request: Request, response: Response) -> di
 def auth_admit(payload: AdmitPayload, request: Request, response: Response) -> dict[str, Any]:
     """Шаг «код допуска» (#113): почта, пароль и код одним запросом: допуск и сессия. Неверный код идёт в лимит
     адреса, почту не закрывает: у кода свой счёт попыток."""
-    user, attempt = _sign_in("admit", payload.email, payload.password, request)
+    user, attempt = _sign_in(auth_limits.ADMIT, payload, request)
     try:
         admission.redeem(int(user["id"]), payload.code)
     except admission.AdmissionRefused as exc:
@@ -561,15 +561,17 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
     target = repository.get_user_by_id(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    # Пароль проверяется до любых изменений: отказ по паролю не должен оставить сменённую роль.
+    problem = (auth.password_problem(payload.password, str(target.get("email") or ""))
+               if payload.password is not None else None)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     if payload.role is not None:
         new_role = payload.role if payload.role in ("admin", "user") else "user"
         if target["role"] == "admin" and new_role != "admin" and repository.count_admins() <= 1:
             raise HTTPException(status_code=400, detail="Нельзя снять роль у последнего администратора")
         repository.set_user_role(user_id, new_role)
     if payload.password is not None:
-        problem = auth.password_problem(payload.password, str(target.get("email") or ""))
-        if problem:
-            raise HTTPException(status_code=400, detail=problem)
         repository.set_user_password(user_id, payload.password)
         if int(user["id"]) != user_id:
             # Чужой пароль сменён, под ним мог войти кто угодно: снова через код допуска (#113).
@@ -2792,22 +2794,29 @@ def _documents_dir() -> Path:
     return directory
 
 
+_FORM_TRUE = frozenset({"1", "true", "yes", "on", "t", "y"})
+
+
 @app.post("/api/documents")
-async def upload_document(
-    file: UploadFile = File(...),
-    attested: bool = Form(False),
-    user: dict[str, Any] = Depends(require_admin),
-) -> dict[str, Any]:
+async def upload_document(request: Request, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Загрузка документа (поля формы file и attested). Форму эндпоинт читает сам, после проверки входа: с параметрами
+    File и Form FastAPI прочитал бы её раньше зависимостей, и без входа сервер принимал бы файл до 32 МБ во временный
+    файл (защита входа 16.11.2026, request_guard.py)."""
     if not config.UPLOAD_DOCS_ENABLED:
         raise HTTPException(status_code=503, detail="Приём файлов временно выключен")
     # Внешний контур выключен → отклоняем НА ВХОДЕ. Поставленная задача без внешнего
     # исполнителя не откладывается, а гибнет: её заберёт локальный воркер и завалит.
     if network_policy.route_ai_processing().execution_region != "external":
         raise HTTPException(status_code=503, detail="Внешний контур обработки недоступен — загрузка отключена")
-    if not attested:
-        raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
+    async with request.form(max_files=1, max_fields=10) as form:
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(status_code=422, detail="Нет файла: поле формы file")
+        if str(form.get("attested") or "").strip().lower() not in _FORM_TRUE:
+            raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
+        data = await file.read()
+        filename = file.filename
 
-    data = await file.read()
     if len(data) > config.UPLOAD_MAX_FILE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -2839,7 +2848,7 @@ async def upload_document(
 
     document_id = documents_repo.create_document(
         owner_user_id=int(user["id"]),
-        filename=(file.filename or "документ")[:300],
+        filename=(filename or "документ")[:300],
         storage_path=str(storage_path),
         kind=kind,
         size_bytes=len(data),

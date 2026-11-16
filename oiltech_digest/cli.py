@@ -102,7 +102,12 @@ def cmd_auth_unlock(args: argparse.Namespace) -> None:
     """Снять паузу почте или лимит адресу раньше срока: их неудачи и заявки больше не считаются."""
     from oiltech_digest import auth_limits
 
-    print(f"Неудачных попыток и заявок снято: {auth_limits.unlock(email=args.email, ip=args.ip)}")
+    try:
+        removed = auth_limits.unlock(email=args.email, ip=args.ip)
+    except ValueError:
+        print(f"{args.ip}: не адрес IPv4 или IPv6")
+        raise SystemExit(1) from None
+    print(f"Неудачных попыток и заявок снято: {removed}")
 
 
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
@@ -1783,34 +1788,14 @@ def cmd_scheduler_lock(args: argparse.Namespace) -> None:
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
-    """Шаг планировщика (docker-scheduler.sh): сессии, задачи, выгрузки и попытки входа старше срока хранения."""
-    from oiltech_digest import auth_limits, config
-    from oiltech_digest.db import repository
+    """Шаг планировщика (docker-scheduler.sh): сессии, задачи, выгрузки и попытки входа старше срока хранения. Чистит то
+    же, что /api/maintenance/cleanup (maintenance.maintenance_cleanup), вывод прежний."""
+    from oiltech_digest.maintenance import maintenance_cleanup
 
-    background_job_days = (
-        config.BACKGROUND_JOB_RETENTION_DAYS
-        if args.background_job_days is None
-        else args.background_job_days
-    )
-    export_job_days = (
-        config.EXPORT_JOB_RETENTION_DAYS
-        if args.export_job_days is None
-        else args.export_job_days
-    )
-    deleted_sessions = repository.delete_expired_user_sessions()
-    deleted_background_jobs = repository.cleanup_finished_background_jobs(background_job_days)
-    deleted_export_jobs = repository.cleanup_finished_export_jobs(export_job_days)
-    # Адрес и почта попыток входа (защита входа 16.11.2026) хранятся AUTH_ATTEMPTS_RETENTION_DAYS дней.
-    deleted_auth_attempts = auth_limits.prune()
-    print(
-        "maintenance-cleanup: "
-        f"expired_sessions={deleted_sessions}, "
-        f"background_jobs={deleted_background_jobs}, "
-        f"background_job_days={background_job_days}, "
-        f"export_jobs={deleted_export_jobs}, "
-        f"export_job_days={export_job_days}, "
-        f"auth_attempts={deleted_auth_attempts}"
-    )
+    result = maintenance_cleanup(background_job_days=args.background_job_days, export_job_days=args.export_job_days)
+    keys = ("expired_sessions", "background_jobs", "background_job_days", "export_jobs", "export_job_days",
+            "auth_attempts")
+    print("maintenance-cleanup: " + ", ".join(f"{key}={result[key]}" for key in keys))
 
 
 def cmd_bench_readiness(args: argparse.Namespace) -> None:
@@ -2816,8 +2801,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_aa.set_defaults(func=cmd_auth_attempts)
 
     p_au = sub.add_parser("auth-unlock", help="снять паузу почте или лимит адресу раньше срока")
-    p_au.add_argument("--email", help="почта, вход которой на паузе")
-    p_au.add_argument("--ip", help="адрес, упёршийся в лимит")
+    p_au_who = p_au.add_mutually_exclusive_group(required=True)
+    p_au_who.add_argument("--email", help="почта, вход которой на паузе")
+    p_au_who.add_argument("--ip", help="адрес, упёршийся в лимит")
     p_au.set_defaults(func=cmd_auth_unlock)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
