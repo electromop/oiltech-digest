@@ -348,6 +348,13 @@
   font-weight: var(--ot-weight-bold);
 }
 
+@media (hover: hover) {
+  .authSwitchLink:hover {
+    color: var(--ot-link-hover);
+    text-decoration: underline;
+  }
+}
+
 /* --- До 1056px: навигация уходит в меню шапки --- */
 @media (max-width: 1055px) {
   .shell,

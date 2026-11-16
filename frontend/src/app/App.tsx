@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
-import { admit, getSession, login, logout, register } from "../api/auth";
+import { admit, getAuthOptions, getSession, login, logout, register } from "../api/auth";
 import type { AuthResponse, User } from "../api/types";
 import { CompanyDescriptionPage } from "../features/companies/CompanyDescriptionPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
@@ -11,10 +11,16 @@ import { MaterialsPage } from "../features/materials/MaterialsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
+import { PasswordField } from "../features/shared/PasswordField";
+import { registrationProblems, type RegistrationErrors } from "../features/shared/passwordRules";
 import { SignalRadarPage } from "../features/signals/SignalRadarPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
+
+// Поля пароля формы входа и регистрации: id нужен и разметке, и переносу фокуса к ошибке.
+const PASSWORD_FIELD_ID = "auth-password";
+const PASSWORD_REPEAT_FIELD_ID = "auth-password-repeat";
 
 type ScreenId =
   | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "scoring" | "tags" | "users" | "jobs"
@@ -148,6 +154,11 @@ export function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Регистрация (решение владельца 16.11): повтор пароля и ошибки полей видны до запроса. Ссылка на неё
+  // видна, пока сервер не закрыл регистрацию флагом (/api/auth/options).
+  const [passwordRepeat, setPasswordRepeat] = useState("");
+  const [authErrors, setAuthErrors] = useState<RegistrationErrors>({});
+  const [registrationOpen, setRegistrationOpen] = useState(true);
   // Шаг «код допуска» (#113): пароль верный, учётка ждёт допуска: пояснение сервера и поле кода.
   const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
   const [admissionCode, setAdmissionCode] = useState("");
@@ -161,6 +172,23 @@ export function App() {
   useEffect(() => {
     void loadSession();
   }, []);
+
+  // Экран входа: открыта ли регистрация. Сбой запроса оставляет ссылку: закрытую сервер всё равно не пустит (403).
+  useEffect(() => {
+    if (authLoading || user) return;
+    let cancelled = false;
+    getAuthOptions()
+      .then((options) => {
+        if (cancelled) return;
+        const open = options.self_registration !== false;
+        setRegistrationOpen(open);
+        if (!open) setAuthMode("login");
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user]);
 
   // Обычное уведомление уходит само через 2,8 с; ошибка остаётся, пока её не закроют:
   // за 2,8 с текст ошибки не всегда успевают прочитать.
@@ -299,17 +327,40 @@ export function App() {
 
   async function submitAuth(event?: FormEvent) {
     event?.preventDefault();
+    if (authMode === "register") {
+      const problems = registrationProblems(password, passwordRepeat);
+      setAuthErrors(problems);
+      if (problems.password || problems.repeat) {
+        document.getElementById(problems.password ? PASSWORD_FIELD_ID : PASSWORD_REPEAT_FIELD_ID)?.focus();
+        return;
+      }
+    }
     try {
+      // Новая учётка не допущена: сервер отвечает «нужен код допуска», и форма переходит к шагу кода (#113).
       const payload = authMode === "register" ? await register(email.trim(), password) : await login(email.trim(), password);
       if ("admission_required" in payload) {
         setAdmissionCode("");
         setAdmissionNotice(payload.detail);
         return;
       }
-      enter(payload, authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
+      // Сессию открывает только вход допущенной учётки: регистрация всегда ведёт к шагу кода.
+      enter(payload, "Вход выполнен");
     } catch (error) {
-      showToast(error instanceof Error ? error.message : "Не удалось выполнить вход", "error");
+      const fallback = authMode === "register" ? "Не удалось зарегистрироваться" : "Не удалось выполнить вход";
+      showToast(error instanceof Error ? error.message : fallback, "error");
     }
+  }
+
+  // Вход и регистрация на одной карточке: почта переходит между ними, пароли и ошибки нет.
+  function switchAuthMode() {
+    setAuthMode((mode) => (mode === "login" ? "register" : "login"));
+    clearPasswords();
+  }
+
+  function clearPasswords() {
+    setPassword("");
+    setPasswordRepeat("");
+    setAuthErrors({});
   }
 
   async function submitAdmission(event?: FormEvent) {
@@ -321,17 +372,20 @@ export function App() {
     }
   }
 
+  // После регистрации учётка уже есть: «Назад ко входу» ведёт ко входу, а не к повторной регистрации.
   function leaveAdmission() {
     setAdmissionNotice(null);
     setAdmissionCode("");
-    setPassword("");
+    setAuthMode("login");
+    clearPasswords();
   }
 
   function enter(payload: AuthResponse, message: string) {
     setUser(payload.user);
     setAdmissionNotice(null);
     setAdmissionCode("");
-    setPassword("");
+    setAuthMode("login");
+    clearPasswords();
     showToast(message);
   }
 
@@ -402,14 +456,15 @@ export function App() {
   }
 
   if (!user) {
+    const registering = authMode === "register";
     return (
       <div className="authShellReact">
         <main className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
-          <h1>{authMode === "register" ? "Регистрация" : "Вход в админ-панель"}</h1>
+          <h1>{registering ? "Регистрация" : "Вход в админ-панель"}</h1>
           <p>
-            {authMode === "register"
-              ? "Создайте аккаунт, чтобы работать с редакторскими инструментами."
+            {registering
+              ? "Создайте аккаунт. После регистрации понадобится код допуска: его передадут подтверждающие."
               : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
           </p>
           {/* Форма: Enter в поле пароля отправляет вход (раньше срабатывала только кнопка). */}
@@ -427,29 +482,51 @@ export function App() {
                 spellCheck={false}
               />
             </label>
-            <label className="field">
-              <span>Пароль</span>
-              <input
-                type="password"
-                name="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Не короче 8 символов"
-                autoComplete={authMode === "register" ? "new-password" : "current-password"}
+            <PasswordField
+              key={authMode}
+              id={PASSWORD_FIELD_ID}
+              label="Пароль"
+              name="password"
+              value={password}
+              onChange={(value) => {
+                setPassword(value);
+                setAuthErrors({});
+              }}
+              placeholder="Не короче 8 символов"
+              autoComplete={registering ? "new-password" : "current-password"}
+              error={registering ? authErrors.password : undefined}
+            />
+            {registering ? (
+              <PasswordField
+                id={PASSWORD_REPEAT_FIELD_ID}
+                label="Повторите пароль"
+                name="password-repeat"
+                value={passwordRepeat}
+                onChange={(value) => {
+                  setPasswordRepeat(value);
+                  setAuthErrors({});
+                }}
+                placeholder="Тот же пароль"
+                autoComplete="new-password"
+                error={authErrors.repeat}
               />
-            </label>
+            ) : null}
             <div className="authActions">
               <button type="submit" className="primaryButton">
-                {authMode === "register" ? "Зарегистрироваться" : "Войти"}
+                {registering ? "Зарегистрироваться" : "Войти"}
               </button>
             </div>
           </form>
-          {/* Переключателя «Зарегистрироваться» больше нет: самостоятельная
-              регистрация закрыта (#33), и кнопка вела в 403. Учётки заводит
-              администратор: экран «Пользователи» или CLI create-user. */}
-          <div className="authSwitchText">
-            Нет доступа? Обратитесь к администратору платформы.
-          </div>
+          {/* Самостоятельная регистрация снова открыта (решение владельца 16.11): ворота теперь код
+              допуска (#113), а не закрытый путь регистрации (#33). Флаг на сервере её закрывает, и ссылки нет. */}
+          {registrationOpen ? (
+            <div className="authSwitchText">
+              {registering ? "Уже есть аккаунт?" : "Нет аккаунта?"}{" "}
+              <button type="button" className="authSwitchLink" onClick={switchAuthMode}>
+                {registering ? "Войдите" : "Зарегистрируйтесь"}
+              </button>
+            </div>
+          ) : null}
         </main>
         {toastRegion}
       </div>

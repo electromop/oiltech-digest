@@ -386,6 +386,11 @@ BEGIN
   END IF;
 END $$;
 
+-- Учётку завели сами на экране входа (регистрация снова открыта 16.11), администратор за неё не ручался. Читают:
+-- сообщение подтверждающим, потолки регистраций и сообщений с кодом, экран «Пользователи», list-users и назначение
+-- первого администратора (ensure_admin_bootstrap такую учётку не берёт).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS self_registered BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Код допуска: у учётки один действующий, новый заменяет прежний. Сам код не хранится: только
 -- отпечаток (PBKDF2, как пароль). notify_job_id: задача отправки в Telegram (external-notify).
 CREATE TABLE IF NOT EXISTS admission_codes (

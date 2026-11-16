@@ -20,6 +20,11 @@ export function admit(email: string, password: string, code: string) {
   });
 }
 
+// Без входа: открыта ли самостоятельная регистрация (флаг на сервере).
+export function getAuthOptions() {
+  return apiFetch<{ self_registration: boolean }>("/api/auth/options");
+}
+
 export function register(email: string, password: string) {
   return apiFetch<LoginResponse>("/api/auth/register", {
     method: "POST",

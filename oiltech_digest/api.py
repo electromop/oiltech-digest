@@ -418,12 +418,20 @@ def auth_me(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     return _session_payload(user)
 
 
+@app.get("/api/auth/options")
+def auth_options() -> dict[str, Any]:
+    """Без входа: открыта ли регистрация. Экран входа показывает ссылку «Зарегистрируйтесь» только при открытой."""
+    return {"self_registration": config.AUTH_ALLOW_SELF_REGISTRATION}
+
+
 @app.post("/api/auth/register")
-def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
+def auth_register(payload: AuthPayload) -> dict[str, Any]:
+    """Самостоятельная регистрация (снова открыта 16.11, ворота: код допуска #113). Учётка с ролью user, без
+    допуска и с пометкой self_registered; сессии нет, ответ «нужен код допуска»."""
     if not config.AUTH_ALLOW_SELF_REGISTRATION:
-        # Самостоятельная регистрация закрыта (#33). Учётки заводит администратор:
-        # экран «Пользователи» или CLI create-user. 403, а не 404: путь существует,
-        # просто выключен, и честный код помогает разобраться при настройке.
+        # Регистрацию закрыли флагом (по умолчанию она открыта, решение владельца 16.11). Учётки
+        # заводит администратор: экран «Пользователи» или CLI create-user. 403, а не 404: путь
+        # существует, просто выключен, и честный код помогает разобраться при настройке.
         raise HTTPException(status_code=403, detail="Регистрация закрыта, обратитесь к администратору")
     email = auth.normalize_email(payload.email)
     if not auth.validate_email(email):
@@ -431,10 +439,21 @@ def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
     if not auth.validate_password(payload.password):
         raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
     try:
-        user = repository.create_user(email, payload.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _login_or_admission(user, response)
+        # Роль всегда user: другие поля запроса модель AuthPayload отбрасывает.
+        user = repository.register_user(email, payload.password, config.AUTH_SELF_REGISTRATION_PER_HOUR)
+    except repository.RegistrationsCapped:
+        raise HTTPException(status_code=429, detail="Сейчас слишком много новых регистраций, попробуйте позже")
+    except repository.UserExists:
+        # Честный ответ: скрыть занятую почту без подтверждения почты письмом нельзя (вход тем же паролем всё
+        # равно отличит), а владелец, чью почту заняли, должен узнать об этом сразу. Учётка не меняется.
+        raise HTTPException(status_code=409,
+                            detail="Учётка с этой почтой уже есть: войдите или обратитесь к администратору")
+    try:
+        notice = admission.request_code(user)
+    except Exception:  # noqa: BLE001 - учётка заведена; код выдаст следующий вход с паролем
+        logger.exception("admission: код новой учётке №%s не выдан", user["id"])
+        notice = admission.REQUIRED_ASK
+    return _admission_required(notice)
 
 
 @app.post("/api/auth/login")
@@ -460,12 +479,15 @@ def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
     return _session_payload(user)
 
 
+def _admission_required(notice: str) -> dict[str, Any]:
+    return {"ok": False, "admission_required": True, "detail": notice}
+
+
 def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, Any]:
     """Допущенной учётке: сессия. Недопущенной: «нужен код допуска» без сессии (200, а не
     отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
     if not admission.is_admitted(int(user["id"])):
-        notice = admission.request_code(user)
-        return {"ok": False, "admission_required": True, "detail": notice}
+        return _admission_required(admission.request_code(user))
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
     return _session_payload(user)
@@ -1261,8 +1283,10 @@ def feedback_training_set(limit: int = Query(500, ge=1, le=2000), reason: str | 
     return [_clean(row) for row in repository.feedback_training_set(limit=limit, reason=reason)]
 
 
+# Расход ИИ видят только администраторы, как «Статистику» (решение владельца). Учётки из регистрации (16.11)
+# расширили круг пользователей, поэтому отчёты закрыты так же.
 @app.get("/api/reports/ai-cost")
-def ai_cost(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
+def ai_cost(user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_cost_report()]
 
 
@@ -1270,7 +1294,7 @@ def ai_cost(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]
 def ai_article_cost(
     limit: int = Query(20, ge=1, le=200),
     include_partial: bool = False,
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_article_cost_report(limit=limit, complete_only=not include_partial)]
 

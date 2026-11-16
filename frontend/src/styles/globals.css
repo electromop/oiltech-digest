@@ -895,9 +895,17 @@
 
 .userRow {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.5fr) auto;
+  grid-template-columns: minmax(0, 1.4fr) minmax(190px, 0.5fr) minmax(190px, 0.5fr) auto;
   gap: 12px 16px;
   align-items: end;
+}
+
+/* Подпись под строкой учётки из регистрации (с 16.11): администратор за неё не ручался. */
+.userRowNote {
+  margin: var(--ot-space-03) 0 0;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
 }
 
 .sourceCardReact {

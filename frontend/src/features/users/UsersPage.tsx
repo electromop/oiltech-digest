@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from "../shared/passwordRules";
 import { SkeletonList } from "../shared/Skeleton";
 import { createUser, deleteUser, listUsers, updateUser } from "../../api/users";
 import type { User } from "../../api/types";
@@ -12,6 +13,22 @@ type Props = {
 };
 
 const ROLE_LABEL: Record<string, string> = { admin: "Администратор", user: "Пользователь" };
+
+// Допуск по коду (#113): есть с даты или ждёт кода, пока подтверждающие его не передали. Учётку из регистрации на
+// экране входа (с 16.11) отмечает подпись под строкой: администратор за неё не ручался.
+function admissionLabel(target: User) {
+  return target.admitted_at ? `есть с ${formatDay(target.admitted_at)}` : "ждёт кода";
+}
+
+function originNote(target: User) {
+  const day = target.created_at ? ` ${formatDay(target.created_at)}` : "";
+  return `Учётку завели сами на экране входа${day}.`;
+}
+
+function formatDay(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" });
+}
 
 export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
   const [users, setUsers] = useState<User[]>([]);
@@ -46,8 +63,8 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
   }
 
   async function handleCreate() {
-    if (!email.trim() || password.length < 8) {
-      showToast("Укажите email и пароль не короче 8 символов", "error");
+    if (!email.trim() || password.length < MIN_PASSWORD_LENGTH) {
+      showToast(`Укажите email и пароль не короче ${MIN_PASSWORD_LENGTH} символов`, "error");
       return;
     }
     try {
@@ -79,10 +96,10 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
   }
 
   async function handleResetPassword(target: User) {
-    const next = window.prompt(`Новый пароль для ${target.email} (не короче 8 символов):`, "");
+    const next = window.prompt(`Новый пароль для ${target.email} (не короче ${MIN_PASSWORD_LENGTH} символов):`, "");
     if (next === null) return;
-    if (next.length < 8) {
-      showToast("Пароль должен быть не короче 8 символов", "error");
+    if (next.length < MIN_PASSWORD_LENGTH) {
+      showToast(PASSWORD_TOO_SHORT, "error");
       return;
     }
     try {
@@ -130,7 +147,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
           </label>
           <label className="field">
             <span>Пароль</span>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Не короче 8 символов" />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={`Не короче ${MIN_PASSWORD_LENGTH} символов`} />
           </label>
           <label className="field">
             <span>Роль</span>
@@ -175,6 +192,10 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
                         <option value="admin">Администратор</option>
                       </select>
                     </label>
+                    <label className="field">
+                      <span>Допуск</span>
+                      <input value={admissionLabel(target)} readOnly />
+                    </label>
                     <div className="settingsActions">
                       <button type="button" className="ghostButton" onClick={() => void handleResetPassword(target)}>
                         Сменить пароль
@@ -190,6 +211,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
                       </button>
                     </div>
                   </div>
+                  {target.self_registered ? <p className="userRowNote">{originNote(target)}</p> : null}
                 </div>
               );
             })}

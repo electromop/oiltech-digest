@@ -558,9 +558,9 @@ describe("App smoke", () => {
 
     expect(await screen.findByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
 
-    // Самостоятельной регистрации нет с 17.09: доступ выдаёт администратор.
-    expect(screen.queryByRole("button", { name: "Зарегистрироваться" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Обратитесь к администратору/)).toBeInTheDocument();
+    // Регистрация снова открыта (решение владельца 16.11): ссылка под формой входа.
+    expect(screen.getByRole("button", { name: "Зарегистрируйтесь" })).toBeInTheDocument();
+    expect(screen.queryByText(/Обратитесь к администратору/)).not.toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("you@example.com"), "user@example.com");
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
@@ -642,6 +642,138 @@ describe("App smoke", () => {
 
     expect(screen.getByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Не короче 8 символов")).toHaveValue("");
+  });
+
+  it("регистрация: ссылка под входом, правила пароля до запроса, затем шаг кода допуска", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    const registerBodies: unknown[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/register" && (init?.method ?? "GET") === "POST") {
+        registerBodies.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(jsonResponse({
+          ok: false,
+          admission_required: true,
+          detail: "Нужен код допуска: код отправлен подтверждающим, получите его у них.",
+        }));
+      }
+      return baseImpl!(input, init);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Туда и обратно: почта остаётся, пароль нет.
+    await user.click(await screen.findByRole("button", { name: "Зарегистрируйтесь" }));
+    expect(screen.getByRole("heading", { name: "Регистрация" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Эл. почта"), "new.person@example.com");
+    await user.type(screen.getByLabelText("Пароль"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войдите" }));
+    expect(screen.getByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Повторите пароль")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Зарегистрируйтесь" }));
+    expect(screen.getByLabelText("Эл. почта")).toHaveValue("new.person@example.com");
+    expect(screen.getByLabelText("Пароль")).toHaveValue("");
+
+    // Короткий пароль: ошибка у поля, запроса нет.
+    await user.type(screen.getByLabelText("Пароль"), "1234567");
+    await user.type(screen.getByLabelText("Повторите пароль"), "1234567");
+    await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
+    expect(screen.getByText("Пароль должен быть не короче 8 символов")).toBeInTheDocument();
+    expect(screen.getByLabelText("Пароль")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Пароль")).toHaveFocus();
+
+    // Повтор не совпал: ошибка у повтора, запроса нет.
+    await user.type(screen.getByLabelText("Пароль"), "8");
+    expect(screen.queryByText("Пароль должен быть не короче 8 символов")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
+    expect(screen.getByText("Пароли не совпадают")).toBeInTheDocument();
+    expect(screen.getByLabelText("Повторите пароль")).toHaveFocus();
+    expect(registerBodies).toEqual([]);
+
+    // У каждого поля пароля своя кнопка «Показать пароль».
+    const [, showRepeat] = screen.getAllByRole("button", { name: "Показать пароль" });
+    await user.click(showRepeat);
+    expect(screen.getByLabelText("Повторите пароль")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Пароль")).toHaveAttribute("type", "password");
+
+    await user.type(screen.getByLabelText("Повторите пароль"), "8");
+    await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
+
+    expect(await screen.findByRole("heading", { name: "Код допуска" })).toBeInTheDocument();
+    expect(screen.getByText(/код отправлен подтверждающим/)).toBeInTheDocument();
+    expect(registerBodies).toEqual([{ email: "new.person@example.com", password: "12345678" }]);
+
+    // Учётка уже заведена: назад значит ко входу, а не к новой регистрации.
+    await user.click(screen.getByRole("button", { name: "Назад ко входу" }));
+    expect(screen.getByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
+  });
+
+  it("занятая почта: честный ответ сервера, форма регистрации остаётся", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/register" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse(
+          { detail: "Учётка с этой почтой уже есть: войдите или обратитесь к администратору" }, { status: 409 },
+        ));
+      }
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Зарегистрируйтесь" }));
+    await user.type(screen.getByLabelText("Эл. почта"), "user@example.com");
+    await user.type(screen.getByLabelText("Пароль"), "12345678");
+    await user.type(screen.getByLabelText("Повторите пароль"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
+
+    expect(await screen.findByText(/Учётка с этой почтой уже есть/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Регистрация" })).toBeInTheDocument();
+  });
+
+  it("«Показать пароль» в форме входа показывает введённое, прячет по кнопке и при отправке", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse({ detail: "Неверный email или пароль" }, { status: 401 }));
+      }
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const field = await screen.findByLabelText("Пароль");
+    await user.type(field, "12345678");
+    expect(field).toHaveAttribute("type", "password");
+
+    await user.click(screen.getByRole("button", { name: "Показать пароль" }));
+    expect(field).toHaveAttribute("type", "text");
+    expect(field).toHaveValue("12345678");
+
+    await user.click(screen.getByRole("button", { name: "Скрыть пароль" }));
+    expect(field).toHaveAttribute("type", "password");
+
+    // Отправка формы снова прячет пароль: открытым текстом браузер мог бы запомнить его в истории полей.
+    await user.click(screen.getByRole("button", { name: "Показать пароль" }));
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByText("Неверный email или пароль")).toBeInTheDocument();
+    expect(field).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: "Показать пароль" })).toBeInTheDocument();
+  });
+
+  it("регистрацию закрыл флаг на сервере: ссылки под входом нет", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/options") {
+        return Promise.resolve(jsonResponse({ self_registration: false }));
+      }
+      return baseImpl!(input, init);
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Зарегистрируйтесь" })).not.toBeInTheDocument());
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/auth/options")).toBe(true);
   });
 
   it("opens hidden jobs page from query string without adding it to navigation", async () => {
