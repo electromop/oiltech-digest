@@ -12,7 +12,7 @@ import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { PasswordField } from "../features/shared/PasswordField";
-import { registrationProblems, type RegistrationErrors } from "../features/shared/passwordRules";
+import { MIN_PASSWORD_LENGTH, registrationProblems, type RegistrationErrors } from "../features/shared/passwordRules";
 import { SignalRadarPage } from "../features/signals/SignalRadarPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
@@ -492,7 +492,7 @@ export function App() {
                 setPassword(value);
                 setAuthErrors({});
               }}
-              placeholder="Не короче 8 символов"
+              placeholder={`Не короче ${MIN_PASSWORD_LENGTH} символов`}
               autoComplete={registering ? "new-password" : "current-password"}
               error={registering ? authErrors.password : undefined}
             />

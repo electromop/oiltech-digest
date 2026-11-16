@@ -106,6 +106,8 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
       setBusy(true);
       await updateUser(target.id, { password: next });
       showToast("Пароль обновлён");
+      // Смена чужого пароля снимает допуск (#113): поле «Допуск» должно это показать сразу.
+      await reload();
     } catch (error) {
       handleError(error, "Не удалось сменить пароль");
     } finally {
