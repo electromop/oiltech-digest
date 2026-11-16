@@ -17,6 +17,7 @@ from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException,
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -2808,7 +2809,13 @@ async def upload_document(request: Request, user: dict[str, Any] = Depends(requi
     # исполнителя не откладывается, а гибнет: её заберёт локальный воркер и завалит.
     if network_policy.route_ai_processing().execution_region != "external":
         raise HTTPException(status_code=503, detail="Внешний контур обработки недоступен — загрузка отключена")
-    async with request.form(max_files=1, max_fields=10) as form:
+    try:
+        form = await request.form(max_files=1, max_fields=10)
+    except StarletteHTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - битая форма или обрыв загрузки: 400, как отвечал FastAPI до 16.11
+        raise HTTPException(status_code=400, detail="Не удалось прочитать форму загрузки") from exc
+    try:
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):
             raise HTTPException(status_code=422, detail="Нет файла: поле формы file")
@@ -2816,6 +2823,8 @@ async def upload_document(request: Request, user: dict[str, Any] = Depends(requi
             raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
         data = await file.read()
         filename = file.filename
+    finally:
+        await form.close()
 
     if len(data) > config.UPLOAD_MAX_FILE_BYTES:
         raise HTTPException(

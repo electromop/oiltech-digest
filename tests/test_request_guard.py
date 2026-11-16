@@ -9,6 +9,7 @@ FastAPI читает тело целиком раньше проверки се�
 
 import hashlib
 import re
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -121,6 +122,22 @@ def test_upload_reads_the_file_only_after_login():
 
     assert refused.status_code == 401
     assert body.taken == 0
+
+
+@pytest.mark.parametrize("body", [b"--x\r\nbroken", b"no boundary at all", b""])
+def test_broken_upload_form_is_a_400_not_a_500(monkeypatch, body):
+    """Форму эндпоинт читает сам: битая форма или обрыв загрузки отвечают 400, как раньше отвечал FastAPI."""
+    monkeypatch.setattr(config, "UPLOAD_DOCS_ENABLED", True)
+    monkeypatch.setattr(api.network_policy, "route_ai_processing",
+                        lambda: SimpleNamespace(execution_region="external"))
+    api.app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "a@example.test", "role": "admin"}
+    try:
+        response = TestClient(api.app).post("/api/documents", content=body,
+                                            headers={"Content-Type": "multipart/form-data; boundary=x"})
+    finally:
+        api.app.dependency_overrides.pop(api.require_admin, None)
+
+    assert response.status_code in (400, 422), response.text
 
 
 def test_upload_path_is_not_gated_by_the_guard_itself():

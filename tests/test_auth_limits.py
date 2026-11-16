@@ -335,8 +335,11 @@ def test_unlock_command_needs_a_valid_target(isolated_db, capsys):
         cli.main(["auth-unlock"])
     with pytest.raises(SystemExit):
         cli.main(["auth-unlock", "--ip", "not-an-address"])
-
     assert "не адрес" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli.main(["auth-unlock", "--email", "  "])
+
+    assert "Укажите почту" in capsys.readouterr().out
 
 
 def test_attempts_report_shows_addresses_and_emails(member, monkeypatch, capsys):

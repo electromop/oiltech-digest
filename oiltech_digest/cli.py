@@ -102,12 +102,18 @@ def cmd_auth_unlock(args: argparse.Namespace) -> None:
     """Снять паузу почте или лимит адресу раньше срока: их неудачи и заявки больше не считаются."""
     from oiltech_digest import auth_limits
 
-    try:
-        removed = auth_limits.unlock(email=args.email, ip=args.ip)
-    except ValueError:
-        print(f"{args.ip}: не адрес IPv4 или IPv6")
-        raise SystemExit(1) from None
-    print(f"Неудачных попыток и заявок снято: {removed}")
+    ip = None
+    if args.ip is not None:
+        try:
+            ip = auth_limits.canonical_ip(args.ip)
+        except ValueError:
+            print(f"{args.ip}: не адрес IPv4 или IPv6")
+            raise SystemExit(1) from None
+    email = (args.email or "").strip()
+    if not ip and not email:
+        print("Укажите почту (--email) или адрес (--ip)")
+        raise SystemExit(1)
+    print(f"Неудачных попыток и заявок снято: {auth_limits.unlock(email=email or None, ip=ip)}")
 
 
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
