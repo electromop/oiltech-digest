@@ -14,6 +14,7 @@ RFC 9180: режим base, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Pol
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 import hashlib
 import json
 from typing import Any
@@ -62,17 +63,24 @@ def new_signing_key() -> bytes:
     return Ed25519PrivateKey.generate().private_bytes_raw()
 
 
+# Виды ключей в настройках ядра: имя в ответах, настройка, как из ключа получить открытую часть (у закрытых ключей
+# платформы) и как выпустить новый. У открытых ключей потребителя в настройке уже открытая часть, выпускает их он.
+_KINDS: dict[str, tuple[str, Callable[[bytes], bytes] | None, Callable[[], bytes] | None]] = {
+    "signing": (SIGNING, _signing_public, new_signing_key),
+    "decryption": (DECRYPTION, _encryption_public, lambda: X25519PrivateKey.generate().private_bytes_raw()),
+    "consumer": (CONSUMER, None, None),
+    "consumer_signing": (CONSUMER_SIGNING, None, None),
+}
+
+
 def new_key_pair(kind: str) -> dict[str, str]:
     """Пара ключей платформы: signing (подпись пакетов) или decryption (расшифровка откликов). Закрытая часть идёт в
     настройку ядра setting, открытая с отпечатком передаётся потребителю."""
-    if kind == "signing":
-        private = new_signing_key()
-        public, setting = _signing_public(private), SIGNING
-    elif kind == "decryption":
-        private = X25519PrivateKey.generate().private_bytes_raw()
-        public, setting = _encryption_public(private), DECRYPTION
-    else:
-        raise ValueError(f"неизвестный вид ключа: {kind}")
+    setting, public_of, generate = _KINDS.get(kind, ("", None, None))
+    if public_of is None or generate is None:
+        raise ValueError(f"неизвестный вид ключа платформы: {kind}")
+    private = generate()
+    public = public_of(private)
     return {"setting": setting, "private": _b64(private), "public": _b64(public), "fingerprint": key_id(public)}
 
 
@@ -105,16 +113,14 @@ def sending_keys() -> tuple[bytes, bytes]:
 def describe() -> dict[str, Any]:
     """Отпечатки ключей из настроек (их сверяют с потребителем) и что мешает отправке."""
     problems: list[str] = []
-    publics = {SIGNING: _signing_public, DECRYPTION: _encryption_public}
     found: dict[str, list[str]] = {}
-    for name, setting in (("signing", SIGNING), ("decryption", DECRYPTION), ("consumer", CONSUMER),
-                          ("consumer_signing", CONSUMER_SIGNING)):
+    for name, (setting, public_of, _generate) in _KINDS.items():
         try:
             keys = _keys(setting)
         except NotConfigured as error:
             problems.append(str(error))
             keys = []
-        found[name] = [key_id(publics[setting](key) if setting in publics else key) for key in keys]
+        found[name] = [key_id(public_of(key) if public_of else key) for key in keys]
     if not found["signing"] and not any(problem.startswith(SIGNING + ":") for problem in problems):
         problems.append(NO_SIGNING_KEY)
     if not found["consumer"] and not any(problem.startswith(CONSUMER + ":") for problem in problems):

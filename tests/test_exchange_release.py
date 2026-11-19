@@ -59,9 +59,10 @@ def test_consumer_takes_the_release_of_the_closed_month_as_the_platform_issue(ex
         (built.number, SEPT, "active")}
 
 
-def test_article_of_the_issue_without_a_feed_signal_is_named_in_the_package_details(exchange, monkeypatch):
-    """У статьи без сигнала ленты (собрана до 01.08.2026 или сигнал не заведён) номера карточки нет: она не уходит, а
-    сборка называет её в журнале обмена."""
+def test_release_waits_until_every_article_of_the_issue_has_a_feed_signal(exchange, monkeypatch):
+    """У статьи без сигнала ленты (собрана до 01.08.2026 или сигнал не заведён) номера карточки нет. Выпуск у месяца
+    один, и потребитель его состав потом не меняет, поэтому пакет не собирается, а отказ называет статьи и команду,
+    которая заведёт сигналы; после неё выпуск собирается полным."""
     hi = feed_signal(exchange.a["hi"])
     exchange.analyst.mark(exchange.a["hi"])
     exchange.analyst.mark(exchange.a["low"])
@@ -70,11 +71,18 @@ def test_article_of_the_issue_without_a_feed_signal_is_named_in_the_package_deta
         conn.commit()
     freeze(monkeypatch, exchange.after_close)
 
-    built = exchange_packages.build_release(SEPT, by="test")
+    with pytest.raises(exchange_packages.Refused) as refused:
+        exchange_packages.build_release(SEPT, by="test")
+    assert str(refused.value) == (
+        f"выпуск за сентябрь 2026 не собран: у статей выпуска нет сигнала ленты (без него у карточки нет номера): "
+        f"№{exchange.a['low']}. Завести сигналы: команда sync-feed-signals --since 2026-09-12 --until 2026-09-13 "
+        "--apply; шаг соберёт выпуск следующим циклом")
+    assert packages() == []
 
-    assert built.signal_ids == [hi]
-    assert built.details["without_signal"] == [exchange.a["low"]]
-    assert [card["signal_id"] for card in exchange.take()[0]["cards"]] == [hi]
+    low = feed_signal(exchange.a["low"])
+    built = exchange_packages.build_release(SEPT, by="test")
+    assert built.signal_ids == sorted([hi, low])
+    assert [card["signal_id"] for card in exchange.take()[0]["cards"]] == sorted([hi, low])
 
 
 def test_month_without_marks_gives_an_empty_release_and_a_release_is_built_once(exchange, monkeypatch):

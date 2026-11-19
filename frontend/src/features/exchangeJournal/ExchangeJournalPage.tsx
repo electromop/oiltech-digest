@@ -9,6 +9,7 @@ import {
   type ExchangePackage,
 } from "../../api/exchangeJournal";
 import { formatMoment } from "../feedbackJournal/JournalEntryCard";
+import { monthLabel } from "../shared/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 
 // Вкладка «Журнал обмена» (#198, спека #197): пакеты для потребителя выпуска, их состав и состояние (собран, забран) и
@@ -20,15 +21,7 @@ type Props = {
 };
 
 const KIND_LABELS: Record<string, string> = { release: "Выпуск", addition: "Дозагрузка" };
-const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь",
-  "ноябрь", "декабрь"];
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-// «2026-09» → «сентябрь 2026».
-export function monthLabel(month: string | null | undefined): string {
-  if (!month || !MONTH_PATTERN.test(month)) return month ?? "";
-  return `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
-}
 
 // Карточка в витрине: бизнес на бизнес-ленте, остальное на технологическом радаре; витрина ищет её по номеру.
 export function cardHref(card: ExchangeCard): string {
@@ -48,20 +41,9 @@ function packageTitle(item: ExchangePackage): string {
   return item.month ? `${kind} №${item.number} · ${monthLabel(item.month)}` : `${kind} №${item.number}`;
 }
 
-// Что сборка сделала сверх состава, строками для журнала.
-function buildNotes(item: ExchangePackage): string[] {
-  const details = item.details ?? {};
-  return [
-    ...(details.moved ?? []).map((one) => `Дубль №${one.requested} ушёл корнем склейки №${one.root}`),
-    ...(details.skipped ?? []).map((one) => `№${one.signal_id} уже отправлен: пакет №${one.package}`),
-    ...(details.without_signal?.length
-      ? [`Статьи выпуска без сигнала ленты не ушли: №${details.without_signal.join(", №")}`] : []),
-  ];
-}
-
 function PackageEntry({ item }: { item: ExchangePackage }) {
   const taken = Boolean(item.first_taken_at);
-  const notes = buildNotes(item);
+  const notes = item.notes ?? [];
   return (
     <article className="journalEntry" aria-label={packageTitle(item)}>
       <header className="journalEntryHead">
@@ -184,6 +166,11 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
             </p>
             {settings.problems.length ? (
               <div className="documentAlert warn" role="alert">Пакеты не соберутся: {settings.problems.join("; ")}.</div>
+            ) : null}
+            {settings.point_problems.length ? (
+              <div className="documentAlert warn" role="alert">
+                Потребитель не заберёт пакеты: {settings.point_problems.join("; ")}.
+              </div>
             ) : null}
           </div>
         ) : null}

@@ -1,7 +1,7 @@
 """Карточка пакета для потребителя выпуска (#198, спека #197; формат версии 2: docs/exchange-format.md).
 
-Та же карточка, что на экране витрины: её читают signal_cards.read (поля сигнала с применёнными правками заголовка и
-сути, в том числе поданными после закрытия месяца) и signal_cards.publications (свои публикации и склеенных дублей в
+Та же карточка, что на экране витрины: её читают showcase_cards.read (поля сигнала с применёнными правками заголовка и
+сути, в том числе поданными после закрытия месяца) и showcase_cards.publications (свои публикации и склеенных дублей в
 порядке экрана), а здесь она только раскладывается по полям формата. Баллов, «Решения платформы» и причины отказа
 «Отбора» в пакете нет. Пустое и «не заполнялось»: null; «не определено» идёт строкой справочника, как на экране.
 
@@ -18,6 +18,8 @@ import json
 from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+
+from oiltech_digest.db.showcase_cards import shown_title
 
 _MSK = ZoneInfo("Europe/Moscow")
 # Кто написал «почему важно» (signals.card_set_by.why_interesting): агент «Карточка» или человек; остальное (судья и
@@ -112,8 +114,8 @@ class CardError(ValueError):
 
 
 def card(row: dict) -> dict[str, Any]:
-    """Карточка пакета без даты обновления из карточки экрана витрины (signal_cards.read с публикациями в "evidence")."""
-    title = _text(row.get("title_ru")) or _text(row.get("title"))
+    """Карточка пакета без даты обновления из карточки экрана витрины (showcase_cards.read с публикациями в "evidence")."""
+    title = shown_title(row)
     if title is None:
         raise CardError(f"у сигнала №{row.get('id')} нет заголовка")
     hypothesis = _text(row.get("hypothesis")) if _set_by(row, "hypothesis") in _HYPOTHESIS_AUTHORS else None

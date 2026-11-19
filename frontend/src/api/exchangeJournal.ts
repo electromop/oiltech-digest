@@ -12,14 +12,6 @@ export type ExchangeCard = {
   category: string | null;
 };
 
-// Что сборка сделала сверх состава: дубли ушли корнем склейки, уже отправленные пропущены (дозагрузка), статьи выпуска
-// без сигнала ленты не ушли (у них нет номера карточки).
-export type ExchangePackageDetails = {
-  moved?: Array<{ requested: number; root: number }>;
-  skipped?: Array<{ signal_id: number; package: number; month: string }>;
-  without_signal?: number[];
-};
-
 export type ExchangePackage = {
   number: number;
   kind: ExchangePackageKind;
@@ -29,7 +21,9 @@ export type ExchangePackage = {
   first_taken_at: string | null;
   last_taken_at: string | null;
   cards: ExchangeCard[];
-  details: ExchangePackageDetails;
+  // Что сборка сделала сверх состава (дубли корнем склейки, уже отправленные пропущены), строками сервера: те же
+  // строки печатает команда exchange-status.
+  notes: string[];
 };
 
 export type ExchangeSettings = {
@@ -39,7 +33,9 @@ export type ExchangeSettings = {
   consumer_keys: string[];
   addresses: number;
   token: boolean;
+  // Что мешает собрать пакет (ключи) и что мешает потребителю его забрать (адрес, хэш токена).
   problems: string[];
+  point_problems: string[];
 };
 
 export type ExchangeJournal = { settings: ExchangeSettings; packages: ExchangePackage[] };

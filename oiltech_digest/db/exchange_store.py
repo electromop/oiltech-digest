@@ -9,7 +9,7 @@ exchange_sent_signals: журнал отправленного, строка н�
 отправленной карточки, когда платформа увидела этот отпечаток (дата обновления карточки в пакете), последний пакет,
 состояние у потребителя (здесь только «действует»; снятия и склейки добавит тикет обновлений #200).
 
-ВНИМАНИЕ про тесты: соединение: connection.get_connection() атрибутом модуля, изоляция тестов держится на его подмене.
+Соединение модуль получает от вызывающего (exchange_packages, exchange_api): сборка и выкладка идут одной транзакцией.
 """
 
 from __future__ import annotations
@@ -21,37 +21,32 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest.db import signal_cards
+from oiltech_digest.db import showcase_cards
+from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, feed_signal_order_sql
 
 # Ключ pg_advisory_xact_lock сборки пакетов: номер, сборка и выкладка идут под ним одной транзакцией.
 _LOCK = 19_811_198
 RELEASE, ADDITION = "release", "addition"
 ACTIVE = "active"
-# Сигнал ленты: repository.SIGNAL_ORIGIN_FEED (модуль базы импортирует этот модуль, а не наоборот).
-_FEED = "feed"
-# Глубина цепочки склейки: склейки сводятся к корню звездой (feed_signals._FLATTEN_MERGED), предел лишь от петли.
-_CHAIN_DEPTH = 20
+# Сколько шагов склейки пройти до корня, как у repository.resolve_signal_merge_root: склейки сводятся к корню звездой
+# (feed_signals._FLATTEN_MERGED), предел лишь от петли.
+_CHAIN_STEPS = 10
 
 
 def inactive_reason_sql(alias: str = "s") -> str:
-    """Почему сигнал не действует у потребителя, словами; NULL: действует. Правило одно в коде: его берут дозагрузка и
-    обновления (#200). Не действует только то, что человек или «Отбор» убрали явно: архив (в том числе удалённый
-    материал коллеги), «Убрано людьми», отказ «Отбора» (в том числе после возврата «Карточкой»), статья сигнала ленты
-    помечена на удаление. Правила показа, которые срабатывают сами (срок события, качество радара), смена категории и
-    архив источника на него не влияют."""
+    """Правило «сигнал действует» у потребителя: почему не действует, словами; NULL: действует. Правило одно в коде: его
+    берут дозагрузка и обновления (#200). Не действует только то, что человек или «Отбор» убрали явно: архив (в том
+    числе удалённый материал коллеги), «Убрано людьми», отказ «Отбора» (в том числе после возврата «Карточкой»), статья
+    сигнала ленты помечена на удаление. Правила показа, которые срабатывают сами (срок события, качество радара), смена
+    категории и архив источника на него не влияют."""
     a = alias
     return (
         f"CASE WHEN {a}.archived_at IS NOT NULL THEN 'в архиве'"
         f" WHEN {a}.human_removal IS NOT NULL THEN 'убран людьми'"
         f" WHEN {a}.otbor_decision = 'reject' THEN 'отказ «Отбора»'"
-        f" WHEN {a}.origin = '{_FEED}' AND EXISTS (SELECT 1 FROM articles da WHERE da.id = {a}.origin_article_id"
-        " AND da.pending_deletion) THEN 'статья помечена на удаление' END"
+        f" WHEN {a}.origin = '{SIGNAL_ORIGIN_FEED}' AND EXISTS (SELECT 1 FROM articles da"
+        f" WHERE da.id = {a}.origin_article_id AND da.pending_deletion) THEN 'статья помечена на удаление' END"
     )
-
-
-def signal_active_sql(alias: str = "s") -> str:
-    """Сигнал действует у потребителя (inactive_reason_sql пусто)."""
-    return f"(({inactive_reason_sql(alias)}) IS NULL)"
 
 
 def lock(conn) -> None:
@@ -64,22 +59,23 @@ def now(conn) -> datetime:
 
 
 def roots(conn, signal_ids: Sequence[int]) -> dict[int, int]:
-    """Корень склейки каждого существующего сигнала (у не дубля он сам); несуществующего номера в ответе нет."""
+    """Корень склейки каждого сигнала (у не дубля он сам) одним запросом на все номера: то же правило, что у
+    repository.resolve_signal_merge_root для одного номера. Нет такого сигнала или корня не найти: номера в ответе нет."""
     ids = sorted({int(one) for one in signal_ids})
     if not ids:
         return {}
     rows = conn.execute(
         """
-        WITH RECURSIVE chain(start_id, id, merged_into, depth) AS (
+        WITH RECURSIVE chain(start_id, id, merged_into, steps) AS (
           SELECT s.id, s.id, s.merged_into_signal_id, 0 FROM signals s WHERE s.id = ANY(%s)
           UNION ALL
-          SELECT c.start_id, p.id, p.merged_into_signal_id, c.depth + 1
+          SELECT c.start_id, p.id, p.merged_into_signal_id, c.steps + 1
           FROM chain c JOIN signals p ON p.id = c.merged_into
-          WHERE c.depth < %s
+          WHERE c.steps < %s
         )
-        SELECT DISTINCT ON (start_id) start_id, id FROM chain ORDER BY start_id, depth DESC
+        SELECT start_id, id FROM chain WHERE merged_into IS NULL
         """,
-        (ids, _CHAIN_DEPTH),
+        (ids, _CHAIN_STEPS),
     ).fetchall()
     return {int(start): int(root) for start, root in rows}
 
@@ -94,12 +90,21 @@ def feed_signals(conn, article_ids: Sequence[int]) -> dict[int, int]:
         f"""
         SELECT DISTINCT ON (s.origin_article_id) s.origin_article_id, s.id
         FROM signals s
-        WHERE s.origin_article_id = ANY(%s) AND s.origin = '{_FEED}'
-        ORDER BY s.origin_article_id, s.merged_into_signal_id NULLS FIRST, s.id
+        WHERE s.origin_article_id = ANY(%s) AND s.origin = '{SIGNAL_ORIGIN_FEED}'
+        ORDER BY s.origin_article_id, {feed_signal_order_sql('s')}
         """,
         (ids,),
     ).fetchall()
     return {int(article): int(signal) for article, signal in rows}
+
+
+def collected_days(conn, article_ids: Sequence[int]) -> tuple[str, str]:
+    """Дни сбора статей «с» и «до, не включая» (ГГГГ-ММ-ДД, пояс сессии базы, как у sync-feed-signals)."""
+    since, until = conn.execute(
+        "SELECT min(collected_at)::date, max(collected_at)::date + 1 FROM articles WHERE id = ANY(%s)",
+        ([int(one) for one in article_ids],),
+    ).fetchone()
+    return since.isoformat(), until.isoformat()
 
 
 def inactive(conn, signal_ids: Sequence[int]) -> dict[int, str]:
@@ -196,22 +201,8 @@ def packages(conn, *, limit: int) -> list[dict[str, Any]]:
         """,
         (int(limit),),
     ).fetchall()
-    ids = sorted({int(one) for row in rows for one in row["signal_ids"]})
-    titles: dict[int, dict[str, Any]] = {}
-    if ids:
-        found = conn.cursor(row_factory=dict_row).execute(
-            f"""
-            SELECT s.id, COALESCE(NULLIF(btrim(corr.corrected_title), ''), NULLIF(btrim(s.title_ru), ''), s.title)
-                     AS title, s.signal_category
-            FROM signals s
-            {signal_cards.corrections_lateral("s")}
-            WHERE s.id = ANY(%s)
-            """,
-            (ids,),
-        ).fetchall()
-        titles = {int(row["id"]): row for row in found}
+    titles = showcase_cards.titles(conn, [one for row in rows for one in row["signal_ids"]])
     for row in rows:
-        row["cards"] = [{"signal_id": int(one), "title": (titles.get(int(one)) or {}).get("title"),
-                         "category": (titles.get(int(one)) or {}).get("signal_category")}
+        row["cards"] = [{"signal_id": int(one), **titles.get(int(one), {"title": None, "category": None})}
                         for one in row.pop("signal_ids")]
     return rows

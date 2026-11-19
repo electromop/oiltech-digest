@@ -12,18 +12,18 @@ const json = (body: unknown, status = 200) =>
 const journal: ExchangeJournal = {
   settings: {
     enabled: true, first_month: "2026-11", signing_keys: ["a1b2c3d4e5f60718"], consumer_keys: ["0f1e2d3c4b5a6978"],
-    addresses: 1, token: true, problems: [],
+    addresses: 1, token: true, problems: [], point_problems: [],
   },
   packages: [
     {
       number: 2, kind: "addition", month: "2026-09", built_at: "2026-11-19T06:00:00+00:00", built_by: "admin@example.test",
       first_taken_at: "2026-11-19T06:01:00+00:00", last_taken_at: "2026-11-19T06:02:00+00:00",
-      details: { moved: [{ requested: 304, root: 303 }] },
+      notes: ["Дубль №304 ушёл корнем склейки №303"],
       cards: [{ signal_id: 303, title: "Пилот роботизированной буровой", category: "technology" }],
     },
     {
       number: 1, kind: "release", month: "2026-09", built_at: "2026-10-11T00:30:00+00:00", built_by: "планировщик",
-      first_taken_at: null, last_taken_at: null, details: { without_signal: [77] },
+      first_taken_at: null, last_taken_at: null, notes: [],
       cards: [{ signal_id: 501, title: "Контракт на бурение 40 скважин", category: "business" }],
     },
   ],
@@ -66,9 +66,9 @@ describe("вкладка «Журнал обмена»", () => {
     expect(within(addition).getByText(/^Забран 19\.11\.2026/)).toBeInTheDocument();
     expect(within(addition).getByRole("link", { name: "№303 Пилот роботизированной буровой" }))
       .toHaveAttribute("href", "?screen=signal-radar&q=%23303");
-    // Что сборка сделала сверх состава: дубль корнем склейки, статья выпуска без сигнала ленты.
+    // Что сборка сделала сверх состава, строками сервера.
     expect(within(addition).getByText("Дубль №304 ушёл корнем склейки №303")).toBeInTheDocument();
-    expect(within(release).getByText("Статьи выпуска без сигнала ленты не ушли: №77")).toBeInTheDocument();
+    expect(within(release).queryByLabelText("Сборка пакета №1")).not.toBeInTheDocument();
     // Новые сверху, как отдал сервер.
     expect(screen.getAllByRole("article").map((one) => one.getAttribute("aria-label")))
       .toEqual(["Дозагрузка №2 · сентябрь 2026", "Выпуск №1 · сентябрь 2026"]);
@@ -120,15 +120,19 @@ describe("вкладка «Журнал обмена»", () => {
     expect(screen.queryByRole("button", { name: "Собрать дозагрузку" })).not.toBeInTheDocument();
   });
 
-  it("незаданные ключи видны предупреждением", async () => {
+  it("незаданные ключи и хэш токена видны предупреждениями", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(json({
       ...journal, packages: [],
-      settings: { ...journal.settings, enabled: false, signing_keys: [], problems: ["нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS)"] },
+      settings: { ...journal.settings, enabled: false, signing_keys: [], problems: ["нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS)"],
+        point_problems: ["нет хэша токена (EXCHANGE_TOKEN_HASH: SHA-256 токена в hex, 64 знака, не сам токен)"] },
     })));
     renderPage();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Пакеты не соберутся: нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS).");
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.map((one) => one.textContent)).toEqual([
+      "Пакеты не соберутся: нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS).",
+      "Потребитель не заберёт пакеты: нет хэша токена (EXCHANGE_TOKEN_HASH: SHA-256 токена в hex, 64 знака, не сам токен).",
+    ]);
     expect(screen.getByText("Пакетов для потребителя ещё нет.")).toBeInTheDocument();
     expect(screen.getByText(/шаг выключен/)).toBeInTheDocument();
   });

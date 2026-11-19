@@ -18,7 +18,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest import auth, config, contract, feed_window, lanes, word_forms
 from oiltech_digest.ingestion import normalize, verdicts
-from oiltech_digest.db import article_tail_store, marks, signal_cards
+from oiltech_digest.db import article_tail_store, marks, showcase_cards
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
@@ -278,7 +278,7 @@ def record_signal_feedback_event(
 ) -> int:
     """Запись журнала ОС. applied (#188): явные действия отметки применены сразу (отметка администратора, правка
     материала выпуска); False: отметка участника без прав администратора: записана и видна блоком, а её правки
-    заголовка и сути на карточку не ложатся (signal_cards.corrections_lateral)."""
+    заголовка и сути на карточку не ложатся (showcase_cards.corrections_lateral)."""
     if event_type not in SIGNAL_FEEDBACK_EVENTS:
         raise ValueError(f"Unknown signal feedback event_type: {event_type}")
     if article_id is None and signal_id is None and not source_url:
@@ -1436,9 +1436,9 @@ def list_signal_training_examples(
         return list(cur.fetchall())
 
 
-# Правки заголовка и сути у карточки (LEFT JOIN LATERAL corr): правило живёт в signal_cards вместе с чтением карточки
+# Правки заголовка и сути у карточки (LEFT JOIN LATERAL corr): правило живёт в showcase_cards вместе с чтением карточки
 # витрины (#198); здесь прежнее имя для выпуска, поиска витрины и журнала ОС.
-_signal_corrections_lateral = signal_cards.corrections_lateral
+_signal_corrections_lateral = showcase_cards.corrections_lateral
 
 
 # Балла у сигнала нет (экран пишет «без баллов», а не 0): то же правило, что signal_scoring.unscored у витрин
@@ -1506,8 +1506,8 @@ def _article_corrections_lateral(issue_window: FeedWindow) -> str:
     return _signal_corrections_lateral("fs", issue_window, month_sql=period_month_sql("a"))
 
 
-# Заголовок и суть карточки с правками людей поверх текста модели: signal_cards.apply_corrections (#198).
-apply_signal_corrections = signal_cards.apply_corrections
+# Заголовок и суть карточки с правками людей поверх текста модели: showcase_cards.apply_corrections (#198).
+apply_signal_corrections = showcase_cards.apply_corrections
 
 
 def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
@@ -1912,7 +1912,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
     раздел отклонённого (#130, только админу), с короткой причиной в section_reason.
 
     Сама карточка (поля сигнала с правками людей) читается одной функцией с пакетом для потребителя выпуска
-    (signal_cards.read, #198); здесь выборка страницы и то, что нужно только экрану."""
+    (showcase_cards.read, #198); здесь выборка страницы и то, что нужно только экрану."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
@@ -1955,7 +1955,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             params,
         )
         page = cur.fetchall()
-        cards = signal_cards.read(conn, [int(row["id"]) for row in page])
+        cards = showcase_cards.read(conn, [int(row["id"]) for row in page])
     rows = [{**cards[int(row["id"])], **row} for row in page if int(row["id"]) in cards]
     # «Обратная связь: N»: число записей в списке «Оценки людей» (решение владельца 03.11): «В дайджест» не ОС.
     for row in rows:
@@ -2040,11 +2040,11 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
     подключения к базе без пула, и на страницу в 100 карточек выходило ~100 подключений на
     каждую смену фильтра. Выборка та же: свои ссылки и ссылки склеенных дублей, тот же
     порядок и предел на карточку. Правило публикаций карточки одно с пакетом для потребителя выпуска
-    (signal_cards.publications, #198)."""
+    (showcase_cards.publications, #198)."""
     if not signal_ids or limit <= 0:
         return {}
     with get_connection() as conn:
-        return signal_cards.publications(conn, signal_ids, limit=limit)
+        return showcase_cards.publications(conn, signal_ids, limit=limit)
 
 
 def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:

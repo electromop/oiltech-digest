@@ -3,7 +3,8 @@
 
 Карточка: все поля сигнала, заголовок и суть с применёнными правками людей (corrections_lateral, apply_corrections) и
 публикации, свои и склеенных дублей, в порядке экрана (publications). Витрина (repository.list_signals и /api/signals)
-читает карточки страницы через read и publications; пакет (exchange_packages) теми же функциями.
+читает карточки страницы через read и publications; пакет (exchange_packages) теми же функциями, журнал обмена берёт
+отсюда же заголовки состава пакетов (titles, shown_title).
 
 Модуль ниже repository: repository импортирует его, а не наоборот.
 """
@@ -16,7 +17,7 @@ from psycopg.rows import dict_row
 
 from oiltech_digest.feed_window import FeedWindow, signal_month_sql
 
-# repository.SIGNAL_ORIGIN_FEED: модуль базы импортирует этот модуль, а не наоборот.
+# repository.SIGNAL_ORIGIN_FEED: repository импортирует этот модуль, а не наоборот.
 _FEED = "feed"
 
 # Исправления из обратной связи («Рекомендуемый заголовок», «…формулировка сути»):
@@ -66,6 +67,33 @@ def apply_corrections(row: dict) -> dict:
         row["original_summary"] = row.get("summary")
         row["summary"] = thesis
     return row
+
+
+def shown_title(row: dict) -> str | None:
+    """Заголовок, как его показывает витрина: русский (с правкой людей), иначе исходный; пустой: None."""
+    for value in (row.get("title_ru"), row.get("title")):
+        if value is not None and str(value).strip():
+            return str(value)
+    return None
+
+
+def titles(conn, signal_ids: Sequence[int]) -> dict[int, dict]:
+    """Заголовок карточки, как на витрине (shown_title с правками людей), и категория сигнала: подписи состава пакетов
+    в журнале обмена. Легче read: только поля заголовка."""
+    ids = sorted({int(signal_id) for signal_id in signal_ids})
+    if not ids:
+        return {}
+    rows = conn.cursor(row_factory=dict_row).execute(
+        f"""
+        SELECT s.id, s.title, s.title_ru, s.signal_category, corr.corrected_title, corr.corrected_thesis
+        FROM signals s
+        {corrections_lateral("s")}
+        WHERE s.id = ANY(%s)
+        """,
+        (ids,),
+    ).fetchall()
+    return {int(row["id"]): {"title": shown_title(apply_corrections(row)), "category": row["signal_category"]}
+            for row in rows}
 
 
 def read(conn, signal_ids: Sequence[int]) -> dict[int, dict]:

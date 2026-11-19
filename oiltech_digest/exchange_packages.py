@@ -3,13 +3,14 @@
 Пакет выпуска: состав выпуска платформы на закрытии месяца, тот же, что у PDF и выгрузки (repository.
 issue_composition): статья идёт своим сигналом ленты, дубль корнем склейки; пустой месяц даёт пустой пакет; выпуск у
 месяца один. Его собирает шаг планировщика (release_step) в первом цикле после закрытия месяца, за флагом
-EXCHANGE_ENABLED и не раньше месяца EXCHANGE_FIRST_MONTH; месяцы до запуска собирает команда (build_release). Готовность
-материалов здесь не проверяется (#199): сборка берёт карточки как есть.
+EXCHANGE_ENABLED и не раньше месяца EXCHANGE_FIRST_MONTH; месяцы до запуска собирает команда (build_release). Статья без
+сигнала ленты номера карточки не имеет: выпуск ждёт, пока сигнал заведут (отказ со списком). Готовность материалов в
+остальном здесь не проверяется (#199): сборка берёт карточки как есть.
 
 Дозагрузка: номера и месяц выпуска; дубль переводится в корень; несуществующий или не действующий номер (правило
-exchange_store.signal_active_sql) даёт отказ со списком, уже отправленный пропускается с пометкой.
+exchange_store.inactive_reason_sql) даёт отказ со списком, уже отправленный пропускается с пометкой.
 
-Карточка та же, что на экране витрины (signal_cards, exchange_card). Номер пакету даёт последовательность в базе под
+Карточка та же, что на экране витрины (showcase_cards, exchange_card). Номер пакету даёт последовательность в базе под
 замком сборки, сборка и выкладка идут одной транзакцией: пакет с большим номером не виден раньше меньшего.
 """
 
@@ -21,8 +22,8 @@ import json
 from typing import Any, Sequence
 
 from oiltech_digest import config, exchange_card, exchange_envelope, feed_window
-from oiltech_digest.api_access import consumer_networks
-from oiltech_digest.db import connection, exchange_store, repository, signal_cards
+from oiltech_digest.api_access import consumer_networks, exchange_setup_problems
+from oiltech_digest.db import connection, exchange_store, repository, showcase_cards
 
 # Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026».
 KIND_LABELS = {exchange_store.RELEASE: "выпуск за", exchange_store.ADDITION: "дозагрузка к выпуску за"}
@@ -49,7 +50,20 @@ def package_label(kind: str, month: str | None) -> str:
     return f"{KIND_LABELS.get(kind, kind)} {_label(month)}" if month else KIND_LABELS.get(kind, kind)
 
 
-def _month(value: str) -> str:
+def package_notes(details: dict[str, Any]) -> list[str]:
+    """Что сборка сделала сверх состава, строками для вкладки «Журнал обмена» и команды exchange-status: дубли ушли
+    корнем склейки, уже отправленные пропущены."""
+    return ([f"Дубль №{one['requested']} ушёл корнем склейки №{one['root']}" for one in details.get("moved") or ()]
+            + [f"№{one['signal_id']} уже отправлен: пакет №{one['package']}, выпуск за {_label(one['month'])}"
+               for one in details.get("skipped") or ()])
+
+
+def _moved(requested: Sequence[int], roots: dict[int, int]) -> list[dict[str, int]]:
+    """Дубли среди номеров и корни их склейки: пакет называет, куда ушёл каждый."""
+    return [{"requested": one, "root": roots[one]} for one in requested if one in roots and roots[one] != one]
+
+
+def _checked_month(value: str) -> str:
     try:
         return feed_window.month_key(feed_window.parse_month((value or "").strip()))
     except ValueError:
@@ -71,11 +85,11 @@ def _publish(conn, keys: tuple[bytes, bytes], *, kind: str, month: str, signal_i
              details: dict[str, Any]) -> Built:
     """Собрать и выложить пакет в транзакции conn под замком сборки (exchange_store.lock уже взят): номер, карточки
     экрана витрины, конверт, строка пакета и журнал отправленного. Коммит за вызывающим."""
-    rows = signal_cards.read(conn, signal_ids)
+    rows = showcase_cards.read(conn, signal_ids)
     # Сигнал, удалённый между выбором состава и чтением карточек, в пакет не идёт (карточки у него нет).
     ids = sorted(rows)
     number = exchange_store.next_number(conn)
-    found = signal_cards.publications(conn, ids)
+    found = showcase_cards.publications(conn, ids)
     moment = exchange_store.now(conn)
     previous = exchange_store.sent(conn, ids)
     cards, journal = [], []
@@ -101,7 +115,7 @@ def _publish(conn, keys: tuple[bytes, bytes], *, kind: str, month: str, signal_i
 def build_release(month: str, *, by: str | None) -> Built:
     """Пакет выпуска названного закрытого месяца: состав выпуска платформы, как у PDF и выгрузки. Второй пакет
     выпуска того же месяца не собирается."""
-    month = _month(month)
+    month = _checked_month(month)
     if feed_window.current().is_open(month):
         raise Refused(f"выпуск за {_label(month)} ещё открыт: пакет собирается после закрытия месяца "
                       f"({config.FEED_ROLLOVER_DAY}-го числа следующего)")
@@ -114,21 +128,26 @@ def build_release(month: str, *, by: str | None) -> Built:
         composition = repository.issue_composition(month, conn=conn)
         articles = composition["article_ids"]
         by_article = exchange_store.feed_signals(conn, articles)
-        members = [by_article[one] for one in articles if one in by_article] + composition["signal_ids"]
+        # Статья выпуска без сигнала ленты (собрана до 01.08.2026 или сигнал не заведён): у неё нет номера карточки.
+        # Выпуск у месяца один, и потребитель его состав потом не меняет: пакет ждёт, пока сигнал заведут.
+        orphans = [one for one in articles if one not in by_article]
+        if orphans:
+            since, until = exchange_store.collected_days(conn, orphans)
+            raise Refused(
+                f"выпуск за {_label(month)} не собран: у статей выпуска нет сигнала ленты (без него у карточки нет "
+                f"номера): №{', №'.join(map(str, orphans))}. Завести сигналы: команда sync-feed-signals --since "
+                f"{since} --until {until} --apply; шаг соберёт выпуск следующим циклом")
+        members = [by_article[one] for one in articles] + composition["signal_ids"]
         roots = exchange_store.roots(conn, members)
-        details = {
-            "articles": len(articles), "signals": len(composition["signal_ids"]),
-            # Статья выпуска без сигнала ленты (собрана до 01.08.2026 или сигнал не заведён): номера у неё нет.
-            "without_signal": [one for one in articles if one not in by_article],
-            "moved": [{"requested": one, "root": roots[one]} for one in members if one in roots and roots[one] != one],
-        }
+        details = {"articles": len(articles), "signals": len(composition["signal_ids"]),
+                   "moved": _moved(members, roots)}
         built = _publish(conn, keys, kind=exchange_store.RELEASE, month=month,
                          signal_ids=[roots[one] for one in members if one in roots], by=by, details=details)
         conn.commit()
     return built
 
 
-def _months(first: str, last: date) -> list[str]:
+def _months_between(first: str, last: date) -> list[str]:
     months, current = [], feed_window.parse_month(first)
     while current <= last:
         months.append(feed_window.month_key(current))
@@ -143,9 +162,9 @@ def release_step(*, by: str = "планировщик") -> list[Built] | None:
         return None
     if not config.EXCHANGE_FIRST_MONTH:
         raise Refused("не задан первый месяц шага (EXCHANGE_FIRST_MONTH, ГГГГ-ММ)")
-    first = _month(config.EXCHANGE_FIRST_MONTH)
+    first = _checked_month(config.EXCHANGE_FIRST_MONTH)
     last_closed = (feed_window.current().start - timedelta(days=1)).replace(day=1)
-    months = _months(first, last_closed)
+    months = _months_between(first, last_closed)
     if not months:
         return []
     with connection.get_connection() as conn:
@@ -171,11 +190,11 @@ class Addition:
     moved: list[dict[str, int]]
 
     def describe(self) -> list[str]:
-        lines = [self.built.describe()] if self.built else ["пакет не собран: все номера уже отправлены потребителю"]
-        lines += [f"дубль №{one['requested']} ушёл корнем склейки №{one['root']}" for one in self.moved]
-        lines += [f"№{one['signal_id']} уже отправлен: пакет №{one['package']}, выпуск за {_label(one['month'])}"
-                  for one in self.skipped]
-        return lines
+        """Ответ дозагрузки строками: что ушло (пакет и номера), какие дубли ушли корнем, что пропущено."""
+        lines = ([f"{self.built.describe()}: №{', №'.join(map(str, self.built.signal_ids))}"] if self.built
+                 else ["пакет не собран: все номера уже отправлены потребителю"])
+        return lines + [note[:1].lower() + note[1:] for note in package_notes({"moved": self.moved,
+                                                                                "skipped": self.skipped})]
 
 
 def _refusal(missing: list[int], inactive: list[tuple[int, int, str]]) -> str:
@@ -192,7 +211,7 @@ def _refusal(missing: list[int], inactive: list[tuple[int, int, str]]) -> str:
 def build_addition(numbers: Sequence[int], month: str, *, by: str | None) -> Addition:
     """Дозагрузка номеров с месяцем выпуска: дубль корнем склейки, отказ со списком на несуществующие и не действующие
     номера, уже отправленные пропускаются. Всё уже отправлено: пакета нет."""
-    month = _month(month)
+    month = _checked_month(month)
     requested = list(dict.fromkeys(int(one) for one in numbers))
     if not requested:
         raise Refused("дозагрузка не собрана: нет номеров сигналов")
@@ -207,7 +226,7 @@ def build_addition(numbers: Sequence[int], month: str, *, by: str | None) -> Add
             raise Refused(_refusal(missing, inactive))
         targets = list(dict.fromkeys(roots[one] for one in requested))
         already = exchange_store.sent(conn, targets)
-        moved = [{"requested": one, "root": roots[one]} for one in requested if roots[one] != one]
+        moved = _moved(requested, roots)
         skipped = [{"signal_id": one, "package": int(already[one]["first_package"]), "month": already[one]["month"]}
                    for one in targets if one in already]
         fresh = [one for one in targets if one not in already]
@@ -222,10 +241,14 @@ def build_addition(numbers: Sequence[int], month: str, *, by: str | None) -> Add
 
 def journal(*, limit: int = 200) -> dict[str, Any]:
     """Состояние обмена для вкладки «Журнал обмена» и команды exchange-status: настройки (без ключей и адресов, только
-    отпечатки и число адресов) и пакеты, новые сверху."""
+    отпечатки и число адресов; что мешает собрать пакет и что мешает потребителю его забрать) и пакеты, новые сверху,
+    с тем, что сборка сделала сверх состава."""
     keys = exchange_envelope.describe()
+    point_problems = exchange_setup_problems()
     with connection.get_connection() as conn:
         packages = exchange_store.packages(conn, limit=limit)
+    for package in packages:
+        package["notes"] = package_notes(package.pop("details") or {})
     return {
         "settings": {
             "enabled": bool(config.EXCHANGE_ENABLED),
@@ -233,8 +256,9 @@ def journal(*, limit: int = 200) -> dict[str, Any]:
             "signing_keys": keys["signing"],
             "consumer_keys": keys["consumer"],
             "addresses": len(consumer_networks()),
-            "token": bool(config.EXCHANGE_TOKEN_HASH),
+            "token": not any("EXCHANGE_TOKEN_HASH" in problem for problem in point_problems),
             "problems": keys["problems"],
+            "point_problems": point_problems,
         },
         "packages": packages,
     }

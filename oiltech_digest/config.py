@@ -406,8 +406,9 @@ EXCHANGE_SIGNING_KEYS = os.environ.get("EXCHANGE_SIGNING_KEYS", "").strip()
 EXCHANGE_DECRYPTION_KEYS = os.environ.get("EXCHANGE_DECRYPTION_KEYS", "").strip()
 EXCHANGE_CONSUMER_KEYS = os.environ.get("EXCHANGE_CONSUMER_KEYS", "").strip()
 EXCHANGE_CONSUMER_SIGNING_KEYS = os.environ.get("EXCHANGE_CONSUMER_SIGNING_KEYS", "").strip()
-# Точка обмена /api/exchange/v1: адреса потребителя (IP или сеть через пробел, без запятых: тем же значением их получает
-# Caddy, запятая его роняет) и SHA-256 токена в hex (сам токен знает только потребитель). Адреса нет: точка закрыта всем.
+# Точка обмена /api/exchange/v1: внешние адреса потребителя (IP или сеть через пробел, без запятых: тем же значением их
+# получает Caddy, запятая его роняет; частный адрес приложение не пускает) и SHA-256 токена в hex, 64 знака (сам токен
+# знает только потребитель). Адреса нет: точка закрыта всем.
 EXCHANGE_CONSUMER_IPS = os.environ.get("EXCHANGE_CONSUMER_IPS", "").strip()
 EXCHANGE_TOKEN_HASH = os.environ.get("EXCHANGE_TOKEN_HASH", "").strip().lower()
 

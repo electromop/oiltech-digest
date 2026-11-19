@@ -70,7 +70,9 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
           f"{', '.join(settings['consumer_keys']) or 'нет'}")
     print(f"Адресов потребителя: {settings['addresses']}; токен: {'задан' if settings['token'] else 'не задан'}")
     for problem in settings["problems"]:
-        print(f"Не готово: {problem}")
+        print(f"Пакеты не соберутся: {problem}")
+    for problem in settings["point_problems"]:
+        print(f"Потребитель не заберёт пакеты: {problem}")
     if not state["packages"]:
         print("Пакетов нет")
     for package in state["packages"]:
@@ -81,6 +83,8 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
               f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}")
         if package["cards"]:
             print("    " + ", ".join(str(card["signal_id"]) for card in package["cards"]))
+        for note in package["notes"]:
+            print(f"    {note}")
 
 
 def add_commands(sub) -> None:

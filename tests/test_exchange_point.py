@@ -78,6 +78,26 @@ def test_point_is_closed_to_everyone_without_an_address_and_without_a_token_hash
     assert point(STRANGER_IP).get("/api/exchange/v1/packages", headers=HEADERS).status_code == 200
     monkeypatch.setattr(config, "EXCHANGE_TOKEN_HASH", "")
     assert point().get("/api/exchange/v1/packages", headers=HEADERS).status_code == 503
+    # Сам токен вместо его хэша: точка не открывается и с этим токеном.
+    monkeypatch.setattr(config, "EXCHANGE_TOKEN_HASH", "test-exchange-token")
+    assert point().get("/api/exchange/v1/packages", headers=HEADERS).status_code == 503
+
+
+def test_journal_names_what_keeps_the_consumer_out(exchange, monkeypatch):
+    """Частный адрес потребителя приложение не пускает (за Caddy так выглядит любой клиент, если заголовку адреса не
+    поверили), а сам токен вместо хэша не откроет точку никому: вкладка говорит об этом заранее."""
+    monkeypatch.setattr(config, "EXCHANGE_CONSUMER_IPS", f"{CONSUMER_IP} 10.20.30.40")
+    monkeypatch.setattr(config, "EXCHANGE_TOKEN_HASH", "test-exchange-token")
+
+    settings = exchange.admin.get("/api/exchange-journal").json()["settings"]
+
+    assert settings["token"] is False and settings["addresses"] == 2
+    assert settings["point_problems"] == [
+        "адрес потребителя 10.20.30.40/32 внутренний: приложение не отличает его от адреса Caddy и не пускает, нужен "
+        "внешний адрес потребителя",
+        "нет хэша токена (EXCHANGE_TOKEN_HASH: SHA-256 токена в hex, 64 знака, не сам токен)",
+    ]
+    assert point("10.20.30.40").get("/api/exchange/v1/packages", headers=HEADERS).status_code == 403
 
 
 def test_point_gives_the_same_file_again_marks_the_takes_and_answers_404_for_no_package(exchange, monkeypatch):
@@ -166,7 +186,8 @@ def test_journal_tab_and_addition_are_for_the_administrator_only(exchange, monke
     assert package["cards"] == [{"signal_id": exchange.s["sep"], "title": "Сигнал sep", "category": None}]
     assert package["first_taken_at"] is None
     settings = journal.json()["settings"]
-    assert settings["problems"] == [] and settings["addresses"] == 1 and settings["token"] is True
+    assert settings["problems"] == [] and settings["point_problems"] == []
+    assert settings["addresses"] == 1 and settings["token"] is True
     assert config.EXCHANGE_SIGNING_KEYS not in journal.text and CONSUMER_IP not in journal.text
 
 
@@ -197,8 +218,8 @@ def test_addition_moves_a_duplicate_to_its_root_refuses_unknown_and_removed_and_
     assert sent.status_code == 200, sent.text
     assert sent.json() == {
         "package": 1, "sent": [root], "skipped": [], "moved": [{"requested": duplicate, "root": root}],
-        "message": f"Пакет №1: дозагрузка к выпуску за сентябрь 2026, карточек 1; дубль №{duplicate} ушёл корнем "
-                   f"склейки №{root}.",
+        "message": f"Пакет №1: дозагрузка к выпуску за сентябрь 2026, карточек 1: №{root}; дубль №{duplicate} ушёл "
+                   f"корнем склейки №{root}.",
     }
     other = add_signal("other", first_seen=msk(2026, 9, 24, 10, 0))
     again = admin.post("/api/exchange-journal/additions", json={"month": SEPT, "numbers": [root, other]}).json()

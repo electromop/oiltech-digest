@@ -127,3 +127,6 @@ def test_new_key_pairs_print_the_public_part_with_its_fingerprint():
         assert pair["setting"] == {"signing": "EXCHANGE_SIGNING_KEYS", "decryption": "EXCHANGE_DECRYPTION_KEYS"}[kind]
     signing = exchange_envelope.new_key_pair("signing")
     assert base64.b64decode(signing["public"]) == _signing_public(base64.b64decode(signing["private"]))
+    # Ключи потребителя выпускает он сам: у платформы для них пары нет.
+    with pytest.raises(ValueError):
+        exchange_envelope.new_key_pair("consumer")
