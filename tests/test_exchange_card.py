@@ -97,9 +97,14 @@ def test_why_important_author_hypothesis_and_dates_follow_who_set_them():
     assert legacy["why_important"]["set_by"] == "radar" and legacy["hypothesis"] is None
     human = exchange_card.card(_row(why_interesting="  ", hypothesis="Изучить.", card_set_by={"hypothesis": "agent"}))
     assert human["why_important"] is None and human["hypothesis"] == "Изучить."
-    # Дата события с точностью до месяца или года: в формате нет точности, поэтому пусто, а не выдуманный день.
-    assert exchange_card.card(_row(event_date=date(2026, 9, 1), event_date_precision="month"))["event_date"] is None
-    assert exchange_card.card(_row(event_date=date(2026, 9, 1), event_date_precision=None))["event_date"] == "2026-09-01"
+    # Дата события (решение владельца 19.11): пусто только у даты, которую понять нельзя совсем; известны месяц или год:
+    # уходит первый день периода, как он хранится (в формате нет точности).
+    for precision in ("day", "month", "year", None):
+        card = exchange_card.card(_row(event_date=date(2026, 9, 1), event_date_precision=precision))
+        assert card["event_date"] == "2026-09-01", precision
+    unknown = exchange_card.card(_row(event_date=None, event_date_source="не определено",
+                                      card_set_by={"event_date": "agent"}))
+    assert unknown["event_date"] is None
 
 
 def test_blank_is_null_undefined_stays_and_only_web_links_go():

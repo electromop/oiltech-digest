@@ -27,9 +27,6 @@ _MSK = ZoneInfo("Europe/Moscow")
 _WHY_AUTHORS = {"agent": "agent", "human": "human"}
 # Гипотеза в пакете, только если её поставил человек или агент (#162, #163).
 _HYPOTHESIS_AUTHORS = ("agent", "human")
-# Дата события с точностью до дня (event_date_precision day, пусто у карточек до #132). У месяца и года хранится первый
-# день периода, днём его не читают: в формате нет точности, поэтому такая дата уходит пустой, а не выдуманным днём.
-_DAY_PRECISIONS = (None, "day")
 
 
 @lru_cache(maxsize=1)
@@ -83,8 +80,9 @@ def _why(row: dict) -> dict[str, Any] | None:
 
 
 def _event_date(row: dict) -> str | None:
-    if row.get("event_date_precision") not in _DAY_PRECISIONS:
-        return None
+    """Дата события (решение владельца 19.11): пусто только у даты, которую понять нельзя совсем (ни день, ни месяц, ни
+    год), потребитель пишет «дата не определена». Известны месяц или год: уходит первый день периода, как он хранится
+    (event_date_precision в формате не передаётся)."""
     return _day(row.get("event_date"))
 
 
