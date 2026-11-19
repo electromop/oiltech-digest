@@ -395,6 +395,23 @@ BRAND_FONTS_DIR = os.environ.get("BRAND_FONTS_DIR", "").strip()
 FEED_ROLLOVER_DAY_DEFAULT = 11
 FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", str(FEED_ROLLOVER_DAY_DEFAULT)))))
 
+# --- Обмен с потребителем выпуска (#198, спека #197; формат: docs/exchange-format.md) ---
+# Шаг планировщика exchange-release собирает пакет выпуска закрытого месяца. Выключен, пока потребитель не готов; первый
+# месяц шага EXCHANGE_FIRST_MONTH (ГГГГ-ММ), более ранние собирает команда exchange-release --month.
+EXCHANGE_ENABLED = os.environ.get("EXCHANGE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+EXCHANGE_FIRST_MONTH = os.environ.get("EXCHANGE_FIRST_MONTH", "").strip()
+# Ключи: base64 от 32 байт через запятую, первый подписывает и шифрует (exchange_envelope.py). Закрытые ключи платформы:
+# подпись пакетов и расшифровка откликов; открытые ключи потребителя: шифрование пакетов и проверка подписи откликов.
+EXCHANGE_SIGNING_KEYS = os.environ.get("EXCHANGE_SIGNING_KEYS", "").strip()
+EXCHANGE_DECRYPTION_KEYS = os.environ.get("EXCHANGE_DECRYPTION_KEYS", "").strip()
+EXCHANGE_CONSUMER_KEYS = os.environ.get("EXCHANGE_CONSUMER_KEYS", "").strip()
+EXCHANGE_CONSUMER_SIGNING_KEYS = os.environ.get("EXCHANGE_CONSUMER_SIGNING_KEYS", "").strip()
+# Точка обмена /api/exchange/v1: внешние адреса потребителя (IP или сеть через пробел, без запятых: тем же значением их
+# получает Caddy, запятая его роняет; частный адрес приложение не пускает) и SHA-256 токена в hex, 64 знака (сам токен
+# знает только потребитель). Адреса нет: точка закрыта всем.
+EXCHANGE_CONSUMER_IPS = os.environ.get("EXCHANGE_CONSUMER_IPS", "").strip()
+EXCHANGE_TOKEN_HASH = os.environ.get("EXCHANGE_TOKEN_HASH", "").strip().lower()
+
 # --- Здоровье источников: «Требуют внимания» (вердикт stale) ---
 # Источник требует внимания, если последний материал собран столько и больше календарных
 # дней назад по Москве: как «N дн. назад» в колонке «Последняя загрузка»: при 7 «7 дн.

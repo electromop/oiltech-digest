@@ -18,7 +18,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest import auth, config, contract, feed_window, lanes, word_forms
 from oiltech_digest.ingestion import normalize, verdicts
-from oiltech_digest.db import article_tail_store, marks
+from oiltech_digest.db import article_tail_store, marks, showcase_cards
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
@@ -278,7 +278,7 @@ def record_signal_feedback_event(
 ) -> int:
     """Запись журнала ОС. applied (#188): явные действия отметки применены сразу (отметка администратора, правка
     материала выпуска); False: отметка участника без прав администратора: записана и видна блоком, а её правки
-    заголовка и сути на карточку не ложатся (_SIGNAL_CORRECTIONS_LATERAL)."""
+    заголовка и сути на карточку не ложатся (showcase_cards.corrections_lateral)."""
     if event_type not in SIGNAL_FEEDBACK_EVENTS:
         raise ValueError(f"Unknown signal feedback event_type: {event_type}")
     if article_id is None and signal_id is None and not source_url:
@@ -1436,41 +1436,9 @@ def list_signal_training_examples(
         return list(cur.fetchall())
 
 
-# Исправления из обратной связи («Рекомендуемый заголовок», «…формулировка сути»):
-# последнее непустое по карточке. Накладываются при чтении: текст модели в signals не
-# затирается, и повторная находка той же карточки прогоном радара правку не перепишет. Только применённые (#188):
-# правка администратора и правка материала выпуска; правка участника без прав администратора лежит в его блоке ОС.
-# Правка, отменённая из журнала ОС (#189), не ложится: снова текст модели или прежняя правка ({undone}).
-_SIGNAL_CORRECTIONS_LATERAL = """
-LEFT JOIN LATERAL (
-  SELECT
-    (SELECT e.corrected_title FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}{undone}
-     ORDER BY e.id DESC LIMIT 1) AS corrected_title,
-    (SELECT e.corrected_thesis FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND e.applied AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}{undone}
-     ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
-) corr ON TRUE
-"""
-
-
-def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = None, *,
-                                month_sql: str | None = None) -> str:
-    """LEFT JOIN LATERAL corr: последние правки заголовка и сути у карточки `alias`.
-
-    Экран радара: все правки. Выпуск (`issue_window`: окно ленты на сейчас) у карточки
-    закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
-    «архив только на просмотр»: и текст закрытого выпуска). Отзыв после закрытия принимается
-    как раньше и виден на радаре: он нужен агенту для обучения, но выпуск не меняет.
-    `month_sql`: месяц выпуска материала, если он не месяц поступления карточки (у статьи ленты её месяц).
-    Отмена правки из журнала ОС (#189) так же: закрытый выпуск не видит отмену после закрытия."""
-    until, undone = "", " AND e.correction_undone_at IS NULL"
-    if issue_window is not None:
-        month = month_sql or signal_month_sql(alias)
-        until = " AND " + issue_window.before_close_sql(month, "e.created_at")
-        undone = (" AND (e.correction_undone_at IS NULL OR NOT "
-                  + issue_window.before_close_sql(month, "e.correction_undone_at") + ")")
-    return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until, undone=undone)
+# Правки заголовка и сути у карточки (LEFT JOIN LATERAL corr): правило живёт в showcase_cards вместе с чтением карточки
+# витрины (#198); здесь прежнее имя для выпуска, поиска витрины и журнала ОС.
+_signal_corrections_lateral = showcase_cards.corrections_lateral
 
 
 # Балла у сигнала нет (экран пишет «без баллов», а не 0): то же правило, что signal_scoring.unscored у витрин
@@ -1538,17 +1506,8 @@ def _article_corrections_lateral(issue_window: FeedWindow) -> str:
     return _signal_corrections_lateral("fs", issue_window, month_sql=period_month_sql("a"))
 
 
-def apply_signal_corrections(row: dict) -> dict:
-    """Заголовок и суть карточки: с правками людей поверх текста модели."""
-    title = (row.get("corrected_title") or "").strip()
-    thesis = (row.get("corrected_thesis") or "").strip()
-    if title:
-        row["original_title_ru"] = row.get("title_ru")
-        row["title_ru"] = title
-    if thesis:
-        row["original_summary"] = row.get("summary")
-        row["summary"] = thesis
-    return row
+# Заголовок и суть карточки с правками людей поверх текста модели: showcase_cards.apply_corrections (#198).
+apply_signal_corrections = showcase_cards.apply_corrections
 
 
 def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
@@ -1950,7 +1909,10 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
     """Карточки радара для экрана: выборка и страница: в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True, скрытые правилами качества (для админа), с причиной в hidden_reason; section:
-    раздел отклонённого (#130, только админу), с короткой причиной в section_reason."""
+    раздел отклонённого (#130, только админу), с короткой причиной в section_reason.
+
+    Сама карточка (поля сигнала с правками людей) читается одной функцией с пакетом для потребителя выпуска
+    (showcase_cards.read, #198); здесь выборка страницы и то, что нужно только экрану."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
@@ -1967,7 +1929,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT s.*,
+            SELECT s.id,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
                    {_radar_hidden_reason_sql() if showcase == "technology" else "NULL"} AS hidden_reason,
                    {section.short_reason if section is not None else "NULL"} AS section_reason,
@@ -1982,9 +1944,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
                    -- Предложение разбора ОС, которое ждёт решения в журнале ОС (#189): значок на карточке.
                    (SELECT fa.id FROM feedback_actions fa WHERE fa.signal_id = s.id AND fa.kind = 'signal_proposal'
-                      AND fa.status = 'pending' ORDER BY fa.id DESC LIMIT 1) AS feedback_pending,
-                   corr.corrected_title,
-                   corr.corrected_thesis
+                      AND fa.status = 'pending' ORDER BY fa.id DESC LIMIT 1) AS feedback_pending
             FROM signals s
             {marks.signal_mark_join()}
             {_signal_corrections_lateral("s")}
@@ -1994,7 +1954,9 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             """,
             params,
         )
-        rows = [apply_signal_corrections(row) for row in cur.fetchall()]
+        page = cur.fetchall()
+        cards = showcase_cards.read(conn, [int(row["id"]) for row in page])
+    rows = [{**cards[int(row["id"])], **row} for row in page if int(row["id"]) in cards]
     # «Обратная связь: N»: число записей в списке «Оценки людей» (решение владельца 03.11): «В дайджест» не ОС.
     for row in rows:
         row["feedback_count"] = len(row["feedback_blocks"])
@@ -2077,59 +2039,12 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
     """Ссылки карточек страницы радара, одним запросом, а не list_signal_evidence на каждую:
     подключения к базе без пула, и на страницу в 100 карточек выходило ~100 подключений на
     каждую смену фильтра. Выборка та же: свои ссылки и ссылки склеенных дублей, тот же
-    порядок и предел на карточку.
-
-    Участники карточки (она сама и её дубли), отдельным списком и простым JOIN: с «OR
-    e.signal_id IN (подзапрос)» в условии JOIN база гоняла подзапрос по каждой паре
-    карточка × ссылка (ревью PR #83: 150 карточек: 1 118 → 4 мс; на синтетике 600 карточек /
-    1 651 ссылка: 342 → 15 мс, строки и порядок те же)."""
-    ids = [int(signal_id) for signal_id in signal_ids]
-    if not ids or limit <= 0:
+    порядок и предел на карточку. Правило публикаций карточки одно с пакетом для потребителя выпуска
+    (showcase_cards.publications, #198)."""
+    if not signal_ids or limit <= 0:
         return {}
     with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            WITH members AS (
-              SELECT s.id AS card_id, s.id AS member_id FROM signals s WHERE s.id = ANY(%s)
-              UNION ALL
-              SELECT m.merged_into_signal_id AS card_id, m.id AS member_id
-              FROM signals m WHERE m.merged_into_signal_id = ANY(%s)
-            ),
-            linked AS (
-              SELECT mb.card_id, e.id AS evidence_id
-              FROM members mb
-              JOIN signal_evidence e ON e.signal_id = mb.member_id
-              UNION
-              -- Статья сигнала ленты — его публикация, даже когда её адрес держит карточка радара
-              -- (адрес уникален, ссылка остаётся у радара — feed_signals): показываем ту же ссылку.
-              SELECT s.id, e.id
-              FROM signals s
-              JOIN articles a ON a.id = s.origin_article_id
-              JOIN signal_evidence e ON e.source_url = a.url
-              WHERE s.id = ANY(%s) AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-            )
-            SELECT *
-            FROM (
-              SELECT e.*, l.card_id AS radar_card_id,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY l.card_id
-                       ORDER BY e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC, e.id DESC
-                     ) AS radar_card_rank
-              FROM linked l
-              JOIN signal_evidence e ON e.id = l.evidence_id
-            ) ranked
-            WHERE ranked.radar_card_rank <= %s
-            ORDER BY ranked.radar_card_id, ranked.radar_card_rank
-            """,
-            (ids, ids, ids, limit),
-        )
-        evidence: dict[int, list[dict]] = {}
-        for row in cur.fetchall():
-            card_id = int(row.pop("radar_card_id"))
-            row.pop("radar_card_rank")
-            evidence.setdefault(card_id, []).append(row)
-    return evidence
+        return showcase_cards.publications(conn, signal_ids, limit=limit)
 
 
 def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:

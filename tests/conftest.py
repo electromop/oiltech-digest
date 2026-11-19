@@ -39,6 +39,16 @@ config.AUTH_FAILURES_PER_EMAIL = 10
 config.AUTH_EMAIL_WINDOW_MINUTES = 15
 config.AUTH_KNOWN_ADDRESS_DAYS = 30
 config.AUTH_ATTEMPTS_RETENTION_DAYS = 30
+# Обмен с потребителем выпуска (#198): по умолчанию выключен и без ключей, адресов и токена, как прод до выката; ключи и
+# адреса ставят свои тесты, а не .env разработчика.
+config.EXCHANGE_ENABLED = False
+config.EXCHANGE_FIRST_MONTH = ""
+config.EXCHANGE_SIGNING_KEYS = ""
+config.EXCHANGE_DECRYPTION_KEYS = ""
+config.EXCHANGE_CONSUMER_KEYS = ""
+config.EXCHANGE_CONSUMER_SIGNING_KEYS = ""
+config.EXCHANGE_CONSUMER_IPS = ""
+config.EXCHANGE_TOKEN_HASH = ""
 
 
 @pytest.fixture(scope="session")

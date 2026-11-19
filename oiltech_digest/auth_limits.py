@@ -93,6 +93,12 @@ def canonical_ip(value: str) -> str:
     return str(address)
 
 
+def is_internal_network(network: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """Сеть целиком внутренняя (сеть контейнеров, локальная): адреса из неё client_address не отдаёт, их приложение не
+    отличает от адреса Caddy."""
+    return any(network.version == inner.version and network.subnet_of(inner) for inner in _INTERNAL_NETWORKS)
+
+
 def client_address(host: str | None) -> str | None:
     """Адрес клиента для лимитов: публичный IP. Внутренний, не IP или пустой: None, лимит адреса не действует."""
     global _last_warning

@@ -1453,3 +1453,59 @@ CREATE INDEX IF NOT EXISTS idx_rule_checks_action ON rule_checks(action_id, id D
 -- Рецепт вызова у записи расхода: версия набора правил эксперта там, где у решения рецепта нет («Суть и перевод»,
 -- «Дедуп», поиск радара, автопроверка).
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS recipe JSONB;
+
+-- =========================================================================
+-- Обмен с потребителем выпуска (#198, спека #197; формат: docs/exchange-format.md)
+-- =========================================================================
+-- Пакеты для потребителя: номер из последовательности под замком сборки (exchange_store.lock), вид (release: выпуск
+-- месяца, addition: дозагрузка), месяц выпуска, отпечаток содержимого, файл конверта ровно таким, каким его отдаёт
+-- точка обмена, состав (номера карточек), что сборка пропустила и почему, кто собрал, когда собран и когда его забрали
+-- в первый и в последний раз. Пакеты не удаляются и не меняются (триггер ниже), у выпуска месяц уникален. На живой
+-- базе: scripts/exchange/exchange-before-deploy.sql до выката кода, без init-db.
+CREATE SEQUENCE IF NOT EXISTS exchange_package_numbers;
+CREATE TABLE IF NOT EXISTS exchange_packages (
+  number               BIGINT PRIMARY KEY,
+  kind                 TEXT NOT NULL,
+  month                TEXT,
+  content_fingerprint  TEXT NOT NULL,
+  envelope             BYTEA NOT NULL,
+  signal_ids           BIGINT[] NOT NULL DEFAULT '{}',
+  details              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  built_by             TEXT,
+  built_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  first_taken_at       TIMESTAMPTZ,
+  last_taken_at        TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_packages_release_month ON exchange_packages(month)
+  WHERE kind = 'release';
+CREATE OR REPLACE FUNCTION exchange_packages_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'пакет обмена № % не удаляется', OLD.number;
+  END IF;
+  IF (NEW.number, NEW.kind, NEW.month, NEW.content_fingerprint, NEW.envelope, NEW.signal_ids, NEW.details,
+      NEW.built_by, NEW.built_at)
+     IS DISTINCT FROM (OLD.number, OLD.kind, OLD.month, OLD.content_fingerprint, OLD.envelope, OLD.signal_ids,
+                       OLD.details, OLD.built_by, OLD.built_at) THEN
+    RAISE EXCEPTION 'пакет обмена № % не меняется: меняются только отметки выдачи', OLD.number;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS exchange_packages_immutable ON exchange_packages;
+CREATE TRIGGER exchange_packages_immutable BEFORE UPDATE OR DELETE ON exchange_packages
+  FOR EACH ROW EXECUTE FUNCTION exchange_packages_immutable();
+-- Журнал отправленного: строка на сигнал, ушедший потребителю (без внешнего ключа на signals: журнал помнит
+-- отправленное, даже если сигнал потом удалят). Первый пакет и месяц выпуска, с которым сигнал ушёл впервые;
+-- последний пакет и отпечаток последней отправленной карточки; когда платформа увидела этот отпечаток (дата обновления
+-- карточки в пакете); состояние у потребителя: active (действует; снятия и склейки добавит #200).
+CREATE TABLE IF NOT EXISTS exchange_sent_signals (
+  signal_id            BIGINT PRIMARY KEY,
+  first_package        BIGINT NOT NULL REFERENCES exchange_packages(number),
+  last_package         BIGINT NOT NULL REFERENCES exchange_packages(number),
+  month                TEXT NOT NULL,
+  card_fingerprint     TEXT NOT NULL,
+  fingerprint_seen_at  TIMESTAMPTZ NOT NULL,
+  state                TEXT NOT NULL DEFAULT 'active',
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);

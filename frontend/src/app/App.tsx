@@ -5,6 +5,7 @@ import type { AuthResponse, User } from "../api/types";
 import { CompanyDescriptionPage } from "../features/companies/CompanyDescriptionPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
+import { ExchangeJournalPage } from "../features/exchangeJournal/ExchangeJournalPage";
 import { FeedbackJournalPage } from "../features/feedbackJournal/FeedbackJournalPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { MaterialsPage } from "../features/materials/MaterialsPage";
@@ -29,7 +30,7 @@ const PASSWORD_REPEAT_FIELD_ID = "auth-password-repeat";
 
 type ScreenId =
   | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "scoring" | "tags" | "users" | "jobs"
-  | "maintenance" | "company-parents" | "company-description" | "statistics" | "feedback-journal";
+  | "maintenance" | "company-parents" | "company-description" | "statistics" | "feedback-journal" | "exchange-journal";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 const ADMIN_SCREENS = new Set<ScreenId>([
@@ -42,6 +43,8 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного: это дыра (аудит изоляции 24.07).
   "statistics",
+  // Журнал обмена с потребителем выпуска (#198): только администратору, сервер участнику отвечает 403.
+  "exchange-journal",
 ]);
 
 type ScreenDef = {
@@ -73,6 +76,11 @@ const screens: ScreenDef[] = [
     id: "feedback-journal",
     // #189 (спека #187): журнал ОС обеих витрин, недельный срез, решения по предложениям и настройки контура.
     label: "Обратная связь",
+  },
+  {
+    id: "exchange-journal",
+    // #198 (спека #197): пакеты для потребителя выпуска, их состав и состояние, дозагрузка по номерам.
+    label: "Журнал обмена",
   },
   {
     id: "colleague-materials",
@@ -115,7 +123,7 @@ const screens: ScreenDef[] = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["business-feed", "signal-radar", "digest", "colleague-materials", "feedback-journal"],
+    screens: ["business-feed", "signal-radar", "digest", "colleague-materials", "feedback-journal", "exchange-journal"],
   },
   {
     label: "Настройки",
@@ -131,7 +139,7 @@ const navGroups: NavGroup[] = [
 // ?screen=documents (прежний раздел документов) ведёт в «Материалы».
 const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "sources", "signal-radar", "business-feed", "digest", "colleague-materials",
   // Значок «ждёт решения в журнале» на карточке ведёт сюда: ?screen=feedback-journal&signal=…&action=… (#189).
-  "feedback-journal"];
+  "feedback-journal", "exchange-journal"];
 
 // Первый экран: «Бизнес-лента».
 const DEFAULT_SCREEN: ScreenId = "business-feed";
@@ -252,6 +260,10 @@ export function App() {
 
   if (activeScreen === "feedback-journal") {
     currentScreen = <FeedbackJournalPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
+  }
+
+  if (activeScreen === "exchange-journal") {
+    currentScreen = <ExchangeJournalPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "scoring") {
@@ -765,6 +777,16 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 3.5h10v7H7.5L4.5 13v-2.5H3z" strokeLinejoin="round" />
         <path d="M5.5 6h5M5.5 8h3" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "exchange-journal") {
+    // Две стрелки навстречу: пакеты уходят потребителю.
+    return (
+      <svg {...common}>
+        <path d="M3 5.5h9M9.5 3l2.5 2.5L9.5 8" />
+        <path d="M13 10.5H4M6.5 8 4 10.5 6.5 13" />
       </svg>
     );
   }

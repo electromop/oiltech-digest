@@ -203,6 +203,10 @@ while true; do
   # отметкам с прошлого среза; в остальные циклы только «устарело» у предложений без решения.
   run_step "feedback-slice" python -m oiltech_digest.cli feedback-slice
 
+  # Выпуск для потребителя (#198): пакет выпуска закрытого месяца в первом цикле после закрытия, без ИИ. Флаг
+  # EXCHANGE_ENABLED (выключен до готовности потребителя) и первый месяц EXCHANGE_FIRST_MONTH шаг проверяет сам.
+  run_step "exchange-release" python -m oiltech_digest.cli exchange-release
+
   if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
     run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
   fi

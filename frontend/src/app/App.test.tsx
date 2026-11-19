@@ -914,7 +914,31 @@ describe("App smoke", () => {
     for (const menu of await participantMenus(true)) {
       expect(menu).toContain("Обратная связь");
       expect(menu).not.toContain("Пользователи");
+      // «Журнал обмена» (#198): только администратору.
+      expect(menu).not.toContain("Журнал обмена");
     }
+  });
+
+  it("«Журнал обмена»: пункт меню у администратора, участнику по прямой ссылке «Нет доступа»", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await logIn(user);
+    await screen.findByRole("heading", { name: "Бизнес-лента" });
+    const adminMenu = within(document.querySelector(".sidebar") as HTMLElement).getAllByRole("button")
+      .map((one) => one.textContent);
+    expect(adminMenu).toContain("Журнал обмена");
+    unmount();
+
+    window.history.replaceState(null, "", "/?screen=exchange-journal");
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/auth/login"
+        ? Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }))
+        : base(input, init));
+    render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Нет доступа" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/exchange-journal"))).toBe(false);
   });
 
   it("прошлый выпуск в дайджесте — только просмотр и выгрузка", async () => {

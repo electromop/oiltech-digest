@@ -34,7 +34,7 @@ from oiltech_digest import (contract, feedback_changes, feedback_journal, feedba
                             network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
                             signal_summary)
 from oiltech_digest import material_signals
-from oiltech_digest import feedback_journal_api
+from oiltech_digest import exchange_api, feedback_journal_api
 from oiltech_digest import request_guard
 from oiltech_digest.api_access import external_worker_refusal, optional_user, require_admin, require_user
 from oiltech_digest.processing.pipeline import (
@@ -74,6 +74,8 @@ app = FastAPI(title="OilTech Digest API")
 app.add_middleware(request_guard.RequestGuard)
 # Журнал ОС, недельный срез и настройки контура (#189): маршруты в своём модуле.
 app.include_router(feedback_journal_api.router)
+# Точка обмена с потребителем выпуска и вкладка «Журнал обмена» (#198): маршруты в своём модуле.
+app.include_router(exchange_api.router)
 if (FRONTEND_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
 
