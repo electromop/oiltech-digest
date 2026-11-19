@@ -6,15 +6,51 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import logging
 from typing import Any
 
 from fastapi import Cookie, Depends, HTTPException
 
-from oiltech_digest import config
+from oiltech_digest import auth_limits, config
 from oiltech_digest.db import repository
 
 logger = logging.getLogger(__name__)
+
+EXCHANGE_CLOSED = "Точка обмена закрыта для этого адреса"
+
+
+def consumer_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Адреса потребителя из настройки: IP или сеть через пробел, как их читает Caddy (запятая его роняет). Хоть одна
+    запись испорчена: точка закрыта всем, а в журнале предупреждение (молча пропущенная запись открыла бы точку не тому,
+    кого имели в виду; Caddy с такой записью не запустится)."""
+    networks = []
+    for item in (config.EXCHANGE_CONSUMER_IPS or "").split():
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logger.warning("EXCHANGE_CONSUMER_IPS: «%s» не адрес и не сеть (через пробел, без запятых), точка обмена "
+                           "закрыта", item)
+            return []
+    return networks
+
+
+def exchange_point_refusal(host: str | None, authorization: str | None) -> tuple[int, str] | None:
+    """Почему запрос к точке обмена не пускать (код и текст) или None. Сначала адрес (настоящий адрес клиента,
+    auth_limits.client_address; адрес не задан: закрыто всем), потом токен (на ядре только его SHA-256). Один отказ на
+    зависимость маршрутов точки (exchange_api) и ворота тела (request_guard): они проверяют до чтения тела."""
+    networks = consumer_networks()
+    address = auth_limits.client_address(host)
+    if not networks or address is None or not any(ipaddress.ip_address(address) in net for net in networks):
+        return 403, EXCHANGE_CLOSED
+    if not config.EXCHANGE_TOKEN_HASH:
+        return 503, "Точка обмена не настроена: нет токена (EXCHANGE_TOKEN_HASH)"
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return 401, "Нужен токен точки обмена"
+    if not hmac.compare_digest(hashlib.sha256(token.encode("utf-8")).hexdigest(), config.EXCHANGE_TOKEN_HASH):
+        return 401, "Неверный токен точки обмена"
+    return None
 
 
 def external_worker_refusal(authorization: str | None) -> tuple[int, str] | None:

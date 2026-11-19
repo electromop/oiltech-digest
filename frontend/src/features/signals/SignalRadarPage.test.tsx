@@ -216,6 +216,17 @@ describe("SignalRadarPage", () => {
     expect(screen.queryByText(/поиск не ответил/)).not.toBeInTheDocument();
   });
 
+  it("ссылка из «Журнала обмена» (?q=#номер) сразу ищет карточку по номеру", async () => {
+    window.history.replaceState(null, "", "/?screen=signal-radar&q=%23501");
+    try {
+      renderRadar(false);
+      await waitFor(() => expect(lastListQuery().q).toBe("#501"));
+      expect(vi.mocked(listSignals).mock.calls[0]?.[0]?.q).toBe("#501");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("после успешного прогона плашки нет", async () => {
     vi.mocked(getSignalSearchHealth).mockResolvedValue({
       search_health: { ...failedEverywhere, status: "ok", failed: 0, signals: 9, first_error: null },

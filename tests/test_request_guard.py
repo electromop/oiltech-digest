@@ -12,6 +12,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from starlette.responses import JSONResponse
 
@@ -60,6 +61,9 @@ def worker_token(monkeypatch):
     ("/api/documents", 32_000_000),
     ("/api/external-worker/jobs/5/complete", 32_000_000),
     ("/api/external-worker/materials", 32_000_000),
+    ("/api/exchange/v1/reactions/3", 1_000_000),
+    ("/api/exchange/v1/receipts/3", 1_000_000),
+    ("/api/exchange-journal/additions", 2_000_000),
     ("/api/documents/5", 2_000_000),
     ("/api/signals/feedback", 2_000_000),
     ("/api/company-parents/import", 2_000_000),
@@ -172,12 +176,29 @@ def test_caddyfile_limits_equal_the_app_limits():
               re.findall(r"request_body\s+@(\w+)\s*\{\s*max_size\s+(\S+)\s*\}", text)}
 
     assert limits == {"auth_body": request_guard.AUTH_BODY_BYTES, "large_body": request_guard.LARGE_BODY_BYTES,
-                      "other_body": request_guard.DEFAULT_BODY_BYTES}
+                      "exchange_body": request_guard.EXCHANGE_BODY_BYTES, "other_body": request_guard.DEFAULT_BODY_BYTES}
     assert matchers["auth_body"] == ("", ["/api/auth/*"])
     assert matchers["large_body"] == ("", ["/api/documents", "/api/external-worker/*"])
+    assert matchers["exchange_body"] == ("", ["/api/exchange/*"])
     negated, other = matchers["other_body"]
     assert negated.strip() == "not"
-    assert sorted(other) == sorted(["/api/auth/*", "/api/documents", "/api/external-worker/*"])
+    assert sorted(other) == sorted(["/api/auth/*", "/api/documents", "/api/external-worker/*", "/api/exchange/*"])
+
+
+def test_caddy_lets_the_exchange_point_through_only_from_the_consumer_addresses():
+    """Точка обмена (#198): Caddy отвечает 403 всем, кроме адресов потребителя, до приложения. Адреса: одна переменная
+    окружения контейнера caddy из .env ядра, а не весь .env. Проверено на caddy 2.11.4 (19.11): пустая переменная
+    закрывает точку всем, запятая в ней роняет Caddy, поэтому адреса через пробел."""
+    text = (REPO_ROOT / "Caddyfile").read_text(encoding="utf-8")
+    block = re.search(r"@exchange_refused \{\n(.*?)\n\s*\}\n", text, flags=re.S).group(1)
+    assert [line.strip() for line in block.strip().splitlines()] == [
+        "path /api/exchange/*", "not remote_ip {$EXCHANGE_CONSUMER_IPS}"]
+    refused = re.search(r"^\s*respond @exchange_refused \"[^\"]+\" (\d+)$", text, flags=re.M)
+    assert refused and refused.group(1) == "403"
+    assert text.index("respond @exchange_refused") < text.index("reverse_proxy app:8000")
+    caddy = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))["services"]["caddy"]
+    assert caddy["environment"] == {"EXCHANGE_CONSUMER_IPS": "${EXCHANGE_CONSUMER_IPS:-}"}
+    assert "env_file" not in caddy
 
 
 def test_compose_trusts_forwarded_for_only_from_internal_addresses():

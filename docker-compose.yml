@@ -221,6 +221,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    # Адреса потребителя выпуска для точки обмена (#198, Caddyfile): только эта переменная из .env ядра, а не весь .env.
+    # Смена адреса: правка .env и пересоздание контейнера caddy (caddy reload переменные окружения не перечитывает).
+    environment:
+      EXCHANGE_CONSUMER_IPS: ${EXCHANGE_CONSUMER_IPS:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

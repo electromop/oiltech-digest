@@ -192,6 +192,11 @@ function pluralWord(count: number, one: string, few: string, many: string): stri
 
 const PUBLICATION_WORDS = ["публикация", "публикации", "публикаций"] as const;
 
+// Поиск из адреса (?q=…): ссылка «Журнала обмена» (#198) открывает витрину сразу на карточке по номеру («#123»).
+function searchFromUrl(): string {
+  return new URLSearchParams(window.location.search).get("q") ?? "";
+}
+
 // «Спорный сигнал: …»: коротко, без служебного зачина «шаги ответа не сошлись и после повтора» (otbor.py).
 function disputedWhy(text: string): string {
   return text.replace(/^шаги ответа не сошлись(?: и после повтора)?:\s*/i, "") || text;
@@ -237,7 +242,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const [loadingMore, setLoadingMore] = useState(false);
   const [maturity, setMaturity] = useState("");
   const [theme, setTheme] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(searchFromUrl);
   const [sort, setSort] = useState<SignalSort>(DEFAULT_SORT);
   // Вариант A (решение владельца 23.10): на виду поиск, тема и сортировка, остальные фильтры: в панели.
   const [filtersOpen, setFiltersOpen] = useState(false);

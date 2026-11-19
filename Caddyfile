@@ -19,10 +19,25 @@
 	request_body @large_body {
 		max_size 32MB
 	}
-	@other_body not path /api/auth/* /api/documents /api/external-worker/*
+	@exchange_body path /api/exchange/*
+	request_body @exchange_body {
+		max_size 1MB
+	}
+	@other_body not path /api/auth/* /api/documents /api/external-worker/* /api/exchange/*
 	request_body @other_body {
 		max_size 2MB
 	}
+
+	# Точка обмена с потребителем выпуска (#198): только с его адресов, остальным 403 до приложения. Адреса приходят
+	# одной переменной окружения контейнера caddy, EXCHANGE_CONSUMER_IPS из .env ядра (docker-compose.yml): IP или сеть
+	# через пробел, запятая роняет Caddy. Пусто: точка закрыта всем. Смена адреса: правка .env и пересоздание контейнера
+	# caddy (caddy reload переменные окружения не перечитывает). Второй слой, адрес и токен: приложение
+	# (api_access.exchange_point_refusal).
+	@exchange_refused {
+		path /api/exchange/*
+		not remote_ip {$EXCHANGE_CONSUMER_IPS}
+	}
+	respond @exchange_refused "Точка обмена закрыта для этого адреса" 403
 
 	reverse_proxy app:8000
 }

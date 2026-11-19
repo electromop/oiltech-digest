@@ -1,0 +1,122 @@
+{
+  "number": 1,
+  "kind": "release",
+  "month": "2026-09",
+  "cards": [
+    {
+      "signal_id": 101,
+      "title": "Испытан беспроводной датчик давления для бурильной колонны",
+      "summary": "Компания «Пример Технологии» заявила об испытании беспроводного датчика давления в бурильной колонне на тестовой скважине. По данным компании, датчик передавал показания на поверхность 30 суток без замены батареи.",
+      "why_important": {
+        "text": "Передача показаний из колонны без кабеля может сократить простои при бурении.",
+        "set_by": "agent"
+      },
+      "hypothesis": "Оценить беспроводные датчики давления в колонне, чтобы сократить простои при бурении.",
+      "theme": "Бурение",
+      "event_date": "2026-09-08",
+      "event_type": "испытание",
+      "companies": ["Пример Технологии"],
+      "region": "Северная Америка",
+      "technology_class": "датчики",
+      "maturity": "испытание",
+      "oilfield_relevance": "прямая",
+      "oilfield_application": null,
+      "updated_at": "2026-10-09T17:20:00+03:00",
+      "publications": [
+        {
+          "title": "«Пример Технологии» испытала датчик давления в колонне",
+          "source": "Отраслевой вестник",
+          "url": "https://example.org/news/sensor-test",
+          "date": "2026-09-10"
+        },
+        {
+          "title": "Wireless pressure sensor completes field test",
+          "source": "Example Energy Review",
+          "url": "https://example.com/articles/wireless-sensor",
+          "date": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "signal_id": 102,
+      "title": "Цифровой двойник подбирает режим ремонта скважины",
+      "summary": "Разработчик «Образец Софт» показал цифровой двойник, который по истории скважины подбирает режим капитального ремонта.",
+      "why_important": {
+        "text": "Главный прорыв в пачке: сильнее соседних находок по зрелости.",
+        "set_by": "radar"
+      },
+      "hypothesis": null,
+      "theme": "КРС",
+      "event_date": "2026-09-15",
+      "event_type": "запуск продукта",
+      "companies": ["Образец Софт"],
+      "region": "Европа",
+      "technology_class": "цифровой двойник",
+      "maturity": "коммерциализация",
+      "oilfield_relevance": "прямая",
+      "oilfield_application": null,
+      "updated_at": "2026-10-08T12:00:00+03:00",
+      "publications": [
+        {
+          "title": "Образец Софт выпустила цифровой двойник для ремонта скважин",
+          "source": "Вестник сервиса",
+          "url": "https://example.net/twin-release",
+          "date": "2026-09-16"
+        }
+      ]
+    },
+    {
+      "signal_id": 103,
+      "title": "Робот для осмотра резервуаров перенесён из химической отрасли",
+      "summary": "Химический завод внедрил робота, который осматривает стенки резервуаров без остановки производства.",
+      "why_important": {
+        "text": "Такой осмотр подходит для резервуаров на промыслах.",
+        "set_by": "human"
+      },
+      "hypothesis": "Рассмотреть осмотр резервуаров роботом без остановки промысла.",
+      "theme": "Промысловое оборудование",
+      "event_date": "2026-09-03",
+      "event_type": "внедрение",
+      "companies": ["Пример Робот", "Тестовый Химзавод"],
+      "region": "Азия",
+      "technology_class": "робототехника",
+      "maturity": "масштабное внедрение",
+      "oilfield_relevance": "переносимая",
+      "oilfield_application": "осмотр резервуаров на промыслах без остановки",
+      "updated_at": "2026-10-10T09:30:00+03:00",
+      "publications": [
+        {
+          "title": "Robot inspects tank walls without shutdown",
+          "source": "Example Industry News",
+          "url": "https://example.org/robot-tanks",
+          "date": "2026-09-05"
+        }
+      ]
+    },
+    {
+      "signal_id": 104,
+      "title": "Партнёрство по переработке бурового шлама",
+      "summary": "Две компании договорились совместно перерабатывать буровой шлам.",
+      "why_important": null,
+      "hypothesis": "",
+      "theme": null,
+      "event_date": null,
+      "event_type": null,
+      "companies": [],
+      "region": null,
+      "technology_class": null,
+      "maturity": null,
+      "oilfield_relevance": null,
+      "oilfield_application": null,
+      "updated_at": "2026-10-07T08:00:00+00:00",
+      "publications": [
+        {
+          "title": null,
+          "source": null,
+          "url": "https://example.com/drill-cuttings",
+          "date": null
+        }
+      ]
+    }
+  ]
+}

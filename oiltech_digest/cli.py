@@ -3725,6 +3725,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_pp.add_argument("--offline", action="store_true")
     p_pp.set_defaults(func=cmd_parse_process)
 
+    # Обмен с потребителем выпуска (#198): команды в своём модуле.
+    from oiltech_digest import exchange_cli
+
+    exchange_cli.add_commands(sub)
+
     return parser
 
 
