@@ -1435,7 +1435,7 @@ describe("«Гипотеза для Компании» на карточке (#1
       { ...baseSignal, id: 804, signal_key: "k804", title_ru: "Закрытый месяц", selected_for_digest: true,
         digest_locked: true, hypothesis: "Изучить опыт закрытого месяца." },
     ]);
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin hypothesisSection />);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin hypothesisEnabled />);
 
     const card = await openCard("Буровая с гипотезой");
     const facts = card.querySelector(".signalRadarFacts") as HTMLElement;
@@ -1468,7 +1468,7 @@ describe("«Гипотеза для Компании» на карточке (#1
         hypothesis: "Оценить применение буровой на месторождениях Компании." },
       { ...baseSignal, id: 812, signal_key: "k812", title_ru: "Выбранная без гипотезы", selected_for_digest: true },
     ]);
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisSection />);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisEnabled />);
 
     const card = await openCard("Буровая с гипотезой");
     expect(within(card).getByText("Оценить применение буровой на месторождениях Компании.")).toBeInTheDocument();

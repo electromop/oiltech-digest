@@ -175,10 +175,10 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
           <h1>Группы компаний</h1>
           <p>
             Справочник «дочка → мать» для компаний из новостей. На отбор, баллы и выпуск он не влияет и сигналы
-            обществам не направляет. Нужен фильтру «всё про компанию»: нажмите на компанию в карточке ленты, и
-            подборка покажет её вместе с дочерними компаниями по цепочке, а под полем «Компания» в фильтрах будет
-            строка «Компания и дочерние: …». Форму собственности, регистр и падеж сверка учитывает сама; другое
-            написание (латиница, прежнее название) добавьте отдельной строкой.
+            обществам не направляет. Нужен фильтру «всё про компанию»: нажмите на компанию в карточке ленты или
+            радара, и подборка покажет её вместе с дочерними компаниями по цепочке, а над подборкой появится
+            подсказка вида «Halliburton и дочерние: …». Форму собственности, регистр и падеж сверка учитывает сама;
+            другое написание (латиница, прежнее название) добавьте отдельной строкой.
           </p>
         </div>
         <div className="statusPill">{pluralRu(pairs.length, "связь", "связи", "связей")}</div>
@@ -201,7 +201,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
               list={NAMES_LIST_ID}
               value={child}
               maxLength={MAX_NAME}
-              placeholder="Газпромнефть-Заполярье"
+              placeholder="Halliburton Energy Services"
               onChange={(event) => {
                 setChild(event.target.value);
                 setRefusal(null);
@@ -214,7 +214,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
               list={NAMES_LIST_ID}
               value={parent}
               maxLength={MAX_NAME}
-              placeholder="Газпром нефть"
+              placeholder="Halliburton"
               onChange={(event) => {
                 setParent(event.target.value);
                 setRefusal(null);
@@ -314,7 +314,10 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
           <textarea
             className={styles.paste}
             value={text}
-            placeholder={"Газпром нефть; Газпром\nГазпромнефть-Заполярье; Газпром нефть; контроль 100%"}
+            placeholder={
+              "Halliburton Energy Services; Halliburton; основная операционная компания\n" +
+              "Baker Hughes Holdings; Baker Hughes"
+            }
             onChange={(event) => {
               setText(event.target.value);
               setAnalysis(null);

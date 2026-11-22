@@ -127,11 +127,10 @@ HYPOTHESIS_BUSINESS = "Рассмотреть выход на рынок сер�
 
 
 def test_hypothesis_of_a_person_keeps_who_and_when_and_is_printed_under_the_summary_only_where_it_is(
-        issue, chromium, monkeypatch):
+        issue, chromium, hypothesis_on):
     """Гипотезу пишут на карточке сигнала и на экране «Дайджест»: она на сигнале с отметкой «человек», его почтой и
     временем, и обе витрины, экран и PDF показывают одну. Нет гипотезы: в карточке PDF нет и строки. Раздел включён:
     по умолчанию он выключен (решение владельца 22.11), выключенный проверяет тест ниже."""
-    monkeypatch.setattr(config, "ISSUE_HYPOTHESIS_ENABLED", True)
     analyst, admin, a = issue["analyst"], issue["admin"], issue["a"]
     finding = _finding("robot", "Роботизированная буровая", signal_category="technology", theme=DRILLING)
     bare = _finding("bare", "Находка без гипотезы", signal_category="technology", theme=DRILLING, score=60)
@@ -170,7 +169,8 @@ def test_switched_off_hypothesis_is_refused_and_hidden_on_the_screen_and_in_the_
         issue, chromium):
     """Раздел «Гипотеза для Компании» выключен (по умолчанию, решение владельца 22.11): правка гипотезы получает
     отказ, а прочая правка материала идёт; гипотеза, поставленная до выключения, не видна ни на экране «Дайджест», ни
-    в PDF, и её нехваткой не считают; в базе она остаётся, включённый раздел покажет её снова."""
+    на карточке витрины, ни в PDF, и её нехваткой не считают; в базе она остаётся, включённый раздел покажет её
+    снова."""
     assert config.ISSUE_HYPOTHESIS_ENABLED is False
     analyst, admin = issue["analyst"], issue["admin"]
     finding = _finding("robot", "Роботизированная буровая", signal_category="technology", theme=DRILLING)
@@ -178,12 +178,15 @@ def test_switched_off_hypothesis_is_refused_and_hidden_on_the_screen_and_in_the_
     set_card(finding, hypothesis=HYPOTHESIS_TECH, card_set_by={"hypothesis": "human"})
 
     refused = _edit(admin, finding, hypothesis="Изучить ещё раз.")
-    assert refused.status_code == 409 and "выключен" in refused.json()["detail"]
+    assert refused.status_code == 403 and "выключен" in refused.json()["detail"]
     assert _edit(admin, finding, picture="placeholder").status_code == 200
 
     material = _material(analyst, "signal", finding)
     assert (material["hypothesis"], material["hypothesis_set_by"], material["hypothesis_author"]) == (None, None, None)
     assert "hypothesis" not in material["missing"]
+    card = _card(analyst, finding)
+    assert (card["hypothesis"], card["hypothesis_author"], card["hypothesis_set_at"]) == (None, None, None)
+    assert "hypothesis" not in card["card_set_by"]
     assert "Гипотеза для Компании" not in " ".join(pdf_pages(analyst.preview_pdf()))
     with connection.get_connection() as conn:
         kept = conn.execute("SELECT hypothesis FROM signals WHERE id = %s", (finding,)).fetchone()[0]
@@ -221,11 +224,10 @@ def pdf_figures_of(person: Person) -> list[str]:
 
 
 def test_edit_of_a_closed_month_material_is_refused_everywhere_and_the_closed_issue_keeps_its_text(
-        issue, monkeypatch):
+        issue, monkeypatch, hypothesis_on):
     """Выпуск закрытого месяца только на просмотр: правку любого поля материала сервер отклоняет и с экрана «Дайджест»,
     и с карточки сигнала; выпуск берёт то, что было до закрытия. Сентябрь закрыт с 05.10 00:00 МСК. Раздел гипотезы
     включён: отказ закрытого месяца проверяется и у гипотезы."""
-    monkeypatch.setattr(config, "ISSUE_HYPOTHESIS_ENABLED", True)
     analyst, a = issue["analyst"], issue["a"]
     finding = _finding("closed", "Сентябрьская находка", signal_category="technology", theme=DRILLING)
     article_signal = feed_signal(a["hi"])
@@ -251,12 +253,11 @@ def test_edit_of_a_closed_month_material_is_refused_everywhere_and_the_closed_is
     assert _card(analyst, finding)["digest_locked"] is True
 
 
-def test_screen_names_what_each_material_lacks(issue, image_host, monkeypatch):
+def test_screen_names_what_each_material_lacks(issue, image_host, monkeypatch, hypothesis_on):
     """У каждого материала видно, чего не хватает до выпуска: гипотезы, баллов по критериям, связи с нефтесервисом,
     своей картинки. Заглушку, выбранную человеком, нехваткой не считают."""
     from tests.digest_user_path_support import breakdown
 
-    monkeypatch.setattr(config, "ISSUE_HYPOTHESIS_ENABLED", True)
     monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
     analyst = issue["analyst"]
     full = _finding("full", "Заполненная находка", signal_category="technology", theme=DRILLING,

@@ -19,15 +19,14 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from oiltech_digest import config
 from oiltech_digest.db.showcase_cards import shown_title
 
 _MSK = ZoneInfo("Europe/Moscow")
 # Кто написал «почему важно» (signals.card_set_by.why_interesting): агент «Карточка» или человек; остальное (судья и
 # ревью пачки радара, карточки до #96 без отметки) потребитель получает пометкой radar и такой текст не хранит.
 _WHY_AUTHORS = {"agent": "agent", "human": "human"}
-# Гипотеза в пакете, только если её поставил человек или агент (#162, #163) и раздел гипотезы включён
-# (config.ISSUE_HYPOTHESIS_ENABLED; выключен решением владельца 22.11): выключенный отдаёт null.
+# Гипотеза в пакете, только если её поставил человек или агент (#162, #163). Выключенный раздел гипотезы (решение
+# владельца 22.11) прячет её раньше, в showcase_cards.read: в пакет уходит null.
 _HYPOTHESIS_AUTHORS = ("agent", "human")
 
 
@@ -118,8 +117,7 @@ def card(row: dict) -> dict[str, Any]:
     title = shown_title(row)
     if title is None:
         raise CardError(f"у сигнала №{row.get('id')} нет заголовка")
-    hypothesis = (_text(row.get("hypothesis"))
-                  if config.ISSUE_HYPOTHESIS_ENABLED and _set_by(row, "hypothesis") in _HYPOTHESIS_AUTHORS else None)
+    hypothesis = _text(row.get("hypothesis")) if _set_by(row, "hypothesis") in _HYPOTHESIS_AUTHORS else None
     return {
         "signal_id": int(row["id"]),
         "title": title,

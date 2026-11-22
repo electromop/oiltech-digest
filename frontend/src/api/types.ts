@@ -7,7 +7,7 @@ export type User = {
   feedback_tab?: boolean;
   // Включён ли раздел «Гипотеза для Компании» (config.ISSUE_HYPOTHESIS_ENABLED, ответ входа и сессии); выключен
   // решением владельца 22.11. Нет поля или false: раздела в интерфейсе нет.
-  hypothesis_section?: boolean;
+  hypothesis_enabled?: boolean;
   // Список «Пользователи»: когда учётку допустили; null: ждёт кода допуска.
   admitted_at?: string | null;
   // Учётку завели сами на экране входа (регистрация с 16.11), а не администратор.

@@ -27,8 +27,8 @@ type Props = {
   materials: Map<string, DigestMaterial>;
   // Править материал может только администратор (#188).
   canEdit: boolean;
-  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_section; выключен решением владельца 22.11).
-  hypothesisSection: boolean;
+  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_enabled; выключен решением владельца 22.11).
+  hypothesisEnabled: boolean;
   editing: string | null;
   onEdit: (key: string | null) => void;
   onSaveMaterial: (material: DigestMaterial, patch: IssueMaterialPatch) => void;
@@ -101,7 +101,7 @@ export function KindBadge({ kind }: { kind?: ItemKind }) {
 // (#161). Статьи двигаются стрелками, «Из выпуска» убирает только из этого выпуска, «Из дайджеста» снимает отметку;
 // ниже: отмеченное, но не вошедшее в выпуск. Суть здесь, как в письме, короткая; в PDF она целиком.
 export function DigestQueue(props: Props) {
-  const { items, radarItems, available, issueItems, readOnly, busy, materials, editing, hypothesisSection } = props;
+  const { items, radarItems, available, issueItems, readOnly, busy, materials, editing, hypothesisEnabled } = props;
 
   // «Править» у материала, чьи поля можно менять: месяц открыт, у материала есть сигнал (ADR 0006), правит
   // администратор (#188).
@@ -121,7 +121,7 @@ export function DigestQueue(props: Props) {
     if (editing !== key || !material) return null;
     return (
       <DigestMaterialEditor material={material} busy={busy} onCancel={() => props.onEdit(null)}
-        onSave={(patch) => props.onSaveMaterial(material, patch)} hypothesisSection={hypothesisSection} />
+        onSave={(patch) => props.onSaveMaterial(material, patch)} hypothesisEnabled={hypothesisEnabled} />
     );
   }
   return (
@@ -154,9 +154,9 @@ export function DigestQueue(props: Props) {
             </div>
             <p className="digestPickSummary">{issueItems.get(article.id)?.summary || article.summary || "Суть ещё не сформирована."}</p>
             <HypothesisLine material={materials.get(materialKey("article", article.id))}
-              hypothesisSection={hypothesisSection} />
+              hypothesisEnabled={hypothesisEnabled} />
             <MissingLine material={materials.get(materialKey("article", article.id))}
-              hypothesisSection={hypothesisSection} />
+              hypothesisEnabled={hypothesisEnabled} />
             <div className="digestPickFooter">
               <span>{article.source}</span>
               <span>{formatDate(article.date)}</span>
@@ -210,9 +210,9 @@ export function DigestQueue(props: Props) {
             </div>
             <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
             <HypothesisLine material={materials.get(materialKey("signal", item.signal_id))}
-              hypothesisSection={hypothesisSection} />
+              hypothesisEnabled={hypothesisEnabled} />
             <MissingLine material={materials.get(materialKey("signal", item.signal_id))}
-              hypothesisSection={hypothesisSection} />
+              hypothesisEnabled={hypothesisEnabled} />
             <div className="digestPickFooter">
               {item.source ? <span>{item.source}</span> : null}
               {item.published_at ? <span>{formatDate(item.published_at)}</span> : null}

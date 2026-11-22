@@ -7,8 +7,8 @@ type Props = {
   busy: boolean;
   onSave: (patch: IssueMaterialPatch) => void;
   onCancel: () => void;
-  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_section; выключен решением владельца 22.11).
-  hypothesisSection?: boolean;
+  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_enabled; выключен решением владельца 22.11).
+  hypothesisEnabled?: boolean;
 };
 
 // Чего не хватает материалу до выпуска (#162): коды сервера (digest_materials) словами.
@@ -20,11 +20,11 @@ const MISSING_LABELS: Record<DigestMaterial["missing"][number], string> = {
 };
 
 // Строка очереди материала: сам материал и включён ли раздел «Гипотеза для Компании» (выключен 22.11).
-type LineProps = { material?: DigestMaterial; hypothesisSection?: boolean };
+type MaterialLineProps = { material?: DigestMaterial; hypothesisEnabled?: boolean };
 
 // Раздел гипотезы выключен: «нет гипотезы» нехваткой не считается (сервер её тогда и не пишет).
-export function MissingLine({ material, hypothesisSection = false }: LineProps) {
-  const missing = (material?.missing ?? []).filter((code) => hypothesisSection || code !== "hypothesis");
+export function MissingLine({ material, hypothesisEnabled = false }: MaterialLineProps) {
+  const missing = (material?.missing ?? []).filter((code) => hypothesisEnabled || code !== "hypothesis");
   if (!missing.length) return null;
   return (
     <div className="digestMissing" role="note">
@@ -35,8 +35,8 @@ export function MissingLine({ material, hypothesisSection = false }: LineProps) 
 
 // «Гипотеза для Компании» в строке очереди (#162): текст, кто поставил и когда; видна и в выпуске закрытого месяца.
 // Раздел выключен (решение владельца 22.11): строки нет.
-export function HypothesisLine({ material, hypothesisSection = false }: LineProps) {
-  if (!hypothesisSection || !material?.hypothesis) return null;
+export function HypothesisLine({ material, hypothesisEnabled = false }: MaterialLineProps) {
+  if (!hypothesisEnabled || !material?.hypothesis) return null;
   const authorship = hypothesisAuthorship(material.hypothesis_set_by, material.hypothesis_author, material.hypothesis_set_at);
   return (
     <p className="digestPickHypothesis">
@@ -48,7 +48,7 @@ export function HypothesisLine({ material, hypothesisSection = false }: LineProp
 // Правка материала выпуска на экране «Дайджест» (#162, ADR 0006): заголовок, суть, подпись, «Гипотеза для Компании»
 // и картинка. Правка ложится на сигнал материала: витрина и выпуск показывают один текст. Уходит только изменённое.
 // Раздел гипотезы выключен: поля нет, и гипотеза в правку не уходит (сервер такой правке отказывает).
-export function DigestMaterialEditor({ material, busy, onSave, onCancel, hypothesisSection = false }: Props) {
+export function DigestMaterialEditor({ material, busy, onSave, onCancel, hypothesisEnabled = false }: Props) {
   const [title, setTitle] = useState(material.title);
   const [summary, setSummary] = useState(material.summary);
   const [label, setLabel] = useState(material.label === material.label_default ? "" : material.label);
@@ -61,7 +61,7 @@ export function DigestMaterialEditor({ material, busy, onSave, onCancel, hypothe
     if (title.trim() && title.trim() !== material.title) patch.title = title.trim();
     if (summary.trim() && summary.trim() !== material.summary) patch.summary = summary.trim();
     if (label.trim() !== ownLabel) patch.label = label.trim();
-    if (hypothesisSection && hypothesis.trim() !== (material.hypothesis ?? "")) patch.hypothesis = hypothesis.trim();
+    if (hypothesisEnabled && hypothesis.trim() !== (material.hypothesis ?? "")) patch.hypothesis = hypothesis.trim();
     if (picture !== material.picture) patch.picture = picture;
     return patch;
   }
@@ -87,7 +87,7 @@ export function DigestMaterialEditor({ material, busy, onSave, onCancel, hypothe
           onChange={(event) => setLabel(event.target.value)}
         />
       </label>
-      {hypothesisSection ? (
+      {hypothesisEnabled ? (
         <label className="field">
           <span>Гипотеза для Компании{authorship ? ` · ${authorship}` : ""}</span>
           <textarea

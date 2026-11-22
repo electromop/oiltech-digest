@@ -381,7 +381,7 @@ describe("правки человека в выпуске (#162)", () => {
 
   it("у материала видно, чего не хватает; правка администратора уходит на его сигнал только изменённым", async () => {
     const user = userEvent.setup();
-    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin hypothesisSection />);
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin hypothesisEnabled />);
     const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
     expect(within(row).getByRole("note")).toHaveTextContent(
       "Не хватает: нет гипотезы, нет баллов по критериям, связь с нефтесервисом не определена, нет своей картинки");
@@ -396,7 +396,7 @@ describe("правки человека в выпуске (#162)", () => {
   });
 
   it("материал правит только администратор: у участника «Править» нет, недостающее видно (#188)", async () => {
-    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisSection />);
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisEnabled />);
     const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
 
     expect(within(row).getByRole("note")).toHaveTextContent("Не хватает: нет гипотезы");
@@ -406,7 +406,7 @@ describe("правки человека в выпуске (#162)", () => {
   it("в строке очереди видна гипотеза, кто и когда её поставил", async () => {
     shown = { ...material, hypothesis: "Оценить пилот для Компании.", hypothesis_set_by: "human",
       hypothesis_author: "expert@example.test", hypothesis_set_at: "2026-10-20T09:00:00Z", missing: ["criteria"] };
-    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisSection />);
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisEnabled />);
     const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
     expect(within(row).getByText(/Гипотеза для Компании · человек \(expert@example\.test\), 20\.10\.2026:/)).toBeInTheDocument();
     expect(within(row).getByText(/Оценить пилот для Компании\./)).toBeInTheDocument();

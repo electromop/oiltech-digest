@@ -56,9 +56,9 @@ type Props = {
   // карточка события, публикации снизу, атрибуты чипами. «В дайджест» и блоки ОС: в обеих витринах,
   // одной механикой (решение владельца 23.10, #130); служебное радара: только у радара.
   showcase?: SignalShowcase;
-  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_section; выключен решением владельца 22.11): выключенный
+  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_enabled; выключен решением владельца 22.11): выключенный
   // блок гипотезы на карточке не рисуется.
-  hypothesisSection?: boolean;
+  hypothesisEnabled?: boolean;
 };
 
 // Подписи экрана по витрине. Публикаций у события ленты (статья и перепечатки): сколько сервер отдаёт
@@ -234,7 +234,7 @@ function searchHealthNotice(health: SignalSearchHealth | null): string {
 }
 
 export function SignalRadarPage({
-  onUnauthorized, showToast, isAdmin = false, showcase = "technology", hypothesisSection = false,
+  onUnauthorized, showToast, isAdmin = false, showcase = "technology", hypothesisEnabled = false,
 }: Props) {
   const business = showcase === "business";
   const screenText = SCREENS[showcase];
@@ -1141,7 +1141,7 @@ export function SignalRadarPage({
                       ) : null}
                       {/* «Гипотеза для Компании» (#162) сразу после «Применения», та же, что в выпуске;
                           раздел выключен: блока нет. */}
-                      {hypothesisSection ? (
+                      {hypothesisEnabled ? (
                         <SignalHypothesis signal={signal} saving={savingThis} editable={isAdmin}
                           onSave={(text) => void saveHypothesis(signal, text)} />
                       ) : null}

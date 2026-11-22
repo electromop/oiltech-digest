@@ -955,7 +955,7 @@ def test_auth_register_login_me_and_logout(monkeypatch, no_auth_limits):
     assert me_response.json()["user"]["email"] == "user@example.com"
     assert me_response.json()["user"]["feedback_tab"] is True
     # Раздел «Гипотеза для Компании» выключен по умолчанию (решение владельца 22.11): интерфейс его не показывает.
-    assert me_response.json()["user"]["hypothesis_section"] is False
+    assert me_response.json()["user"]["hypothesis_enabled"] is False
 
     logout_response = client.post("/api/auth/logout")
     assert logout_response.status_code == 200

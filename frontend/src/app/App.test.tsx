@@ -941,13 +941,13 @@ describe("App smoke", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/exchange-journal"))).toBe(false);
   });
 
-  // Боковое меню администратора по группам; hypothesisSection: включён ли раздел «Гипотеза для Компании».
-  async function adminSidebar(hypothesisSection?: boolean) {
+  // Боковое меню администратора по группам; hypothesisEnabled: включён ли раздел «Гипотеза для Компании».
+  async function adminSidebar(hypothesisEnabled?: boolean) {
     const base = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
       String(input) === "/api/auth/login"
         ? Promise.resolve(jsonResponse({
-          ok: true, user: { id: 1, email: "user@example.com", role: "admin", hypothesis_section: hypothesisSection },
+          ok: true, user: { id: 1, email: "user@example.com", role: "admin", hypothesis_enabled: hypothesisEnabled },
         }))
         : base(input, init));
     const user = userEvent.setup();
