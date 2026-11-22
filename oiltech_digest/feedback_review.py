@@ -1,10 +1,12 @@
 """Агент «Разбор ОС» (#189, спека #187): сводит отметки всех участников по каждому сигналу в одно улучшение карточки.
 
-Вид задачи на внешнем воркере (контракт 12; с вызовом о правилах эксперта, #190: 13). Ядро собирает пакет при выдаче:
-сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно похожих отметок (без имён авторов: только
-роль), поля карточки, текст главной публикации и справочники. Воркер без базы зовёт модель из настроек контура
-(gpt-6-sol) по сигналу, затем один раз о правилах (feedback_review_rules). Ядро проверяет ответ кодом: поле из списка,
-значение из справочника, номера отметок из пакета, цитата дословно из текста этих отметок; не прошедшее не пишется.
+Вид задачи на внешнем воркере (контракт 12; с вызовом о правилах эксперта, #190: 13; с откликами потребителя выпуска,
+#200: 14). Ядро собирает пакет при выдаче: сигналы с новыми отметками с прошлого среза, все отметки сигнала за окно
+похожих отметок (без имён авторов: только роль), отрицательные отклики потребителя с прошлого среза (роль «сотрудник
+потребителя», feedback_review_reactions), поля карточки, текст главной публикации и справочники. Воркер без базы зовёт
+модель из настроек контура (gpt-6-sol) по сигналу (промпт: feedback_review_prompt), затем один раз о правилах
+(feedback_review_rules). Ядро проверяет ответ кодом: поле из списка, значение из справочника, номера отметок и откликов
+из пакета этой карточки, цитата дословно из текста этих отметок или подпись кнопки отклика; не прошедшее не пишется.
 Прошедшее ложится в журнал ОС предложением (ждёт решения администратора); новое по тому же сигналу заменяет прежнее
 нерешённое. Сам разбор ничего не меняет (решения владельца 11 и 12.11). Расход: своей стадией в учёте расхода ИИ.
 """
@@ -15,9 +17,10 @@ import re
 from datetime import date, datetime
 from typing import Any, Callable
 
-from oiltech_digest import config, feedback_changes, feedback_review_rules, feedback_settings
+from oiltech_digest import config, feedback_changes, feedback_review_reactions, feedback_review_rules, feedback_settings
 from oiltech_digest.db import connection, feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, PROPOSAL, STALE
+from oiltech_digest.feedback_review_prompt import answer_schema, instructions, model_input
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
@@ -27,7 +30,7 @@ from oiltech_digest.signal_card_pack import load_dictionaries, publication_text
 KIND = "feedback_review"
 # Стадия расхода в учёте расхода ИИ: расход разбора ОС отдельной стадией.
 STAGE = KIND
-PROMPT_VERSION = "2026-11-13.1"
+PROMPT_VERSION = "2026-11-22.1"
 REVIEW_AUTHOR = "Разбор ОС"
 _OUTPUT_TOKENS = 1500
 _TEXT_CHARS = 4000
@@ -72,13 +75,14 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     since, until = _moment(job_payload.get("since")), _moment(job_payload.get("until"))
     cards = feedback_store.review_cards(ids)
     marks = feedback_store.signal_marks(ids, since, until)
+    reactions = feedback_review_reactions.for_signals(ids, _reactions_since(job_payload), until)
     publications = {int(row["signal_id"]): row for row in signal_card_store.card_inputs(ids)}
     context = choices_context()
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
         "prompt_version": PROMPT_VERSION, "choices": context["choices"],
-        "items": [_item(cards[one], publications.get(one), marks.get(one) or []) for one in ids
-                  if one in cards and marks.get(one)],
+        "items": [_item(cards[one], publications.get(one), marks.get(one) or [], reactions.get(one) or [])
+                  for one in ids if one in cards and (marks.get(one) or reactions.get(one))],
         # Правила эксперта (#190): после сигналов один вызов по отметкам окна и действующим правилам агентов.
         "rules_review": feedback_review_rules.payload(job_payload),
     }
@@ -101,14 +105,24 @@ def _themes() -> list[str]:
     return signal_themes.names(repository.list_enabled_tags())
 
 
-def _item(card: dict[str, Any], publication: dict[str, Any] | None, marks: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def _reactions_since(job_payload: dict[str, Any]) -> datetime:
+    """Отклики берутся с прошлого среза (начало окна среза); задача без него (до #190): с начала окна похожих отметок."""
+    return _moment(job_payload.get("window_from") or job_payload.get("since"))
+
+
+def _item(card: dict[str, Any], publication: dict[str, Any] | None, marks: list[dict[str, Any]],
+          reactions: list[dict[str, Any]]) -> dict[str, Any]:
+    item = {
         "signal_id": int(card["id"]),
         "card": card_lines(card),
         "publication": {"title": publication_text((publication or {}).get("title"))[:500],
                         "text": publication_text((publication or {}).get("text"))[:_TEXT_CHARS]},
         "marks": [_mark(mark) for mark in marks],
     }
+    # Без откликов пакет прежней формы: его исполнит и сборка воркера до контракта 14.
+    if reactions:
+        item["reactions"] = feedback_review_reactions.payload(reactions)
+    return item
 
 
 def card_lines(card: dict[str, Any]) -> dict[str, str]:
@@ -176,72 +190,6 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     return result
 
 
-_TASK = """Ты разбираешь обратную связь людей (отметки ОС) по одной карточке сигнала рынка нефтесервиса. Во входе: поля
-карточки, текст главной публикации и все отметки людей по этой карточке за последние недели: оценка, обоснование,
-рекомендации, предложенные заголовок и суть, номер главной карточки «Дубля». Сведи отметки всех людей в одно улучшение
-карточки: какие её поля поменять и на что. Сам ты ничего не меняешь: улучшение согласует администратор.
-
-Правила:
-- Меняй поле, только если это прямо следует из текста отметок. quote: дословный фрагмент текста одной из отметок, на
-  которых стоит изменение (marks: их номера). Без такой цитаты поле не предлагай.
-- Значения полей со списком (тема, тип события, стадия, регион, класс технологии, категория): только из списков ниже,
-  дословно. Страны и компании: через «;». Дата события: ГГГГ-ММ-ДД, ГГГГ-ММ или ГГГГ.
-- Похожие отметки сводятся в одно значение. Если отметки противоречат друг другу и из текста не ясно, что верно, поле
-  не предлагай. Значение, которое уже стоит в карточке, не предлагай.
-- Заголовок и суть: если люди предлагают свой текст, дай один текст, сведённый из их предложений, по-русски. Короткая
-  строка-описание поверх развёрнутой сути не улучшение: развёрнутую суть не заменяй.
-- Категорию меняй, только если есть отметка «Не тот блок»; «Дубль» (номер главной карточки), только если есть отметка
-  «Дубль» с этим номером; «убрать», только если есть отметка «Не релевантно».
-- Каждое поле не больше одного раза. Улучшать нечего: пустой список."""
-
-
-def instructions(choices: dict[str, list[str]]) -> str:
-    lines = [_TASK, "", "Поля (field) и допустимые значения:"]
-    for field, spec in feedback_changes.FIELDS.items():
-        listed = choices.get(field)
-        hint = f": {'; '.join(listed)}" if listed else {"text": ": свободный текст", "date": ": дата",
-                                                         "countries": ": страны через «;»",
-                                                         "companies": ": компании через «;»",
-                                                         "duplicate": ": номер главной карточки",
-                                                         "removal": ": «да»"}.get(spec.kind, "")
-        lines.append(f"- {field} ({spec.label}){hint}")
-    return "\n".join(lines)
-
-
-def answer_schema() -> dict[str, Any]:
-    return {"name": "feedback_review", "schema": {
-        "type": "object", "additionalProperties": False, "required": ["improvements"],
-        "properties": {"improvements": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["field", "value", "marks", "quote"],
-            "properties": {"field": {"type": "string", "enum": list(feedback_changes.FIELDS)},
-                           "value": {"type": "string"},
-                           "marks": {"type": "array", "items": {"type": "integer"}},
-                           "quote": {"type": "string"}},
-        }}},
-    }}
-
-
-def model_input(item: dict[str, Any]) -> str:
-    """Вход модели о сигнале: карточка, публикация и отметки без имён авторов."""
-    card = item.get("card") or {}
-    lines = [f"Карточка №{item.get('signal_id')}", *[f"{label}: {value or 'не определено'}"
-                                                    for label, value in card.items()]]
-    publication = item.get("publication") or {}
-    lines += ["", f"Публикация: {publication.get('title') or ''}", publication.get("text") or "", "", "Отметки людей:"]
-    for mark in item.get("marks") or []:
-        lines.append(f"Отметка №{mark['id']} ({mark['role']}, {mark['day']}):")
-        for label, key in (("Оценка", "verdict"), ("Обоснование оценки", "reason"),
-                           ("Рекомендации AI-агенту", "comment"), ("Предложенный заголовок", "proposed_title"),
-                           ("Предложенная суть", "proposed_summary")):
-            if mark.get(key):
-                lines.append(f"  {label}: {mark[key]}")
-        if mark.get("duplicate_of"):
-            lines.append(f"  Дубль: главная карточка №{mark['duplicate_of']}")
-        if mark.get("applied") and mark.get("role") == "администратор":
-            lines.append("  (явные действия этой отметки уже применены)")
-    return "\n".join(lines)
-
-
 # --- Применение (ядро) ---------------------------------------------------------------------------
 
 
@@ -256,6 +204,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
     since, until = _moment(job_payload.get("since")), _moment(job_payload.get("until"))
     reviewed = [int(row["signal_id"]) for row in rows]
     marks = feedback_store.signal_marks(reviewed, since, until)
+    reactions = feedback_review_reactions.for_signals(reviewed, _reactions_since(job_payload), until)
     cards = feedback_store.review_cards(reviewed)
     context = choices_context()
     threshold = int(feedback_settings.current()["card_threshold_marks"])
@@ -269,7 +218,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
         if signal_id not in cards:
             continue
         changes, problems = checked_changes(row.get("answer"), cards[signal_id], marks.get(signal_id) or [], context,
-                                            threshold)
+                                            threshold, reactions=reactions.get(signal_id) or [])
         applied["errors"] += [{"signal_id": signal_id, "error": problem} for problem in problems]
         if changes:
             _write_proposal(signal_id, changes, slice_id=slice_id, model=str(row.get("model") or "")[:100] or None)
@@ -285,45 +234,57 @@ def apply_result(result: dict[str, Any], *, job_id: int | None, job_payload: dic
     return applied
 
 
+def _numbers(value: Any) -> list[int]:
+    return [number for number in value or [] if isinstance(number, int)] if isinstance(value, list) else []
+
+
 def checked_changes(answer: Any, card: dict[str, Any], marks: list[dict[str, Any]], context: dict[str, Any],
-                    threshold: int) -> tuple[list[dict[str, Any]], list[str]]:
-    """Изменения ответа, прошедшие проверку кодом, и почему отброшены остальные."""
+                    threshold: int, *, reactions: list[dict[str, Any]] | None = None
+                    ) -> tuple[list[dict[str, Any]], list[str]]:
+    """Изменения ответа, прошедшие проверку кодом, и почему отброшены остальные. reactions: отрицательные отклики
+    потребителя этой карточки (#200): на них ответ ссылается отдельным списком, порог считает их как отметки."""
     if not isinstance(answer, dict) or not isinstance(answer.get("improvements"), list):
         return [], ["ответ не по схеме"]
     by_id = {int(mark["id"]): mark for mark in marks}
+    by_reaction = {int(row["id"]): row for row in reactions or []}
     changes, problems, seen = [], [], set()
     for one in answer["improvements"]:
         if not isinstance(one, dict):
             problems.append("улучшение не по схеме")
             continue
         field, raw = str(one.get("field") or ""), str(one.get("value") or "")
-        cited = [number for number in one.get("marks") or [] if isinstance(number, int)]
+        cited, pressed = _numbers(one.get("marks")), _numbers(one.get("reactions"))
         problem = None
         if field not in feedback_changes.FIELDS:
             problem = f"поле «{field[:40]}» не из списка"
         elif field in seen:
             problem = f"поле «{field}» дважды"
-        elif not cited or any(number not in by_id for number in cited):
+        elif (not cited and not pressed) or any(number not in by_id for number in cited) or any(
+                number not in by_reaction for number in pressed):
             problem = f"{field}: номера отметок не из этой карточки"
-        elif len(set(cited)) < threshold:
+        elif len(set(cited)) + len(set(pressed)) < threshold:
             problem = f"{field}: отметок меньше порога ({threshold})"
         elif not _quoted(str(one.get("quote") or ""), [by_id[number] for number in cited],
-                         verdicts=feedback_changes.FIELDS[field].kind in _VERDICT_KINDS):
+                         verdicts=feedback_changes.FIELDS[field].kind in _VERDICT_KINDS,
+                         reactions=[by_reaction[number] for number in pressed]):
             problem = f"{field}: цитаты нет в тексте отметок"
         if problem is None:
-            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited])
+            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited],
+                                         reactions=[by_reaction[number] for number in pressed])
         if problem:
             problems.append(problem)
             continue
         seen.add(field)
         changes.append(_change(field, value, card, quote=" ".join(str(one["quote"]).split())[:500],
-                               event_ids=sorted(set(cited))))
+                               event_ids=sorted(set(cited)), reaction_ids=sorted(set(pressed))))
     return changes, problems
 
 
 def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, Any], *,
-                cited: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
-    """Значение поля из строки ответа модели или правки администратора. (значение, None) или (None, почему нет)."""
+                cited: list[dict[str, Any]] | None = None,
+                reactions: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
+    """Значение поля из строки ответа модели или правки администратора. (значение, None) или (None, почему нет).
+    cited и reactions: отметки и отклики, на которых стоит изменение (у правки администратора их нет)."""
     spec = feedback_changes.FIELDS[field]
     text = " ".join(raw.split())
     label = spec.label
@@ -373,7 +334,8 @@ def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, A
         if cited is not None and not any(mark.get("duplicate_of_signal_id") == int(digits) for mark in cited):
             return None, f"{label}: нет отметки «Дубль» с №{digits}"
         return int(digits), None
-    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited):
+    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited) and not any(
+            row.get("reaction") == feedback_review_reactions.REMOVAL for row in reactions or []):
         return None, f"{label}: нет отметки «Не релевантно»"
     return True, None
 
@@ -394,7 +356,8 @@ def _date_value(text: str, card: dict[str, Any]) -> tuple[Any, str | None]:
     return (None, "Дата события: уже такая") if value == current else (value, None)
 
 
-def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, event_ids: list[int]) -> dict[str, Any]:
+def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, event_ids: list[int],
+            reaction_ids: list[int] | None = None) -> dict[str, Any]:
     spec = feedback_changes.FIELDS[field]
     if spec.kind in feedback_changes.CARD_KINDS:
         shown = feedback_changes.display_value(field, value)
@@ -411,7 +374,7 @@ def _change(field: str, value: Any, card: dict[str, Any], *, quote: str | None, 
     else:
         shown, previous = "убрать в «Убрано людьми»", "в витрине"
     return {"field": field, "label": spec.label, "value": value, "shown": str(shown), "previous": previous,
-            "quote": quote, "event_ids": event_ids}
+            "quote": quote, "event_ids": event_ids, "reaction_ids": list(reaction_ids or [])}
 
 
 def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -431,7 +394,8 @@ def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[d
         if problem:
             raise JournalRefused(problem)
         final.append(_change(field, value, card, quote=by_field[field].get("quote"),
-                             event_ids=by_field[field].get("event_ids") or []))
+                             event_ids=by_field[field].get("event_ids") or [],
+                             reaction_ids=by_field[field].get("reaction_ids") or []))
     if not final:
         raise JournalRefused("в новой формулировке нет ни одного поля")
     return final
@@ -440,15 +404,20 @@ def admin_changes(signal_id: int, proposed: list[dict[str, Any]], edited: list[d
 def _write_proposal(signal_id: int, changes: list[dict[str, Any]], *, slice_id: int | None, model: str | None) -> None:
     """Предложение по сигналу в журнал ОС; прежнее нерешённое по тому же сигналу заменяется им («устарело»)."""
     event_ids = sorted({one for change in changes for one in change["event_ids"]})
+    # Отклики потребителя (#200): основание предложения отдельным списком рядом с номерами отметок.
+    reaction_ids = sorted({one for change in changes for one in change.get("reaction_ids") or []})
     agents = sorted({feedback_changes.FIELDS[change["field"]].agent for change in changes})
     with connection.get_connection() as conn:
         previous = feedback_store.pending_proposal(signal_id, conn=conn)
         if previous is not None:
             event_ids = sorted(set(event_ids) | {int(one) for one in previous["event_ids"]})
+            reaction_ids = sorted(set(reaction_ids) | {int(one) for one in
+                                                       (previous["details"] or {}).get("reaction_ids") or []})
         proposal_id = feedback_store.create_action(
             PROPOSAL, PENDING, signal_id=signal_id, slice_id=slice_id, event_ids=event_ids,
             quote=changes[0]["quote"], agents=agents, author=REVIEW_AUTHOR,
-            details={"changes": changes, "model": model, "prompt_version": PROMPT_VERSION}, conn=conn)
+            details={"changes": changes, "model": model, "prompt_version": PROMPT_VERSION,
+                     "reaction_ids": reaction_ids}, conn=conn)
         if previous is not None:
             feedback_store.set_status(previous["id"], STALE, details={"superseded_by": proposal_id}, conn=conn)
         if slice_id is not None:
@@ -456,11 +425,15 @@ def _write_proposal(signal_id: int, changes: list[dict[str, Any]], *, slice_id: 
         conn.commit()
 
 
-def _quoted(quote: str, marks: list[dict[str, Any]], *, verdicts: bool) -> bool:
+def _quoted(quote: str, marks: list[dict[str, Any]], *, verdicts: bool,
+            reactions: list[dict[str, Any]] | None = None) -> bool:
+    """Цитата дословно из текста отметок или подпись кнопки отклика (#200: у отклика другого текста нет)."""
     wanted = _plain(quote).strip(" .,;:!?\"'")
     if len(wanted) < _QUOTE_MIN:
         return False
-    return any(wanted in _plain(_mark_text(mark, verdict=verdicts)) for mark in marks)
+    texts = [_mark_text(mark, verdict=verdicts) for mark in marks]
+    texts += [feedback_review_reactions.label(row) for row in reactions or []]
+    return any(wanted in _plain(text) for text in texts)
 
 
 def _mark_text(mark: dict[str, Any], *, verdict: bool) -> str:

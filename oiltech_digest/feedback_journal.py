@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from oiltech_digest import feedback_changes, feedback_rules, feedback_settings
+from oiltech_digest import feedback_changes, feedback_review_reactions, feedback_rules, feedback_settings
 from oiltech_digest.db import connection, feedback_store, rule_check_store
 from oiltech_digest.db.feedback_store import (APPLIED, APPLIED_STATUS, APPROVED, DECISION, DISMISSED, DONE, IMMEDIATE,
                                               MODIFIED, PENDING, PROPOSAL, RULE_PROPOSAL, SAMPLE_TASK, SET_CHECK, STALE,
@@ -105,9 +105,11 @@ def entries(*, is_admin: bool, status: str | None = None, showcase: str | None =
                                     + [row["im_id"] for row in mark_rows if row["im_id"]])
     proposals = feedback_store.proposals_for_events([row["id"] for row in mark_rows])
     basis = feedback_store.marks_by_id([one for row in action_rows for one in row["event_ids"]])
+    pressed = feedback_review_reactions.basis([one for row in action_rows
+                                               for one in (row["details"] or {}).get("reaction_ids") or []])
     checks = rule_check_store.latest([row["id"] for row in action_rows if row["kind"] in (RULE_PROPOSAL, SET_CHECK)])
     built = [(_mark_entry(row, steps, proposals, (history_end, slice_end), is_admin) if kind_ == "mark"
-              else _action_entry(row, steps, basis, is_admin, checks)) for kind_, row in rows]
+              else _action_entry(row, steps, basis, is_admin, checks, pressed)) for kind_, row in rows]
     return {"entries": built, "authors": feedback_store.mark_authors()}
 
 
@@ -161,7 +163,8 @@ def _done_at_once(row: dict[str, Any], history: bool) -> list[str]:
 
 
 def _action_entry(row: dict[str, Any], steps: dict[int, list[dict[str, Any]]], basis: dict[int, dict[str, Any]],
-                  is_admin: bool, checks: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
+                  is_admin: bool, checks: dict[int, dict[str, Any]] | None = None,
+                  pressed: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     details = row["details"] or {}
     entry = {
         "key": f"action:{row['id']}", "kind": row["kind"], "id": int(row["id"]), "at": _iso(row["created_at"]),
@@ -202,6 +205,8 @@ def _action_entry(row: dict[str, Any], steps: dict[int, list[dict[str, Any]]], b
     return {
         **entry, "changes": modified or proposed, "proposed_changes": proposed if modified else None, "path": path,
         "basis": [_basis(basis[one]) for one in entry["event_ids"] if one in basis],
+        # Отклики потребителя выпуска (#200): отдельным списком рядом с отметками, без автора.
+        "reactions": [(pressed or {})[one] for one in details.get("reaction_ids") or [] if one in (pressed or {})],
         "can_decide": is_admin and _decidable(row, own_steps),
         "can_undo": is_admin and row["status"] == APPLIED_STATUS,
     }

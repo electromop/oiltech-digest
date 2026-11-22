@@ -1,7 +1,8 @@
 """Недельный срез ОС (#189, спека #187): раз в неделю по настройке (понедельник, 09:00 МСК) и по кнопке «собрать
 сейчас» разбор ОС берёт отметки с прошлого среза.
 
-Окно среза: с конца окна прошлого выполненного среза (у первого: со строки seed, выкат #188) по сейчас; срез по
+Окно среза: с конца окна прошлого выполненного среза (у первого: со строки seed, выкат #188) по сейчас; в срез идут
+сигналы с новыми отметками и с новыми отрицательными откликами потребителя выпуска (#200); срез по
 расписанию не идёт дважды за неделю, упавший или отложенный своё окно не закрывает: его отметки возьмёт следующий.
 Перед постановкой разбора сверяется потолок расходов контура в месяц: расход стадий контура с начала месяца не меньше
 потолка, и срез откладывает разбор до следующего месяца, а администратор видит предупреждение. В первый день среза в
@@ -14,7 +15,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from oiltech_digest import feedback_journal, feedback_review, feedback_settings, rule_check
+from oiltech_digest import feedback_journal, feedback_review, feedback_review_reactions, feedback_settings, rule_check
 from oiltech_digest.db import feedback_store, repository
 from oiltech_digest.db.feedback_store import PENDING, SAMPLE_TASK
 from oiltech_digest.feed_window import MSK
@@ -73,7 +74,9 @@ def run(*, trigger: str, author: str | None, now: datetime, settings: dict[str, 
     days = int(settings["similar_window_days"])
     window_to = feedback_store.db_now()
     window_from = feedback_store.last_done_window_end() or window_to - timedelta(days=days)
-    signal_ids = feedback_store.signals_with_new_marks(window_from, window_to)
+    # Сигналы с новыми отметками и с новыми отрицательными откликами потребителя выпуска (#200).
+    signal_ids = sorted(set(feedback_store.signals_with_new_marks(window_from, window_to))
+                        | set(feedback_review_reactions.new_signals(window_from, window_to)))
     common = {"trigger": trigger, "window_from": window_from, "window_to": window_to, "week_start": week_start,
               "author": author}
     if not signal_ids:
