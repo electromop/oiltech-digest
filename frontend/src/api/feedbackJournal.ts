@@ -20,6 +20,9 @@ export type JournalChange = {
   event_ids: number[];
 };
 
+// Отклик потребителя выпуска в основании предложения (#200): без автора, роль, подпись кнопки, день.
+export type JournalReaction = { id: number; role: string; reaction: string; day: string; signal_id: number };
+
 export type JournalBasis = {
   id: number;
   author: string | null;
@@ -123,6 +126,7 @@ export type JournalEntry = {
   // «Изменить»: что предлагал разбор ОС, когда на карточку легла формулировка администратора (changes).
   proposed_changes?: JournalChange[] | null;
   basis?: JournalBasis[];
+  reactions?: JournalReaction[];
   can_decide?: boolean;
   // Задача выборки.
   publications?: JournalPublication[];

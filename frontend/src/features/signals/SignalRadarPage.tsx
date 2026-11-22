@@ -27,6 +27,7 @@ import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
 import { CHOICE_FIELDS, COUNTRY_FILTER, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
+import { SignalConsumerReactions } from "./SignalConsumerReactions";
 import { SignalDecisionLog } from "./SignalDecisionLog";
 import { SignalHypothesis } from "./SignalHypothesis";
 import {
@@ -1021,6 +1022,8 @@ export function SignalRadarPage({
                         Ждёт решения в журнале
                       </a>
                     ) : null}
+                    {/* Отклики потребителя выпуска (#200): только администратору, счёт по корню склейки. */}
+                    {isAdmin ? <SignalConsumerReactions counts={signal.consumer_reactions} /> : null}
                   </div>
                   <div className="articleCardMetrics signalCardMetrics">
                     {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}

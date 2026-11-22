@@ -213,6 +213,11 @@ while true; do
   # EXCHANGE_FIRST_MONTH шаг проверяет сам.
   run_step "exchange-release" python -m oiltech_digest.cli exchange-release
 
+  # Обновление для потребителя (#200): раз в сутки по Москве (первый цикл дня) изменённые карточки отправленных
+  # сигналов, склейки, снятия и возвраты, без ИИ; пустое обновление не выкладывается. Флаг EXCHANGE_ENABLED шаг
+  # проверяет сам.
+  run_step "exchange-update" python -m oiltech_digest.cli exchange-update
+
   if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
     run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
   fi

@@ -2337,6 +2337,11 @@
   border-color: var(--sem-warn-fg);
 }
 
+/* Пакет, который потребитель отклонил (квитанция «отклонён», #200). */
+.journalEntryRefused {
+  border-color: var(--sem-bad-fg);
+}
+
 .journalEntryHead {
   display: flex;
   flex-wrap: wrap;

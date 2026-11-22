@@ -214,3 +214,98 @@ describe("вкладка «Журнал обмена»", () => {
     expect(screen.getByText(/шаг выключен/)).toBeInTheDocument();
   });
 });
+
+
+describe("вкладка «Журнал обмена»: обновление, квитанции и отклики (#200)", () => {
+  const withExchange: ExchangeJournal = {
+    ...journal,
+    settings: { ...journal.settings, decryption_keys: ["1122334455667788"], consumer_signing_keys: [],
+      reaction_problems: ["нет открытого ключа подписи потребителя (EXCHANGE_CONSUMER_SIGNING_KEYS)"] },
+    packages: [
+      {
+        number: 3, kind: "update", month: null, built_at: "2026-11-21T21:30:00+00:00", built_by: "планировщик",
+        first_taken_at: "2026-11-21T21:31:00+00:00", last_taken_at: "2026-11-21T21:31:00+00:00", overdue: false,
+        receipt: { outcome: "accepted", message: "Принято: пакет №3, обновление. Склеено 1, снято 1.",
+          at: "2026-11-21T21:31:05+00:00" },
+        notes: ["№304 ушёл склейкой в №303", "№290 снят: в архиве"], cards: [],
+      },
+      { ...journal.packages[0], receipt: { outcome: "rejected", message: "Отклонено: подпись не сходится.",
+        at: "2026-11-19T06:01:10+00:00" } },
+      { ...journal.packages[1], overdue: true },
+    ],
+    refusals: [{ kind: "reactions", number: 5, reason: "Отклонено: подпись не сходится.", attempts: 12,
+      first_at: "2026-11-21T08:00:00+00:00", last_at: "2026-11-21T08:11:00+00:00" }],
+    reaction_packages: [{ number: 4, source: "Тестовый потребитель", signer: "abcdefabcdefabcd", reactions: 7,
+      answer: "Принято: пакет откликов №4, откликов 7.", received_at: "2026-11-21T07:00:00+00:00",
+      last_received_at: "2026-11-21T07:01:00+00:00", repeats: 1 }],
+    updates: [{ trigger: "schedule", package_number: 3, author: "планировщик",
+      note: "пакет №3: обновление, карточек 0, склеек 1, снятий 1", started_at: "2026-11-21T21:30:00+00:00" }],
+    sent_states: [{ signal_id: 304, state: "merged", state_label: "ушёл склейкой в №303 пакетом №3", merged_into: 303,
+      state_package: 3, state_at: "2026-11-21T21:30:00+00:00", title: "Пилот роботизированной буровой",
+      category: "technology" }],
+  };
+
+  function serveExchange(answer: (url: string, init?: RequestInit) => Response = () => json({})) {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "POST") return Promise.resolve(answer(url, init));
+      if (url.startsWith("/api/exchange-journal/readiness")) return Promise.resolve(json(readiness));
+      return Promise.resolve(json(withExchange));
+    });
+  }
+
+  it("пакет показывает квитанцию потребителя, отклонённый выделен с ответом, незабранный сутки помечен", async () => {
+    serveExchange();
+    renderPage();
+
+    const update = await screen.findByRole("article", { name: "Обновление №3" });
+    expect(within(update).getByText("принят")).toBeInTheDocument();
+    expect(within(update).getByLabelText("Квитанция на пакет №3")).toHaveTextContent("Склеено 1, снято 1.");
+    expect(within(update).getByText("Карточек нет: только склейки и снятия.")).toBeInTheDocument();
+    expect(within(update).getByText("№304 ушёл склейкой в №303")).toBeInTheDocument();
+    const rejected = screen.getByRole("article", { name: "Дозагрузка №2 · сентябрь 2026" });
+    expect(rejected).toHaveClass("journalEntryRefused");
+    expect(within(rejected).getByText("отклонён")).toBeInTheDocument();
+    expect(within(rejected).getByRole("alert")).toHaveTextContent("Отклонено: подпись не сходится.");
+    const release = screen.getByRole("article", { name: "Выпуск №1 · сентябрь 2026" });
+    expect(within(release).getByText("не забран больше суток")).toBeInTheDocument();
+    expect(screen.getByText(/Отклики не примутся: нет открытого ключа подписи потребителя/)).toBeInTheDocument();
+  });
+
+  it("пакеты откликов с ответом платформы и отказы точки с причиной и попытками", async () => {
+    serveExchange();
+    renderPage();
+
+    const panel = await screen.findByRole("region", { name: "Пакеты откликов" });
+    expect(within(panel).getByText(/Пакет откликов №4 · Тестовый потребитель · откликов 7/)).toHaveTextContent(
+      "Принято: пакет откликов №4, откликов 7.");
+    expect(within(panel).getByLabelText("Отказы точки обмена")).toHaveTextContent(
+      "Пакет откликов №5: Отклонено: подпись не сходится. Попыток 12");
+  });
+
+  it("«Собрать обновление сейчас» уходит запросом, показывает ответ и перечитывает журнал", async () => {
+    serveExchange(() => json({ package: 6, message: "Пакет №6: обновление, карточек 2, склеек 0, снятий 0." }));
+    renderPage();
+    const panel = await screen.findByRole("region", { name: "Обновление" });
+    expect(within(panel).getByText(/шаг раз в сутки: пакет №3: обновление/)).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "№304 Пилот роботизированной буровой" }))
+      .toHaveAttribute("href", "?screen=signal-radar&q=%23304");
+    expect(within(panel).getByText("ушёл склейкой в №303 пакетом №3")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Собрать обновление сейчас" }));
+
+    expect(await within(panel).findByRole("status")).toHaveTextContent("Пакет №6: обновление, карточек 2");
+    const [url] = fetchMock.mock.calls.find(([, call]) => call?.method === "POST")!;
+    expect(url).toBe("/api/exchange-journal/updates");
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([one]) => one === "/api/exchange-journal")).toHaveLength(2));
+  });
+
+  it("отказ сборки обновления показан у кнопки", async () => {
+    serveExchange(() => json({ detail: "Пакет не собран: нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS)." }, 409));
+    renderPage();
+    const panel = await screen.findByRole("region", { name: "Обновление" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Собрать обновление сейчас" }));
+
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("нет ключа подписи платформы");
+  });
+});
