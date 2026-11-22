@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DigestMaterial, IssueMaterialPatch } from "../../api/types";
+import type { DigestMaterial, IssueMaterialPatch, ReadinessStep } from "../../api/types";
 import { hypothesisAuthorship } from "../signals/SignalHypothesis";
 
 type Props = {
@@ -27,8 +27,25 @@ export function MissingLine({ material, hypothesisEnabled = false }: MaterialLin
   const missing = (material?.missing ?? []).filter((code) => hypothesisEnabled || code !== "hypothesis");
   if (!missing.length) return null;
   return (
-    <div className="digestMissing" role="note">
+    <div className="digestMissing" role="note" aria-label="Чего не хватает выпуску">
       Не хватает: {missing.map((code) => MISSING_LABELS[code]).join(", ")}
+    </div>
+  );
+}
+
+// Чего не хватает до готовности (#199): шаги конвейера словами, как их пишут журнал обмена и команды на сервере.
+export const READINESS_LABELS: Record<ReadinessStep, string> = {
+  summary: "нет сути",
+  translation: "нет перевода заголовка",
+  card: "нет карточки",
+  scores: "нет баллов",
+};
+
+export function ReadinessLine({ material }: { material?: DigestMaterial }) {
+  if (!material?.readiness?.length) return null;
+  return (
+    <div className="digestMissing" role="note" aria-label="Готовность к выпуску">
+      Не готов к выпуску: {material.readiness.map((code) => READINESS_LABELS[code]).join(", ")}
     </div>
   );
 }

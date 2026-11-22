@@ -17,7 +17,7 @@ from tests.digest_user_path_support import SEPT, add_signal, msk, set_card
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
 from tests.exchange_consumer import CARD_FIELDS
 from tests.exchange_support import exchange  # noqa: F401: фикстура обмена
-from tests.exchange_support import freeze
+from tests.exchange_support import freeze, ready
 
 
 def _correct(person, signal_id: int, title: str, thesis: str, *, at: datetime) -> None:
@@ -55,6 +55,7 @@ def test_package_card_is_the_showcase_card_with_corrections_after_the_close(exch
              participants_json=[{"name": "Пример Технологии", "country": "Россия"}, {"name": ""}],
              card_set_by={"why_interesting": "agent", "hypothesis": "human"}, reject_reason="old_event")
     exchange.analyst.mark_signal(sep)
+    ready(sep)
     freeze(monkeypatch, exchange.after_close)
     _correct(exchange.admin, sep, "Правка после закрытия", "Суть после закрытия.", at=exchange.after_close)
 

@@ -25,6 +25,10 @@ def _no_item_kinds_lookup(monkeypatch):
     # «Главное в выпуске», написанное человеком (#162), тоже из базы.
     monkeypatch.setattr("oiltech_digest.db.issue_edits_store.highlights", lambda month: {})
     monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
+    # Готовность материалов (#199) тоже из базы.
+    monkeypatch.setattr("oiltech_digest.material_readiness.lacking", lambda articles, signals: {})
+    monkeypatch.setattr("oiltech_digest.material_readiness.month_summary",
+                        lambda month: {"materials": 0, "not_ready": 0})
 
 
 def test_render_digest_email_contains_news_and_escapes_html():

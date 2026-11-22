@@ -400,6 +400,9 @@ ISSUE_HYPOTHESIS_ENABLED = os.environ.get("ISSUE_HYPOTHESIS_ENABLED", "0").strip
 # почти всегда, и окно перестаёт быть окном.
 FEED_ROLLOVER_DAY_DEFAULT = 11
 FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", str(FEED_ROLLOVER_DAY_DEFAULT)))))
+# Перепроверка готовности выпуска (#199, material_readiness): в последний день перед закрытием месяца (на проде 10-е) с
+# этого часа по Москве шаг digest-readiness ставит заново недостающие шаги конвейера неготовым материалам выпуска.
+READINESS_RECHECK_HOUR = min(23, max(0, int(os.environ.get("READINESS_RECHECK_HOUR", "9"))))
 
 # --- Обмен с потребителем выпуска (#198, спека #197; формат: docs/exchange-format.md) ---
 # Шаг планировщика exchange-release собирает пакет выпуска закрытого месяца. Выключен, пока потребитель не готов; первый

@@ -30,10 +30,12 @@ KIND = "signal_scores"
 PROFILES = {"business": BUSINESS, "technology": TECH_RADAR}
 # Сколько задач шаг ставит одному сигналу: вторая: на случай сбоя модели; дальше: повтор командой (--ids).
 DAILY_ATTEMPTS = 2
-# Кого оценивает второй вызов: после «Отбора» и принятого (им или человеком), не дубль, с карточкой основного вызова и
-# в витрине: бизнес или технология.
-_SCORABLE_SQL = (f"(s.otbor_decision = '{OTBOR_ACCEPT}' AND s.merged_into_signal_id IS NULL"
-                 f" AND s.card_recipe IS NOT NULL AND s.signal_category IN ({', '.join(map(repr, PROFILES))}))")
+# Кому баллы второго вызова положены: принятому «Отбором» (им или человеком) в витрине бизнеса или технологии. Это же
+# условие читает готовность материала выпуска (#199, material_readiness).
+SCORES_DUE_SQL = (f"(s.otbor_decision = '{OTBOR_ACCEPT}'"
+                  f" AND s.signal_category IN ({', '.join(map(repr, PROFILES))}))")
+# Кого оценивает второй вызов: кому баллы положены, не дубль, с карточкой основного вызова.
+_SCORABLE_SQL = f"({SCORES_DUE_SQL} AND s.merged_into_signal_id IS NULL AND s.card_recipe IS NOT NULL)"
 
 
 def score_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:

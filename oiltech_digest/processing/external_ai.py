@@ -19,6 +19,11 @@ from oiltech_digest.processing.pipeline import (
 logger = logging.getLogger(__name__)
 
 TRANSLATE_BATCH_DEFAULT = 100
+# Пометка задачи готовности материала выпуска (#199, material_readiness): обработка ленты по номеру ставит статье только
+# недостающие стадии. По ней выдача отбрасывает статью, у которой их все дописала, пока задача ждала, обработка дня.
+READINESS_FLAG = "digest_readiness"
+# Стадия обработки ленты → поле статьи, где лежит её итог: по нему видно, есть ли стадия у статьи.
+_STAGE_FIELDS = {"summary": "summary", "translation": "title_ru"}
 
 
 def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
@@ -46,6 +51,10 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         # скрыть или отметить в выпуск, а месяц закрыть. За таких модель не платится.
         keep = fulltext_recompute.still_applicable([int(article["id"]) for article in articles])
         articles = [article for article in articles if int(article["id"]) in keep]
+    if payload.get(READINESS_FLAG) and articles:
+        # Задача готовности материала: статья, у которой запрошенные стадии уже есть, модели не нужна.
+        articles = [article for article in articles
+                    if any(not str(article.get(_STAGE_FIELDS[stage]) or "").strip() for stage in stages)]
     if payload.get("only") and "summary" in stages:
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
         # (_article_prompt кладёт summary), и модель повторила бы её слово в слово.
@@ -98,7 +107,7 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str], *, missing_onl
         return frozenset()
     if not missing_only:
         return stages
-    done = {"summary": bool(article.get("summary")), "translation": bool(article.get("title_ru"))}
+    done = {stage: bool(article.get(column)) for stage, column in _STAGE_FIELDS.items()}
     return frozenset(stage for stage in stages if not done[stage])
 
 

@@ -1,7 +1,9 @@
 import { apiFetch } from "./client";
+import type { ReadinessStep } from "./types";
 
 // Журнал обмена с потребителем выпуска (#198, спека #197): пакеты для потребителя, их состав и состояние, дозагрузка
-// по номерам. Только администратору: участнику сервер отвечает 403.
+// по номерам, готовность выпуска месяца и «Отправить как есть» (#199). Только администратору: участнику сервер
+// отвечает 403.
 
 export type ExchangePackageKind = "release" | "addition";
 
@@ -38,7 +40,38 @@ export type ExchangeSettings = {
   point_problems: string[];
 };
 
-export type ExchangeJournal = { settings: ExchangeSettings; packages: ExchangePackage[] };
+// Неготовый материал выпуска: номер карточки (по нему ссылка на витрину; у статьи без сигнала ленты пусто), вид и номер
+// материала в выпуске, заголовок и категория карточки, чего не хватает до готовности.
+export type ReadinessMaterial = {
+  signal_id: number | null;
+  kind: "article" | "signal";
+  id: number;
+  title: string | null;
+  category: string | null;
+  missing: ReadinessStep[];
+};
+
+// Готовность выпуска месяца: сколько материалов и сколько готово, собран ли пакет выпуска, можно ли отправить его как
+// есть (месяц закрыт, пакета нет) и почему нельзя.
+export type ExchangeReadiness = {
+  month: string;
+  closed: boolean;
+  release: number | null;
+  total: number;
+  ready: number;
+  not_ready: ReadinessMaterial[];
+  as_is: { allowed: boolean; reason: string | null };
+};
+
+export type ExchangeJournal = { settings: ExchangeSettings; packages: ExchangePackage[]; readiness?: ExchangeReadiness };
+
+export type ReleaseResult = {
+  package: number;
+  month: string;
+  sent: number[];
+  not_ready: Array<{ signal_id: number; missing: ReadinessStep[] }>;
+  message: string;
+};
 
 export type AdditionResult = {
   package: number | null;
@@ -50,6 +83,14 @@ export type AdditionResult = {
 
 export function getExchangeJournal() {
   return apiFetch<ExchangeJournal>("/api/exchange-journal");
+}
+
+export function getExchangeReadiness(month: string) {
+  return apiFetch<ExchangeReadiness>(`/api/exchange-journal/readiness?month=${encodeURIComponent(month)}`);
+}
+
+export function sendReleaseAsIs(month: string) {
+  return apiFetch<ReleaseResult>("/api/exchange-journal/releases", { method: "POST", body: JSON.stringify({ month }) });
 }
 
 export function buildAddition(month: string, numbers: number[]) {

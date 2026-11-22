@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import brand_fonts, config, feed_window, signal_scoring
+from oiltech_digest import brand_fonts, config, feed_window, material_readiness, signal_scoring
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
@@ -364,6 +364,7 @@ def build_digest_content(
         )
     _attach_item_kinds(news)
     sections = digest_materials.sections(positions, month=month)
+    readiness = material_readiness.attach(sections, month)
     title_template = issue_cfg["title_template_with_month"] if month else issue_cfg["title_template"]
     intro_template = issue_cfg["intro_template_with_month"] if month else issue_cfg["intro_template"]
     month_text = _issue_month_text(month)
@@ -393,6 +394,8 @@ def build_digest_content(
         "items": news,
         # PDF в формате эксперта (#161): разделы с карточками, обложка и название с темой документа.
         "sections": sections,
+        # Готовность выпуска месяца (#199): сколько материалов и сколько из них не готовы, без фильтров экрана.
+        "readiness": readiness,
         "cover": digest_materials.cover(month, sections),
         "document": digest_materials.document(month, sections, name=issue_cfg["title_template"]),
         "highlights": _digest_highlights(news, branding.get("highlights")),

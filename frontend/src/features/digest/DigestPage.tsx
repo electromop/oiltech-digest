@@ -283,6 +283,8 @@ export function DigestPage({ onUnauthorized, showToast, isAdmin = false, hypothe
   // цепочка useMemo до previewCandidateIds пересчитывалась, а эффект синхронизации очереди
   // звал setManualOrderIds с новым массивом: рендер за рендером, пока не придёт превью (23.09).
   const exportPreviewItems = useMemo(() => digestPreview?.news || [], [digestPreview]);
+  // Сколько материалов выпуска месяца не готовы (#199): число сервера по всему составу, без фильтров экрана.
+  const readiness = digestPreview?.readiness ?? null;
   const radarItems = useMemo(() => exportPreviewItems.filter((item) => item.item_type === "signal"), [exportPreviewItems]);
   // Поля материалов PDF (#161, #162) по ключу материала: правленый заголовок, чего не хватает, правка.
   const materials = useMemo(() => {
@@ -449,6 +451,9 @@ export function DigestPage({ onUnauthorized, showToast, isAdmin = false, hypothe
         <div className="panelHeader">
           <h2>Состав выпуска</h2>
           <span className="badge">{digestCandidates.length + radarItems.length} отмечено</span>
+          {readiness?.not_ready ? (
+            <span className="miniPill warn">Не готовы к выпуску: {readiness.not_ready} из {readiness.materials}</span>
+          ) : null}
         </div>
         {isArchiveMonth ? (
           <div className="archiveNotice" role="status">

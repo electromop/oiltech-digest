@@ -16,7 +16,7 @@ from oiltech_digest.db import connection
 from tests.digest_user_path_support import SEPT, add_signal, feed_signal, msk
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
 from tests.exchange_support import exchange  # noqa: F401: фикстура обмена
-from tests.exchange_support import CONSUMER_IP, HEADERS, STRANGER_IP, freeze, packages, point, sent_signals
+from tests.exchange_support import CONSUMER_IP, HEADERS, STRANGER_IP, freeze, packages, point, ready, sent_signals
 
 
 class _Body:
@@ -39,6 +39,7 @@ def _merge(duplicate: int, root: int) -> None:
 
 def _release(exchange, monkeypatch) -> int:
     exchange.analyst.mark_signal(exchange.s["sep"])
+    ready(exchange.s["sep"])
     freeze(monkeypatch, exchange.after_close)
     return exchange_packages.build_release(SEPT, by="test").number
 

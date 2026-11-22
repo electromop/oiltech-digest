@@ -209,8 +209,9 @@ def test_rerun_of_otbor_does_not_hide_an_article_chosen_for_the_digest(user, con
     run_worker("external-ai")
 
     assert showcase(user)["Контракт Weatherford"]["otbor_decision"] == "accept"
-    assert {item["title"] for item in api_get("/api/digest-content", user)["news"]} == {
-        "Пилот робота Equinor", "Контракт Weatherford"}
+    # По номерам статей: отметка «в дайджест» сама поставила им суть и перевод заголовка (#199), заголовок мог стать
+    # русским заголовком обработки.
+    assert {item["article_id"] for item in api_get("/api/digest-content", user)["news"]} == {chosen, raced}
 
 
 def test_reprint_never_hides_the_accepted_copy_behind_one_otbor_rejected_or_has_not_decided(user, contour, monkeypatch):

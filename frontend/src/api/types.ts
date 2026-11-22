@@ -530,7 +530,12 @@ export type DigestMaterial = {
   picture: "own" | "placeholder";
   // Чего не хватает до выпуска: гипотезы, баллов по критериям, связи с нефтесервисом, своей картинки.
   missing: Array<"hypothesis" | "criteria" | "relevance" | "picture">;
+  // Чего не хватает до готовности (#199): шаги конвейера у сигнала карточки материала.
+  readiness?: ReadinessStep[];
 };
+
+// Шаг конвейера, которого материалу не хватает до готовности (#199): суть, перевод заголовка, «Карточка», баллы.
+export type ReadinessStep = "summary" | "translation" | "card" | "scores";
 
 export type DigestSection = {
   key: DigestSectionKey;
@@ -554,6 +559,8 @@ export type DigestContent = {
   month: string | null;
   title: string;
   sections?: DigestSection[];
+  // Готовность выпуска месяца (#199): материалов в составе и сколько не готовы, без фильтров экрана.
+  readiness?: { materials: number; not_ready: number } | null;
   cover?: { highlights_title: string; highlights: DigestHighlight[] };
   issue?: {
     title?: string;
