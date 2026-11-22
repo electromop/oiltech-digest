@@ -23,8 +23,7 @@ from datetime import date, datetime, timedelta
 import json
 from typing import Any, Sequence
 
-from oiltech_digest import config, exchange_card, exchange_envelope, exchange_reactions, feed_window, material_readiness
-from oiltech_digest.api_access import consumer_networks, exchange_setup_problems
+from oiltech_digest import config, exchange_card, exchange_envelope, feed_window, material_readiness
 from oiltech_digest.db import connection, exchange_store, repository, showcase_cards
 
 # Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026»,
@@ -108,7 +107,7 @@ def _moved(requested: Sequence[int], roots: dict[int, int]) -> list[dict[str, in
     return [{"requested": one, "root": roots[one]} for one in requested if one in roots and roots[one] != one]
 
 
-def _checked_month(value: str) -> str:
+def checked_month(value: str) -> str:
     try:
         return feed_window.month_key(feed_window.parse_month((value or "").strip()))
     except ValueError:
@@ -119,7 +118,7 @@ def _label(month: str) -> str:
     return feed_window.month_label(feed_window.parse_month(month))
 
 
-def _keys() -> tuple[bytes, bytes]:
+def sending_keys() -> tuple[bytes, bytes]:
     try:
         return exchange_envelope.sending_keys()
     except exchange_envelope.NotConfigured as error:
@@ -166,11 +165,11 @@ def build_release(month: str, *, by: str | None, as_is: bool = False) -> Built:
     """Пакет выпуска названного закрытого месяца: состав выпуска платформы, как у PDF и выгрузки. Ждёт готовности всех
     материалов (NotReady); as_is: «Отправить как есть», сразу, с тем, что есть, и с записью, что было не готово. Второй
     пакет выпуска того же месяца не собирается."""
-    month = _checked_month(month)
+    month = checked_month(month)
     if feed_window.current().is_open(month):
         raise Refused(f"выпуск за {_label(month)} ещё открыт: пакет собирается после закрытия месяца "
                       f"({config.FEED_ROLLOVER_DAY}-го числа следующего)")
-    keys = _keys()
+    keys = sending_keys()
     with connection.get_connection() as conn:
         exchange_store.lock(conn)
         existing = exchange_store.release_months(conn, [month]).get(month)
@@ -219,7 +218,7 @@ def pending_release_months(*, now: datetime | None = None) -> list[str]:
     каждый цикл их материалы догоняет перепроверка готовности. Флаг выключен или первый месяц не задан: []."""
     if not config.EXCHANGE_ENABLED or not config.EXCHANGE_FIRST_MONTH:
         return []
-    first = _checked_month(config.EXCHANGE_FIRST_MONTH)
+    first = checked_month(config.EXCHANGE_FIRST_MONTH)
     last_closed = (feed_window.current(now=now).start - timedelta(days=1)).replace(day=1)
     months = _months_between(first, last_closed)
     if not months:
@@ -286,11 +285,11 @@ def _refusal(missing: list[int], inactive: list[tuple[int, int, str]]) -> str:
 def build_addition(numbers: Sequence[int], month: str, *, by: str | None) -> Addition:
     """Дозагрузка номеров с месяцем выпуска: дубль корнем склейки, отказ со списком на несуществующие и не действующие
     номера, уже отправленные пропускаются. Всё уже отправлено: пакета нет."""
-    month = _checked_month(month)
+    month = checked_month(month)
     requested = list(dict.fromkeys(int(one) for one in numbers))
     if not requested:
         raise Refused("дозагрузка не собрана: нет номеров сигналов")
-    keys = _keys()
+    keys = sending_keys()
     with connection.get_connection() as conn:
         exchange_store.lock(conn)
         roots = exchange_store.roots(conn, requested)
@@ -321,7 +320,7 @@ def readiness(month: str | None = None) -> dict[str, Any]:
     открытый (его выпуск закрывается следующим)."""
     window = feed_window.current()
     if month:
-        month = _checked_month(month)
+        month = checked_month(month)
     else:
         try:
             waiting = pending_release_months()
@@ -349,38 +348,3 @@ def readiness(month: str | None = None) -> dict[str, Any]:
     return {"month": month, "closed": closed, "release": release, "total": len(found),
             "ready": len(found) - len(lacking), "not_ready": lacking,
             "as_is": {"allowed": reason is None, "reason": reason}}
-
-
-def journal(*, limit: int = 200) -> dict[str, Any]:
-    """Состояние обмена для вкладки «Журнал обмена» и команды exchange-status: настройки (без ключей и адресов, только
-    отпечатки и число адресов; что мешает собрать пакет и что мешает потребителю его забрать), готовность выпуска
-    месяца и пакеты, новые сверху, с тем, что сборка сделала сверх состава."""
-    from oiltech_digest import exchange_updates
-
-    keys = exchange_envelope.describe()
-    point_problems = exchange_setup_problems()
-    with connection.get_connection() as conn:
-        packages = exchange_store.packages(conn, limit=limit)
-        refusals = exchange_store.refusals(conn, limit=limit)
-    for package in packages:
-        package["notes"] = package_notes(package.pop("details") or {})
-    return {
-        "readiness": readiness(),
-        "settings": {
-            "enabled": bool(config.EXCHANGE_ENABLED),
-            "first_month": config.EXCHANGE_FIRST_MONTH or None,
-            "signing_keys": keys["signing"],
-            "consumer_keys": keys["consumer"],
-            "decryption_keys": keys["decryption"],
-            "consumer_signing_keys": keys["consumer_signing"],
-            "addresses": len(consumer_networks()),
-            "token": not any("EXCHANGE_TOKEN_HASH" in problem for problem in point_problems),
-            "problems": keys["problems"],
-            "reaction_problems": keys["reaction_problems"],
-            "point_problems": point_problems,
-        },
-        "packages": packages,
-        "refusals": refusals,
-        "reaction_packages": exchange_reactions.journal(limit=limit),
-        **exchange_updates.journal(limit=limit),
-    }

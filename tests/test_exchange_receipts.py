@@ -67,6 +67,7 @@ def test_receipt_out_of_format_is_refused_with_a_reason(exchange, monkeypatch):
         ({key: value for key, value in good.items() if key != "message"}, "нет поля message"),
         ({**good, "number": str(number)}, "number: нужно целое число"),
         ({**good, "message": 5}, "message: нужна строка"),
+        ({**good, "message": "ж" * 20_001}, "message длиннее 20000 знаков"),
         ([good], "квитанция не JSON-объект"),
     ):
         answer = _receipt(number, body)
@@ -106,3 +107,17 @@ def test_status_command_shows_the_receipt_and_refusals_like_the_tab(exchange, mo
     out = capsys.readouterr().out
     assert "отклонён. Отклонено: подпись не сходится." in out
     assert f"Отказ точки: квитанция на пакет №{number + 3}: Пакета №{number + 3} нет. Попыток 1" in out
+
+
+def test_tab_names_the_receipt_outcomes_as_the_server_does():
+    """Вкладка «Журнал обмена» пишет итог квитанции теми же словами, что команда exchange-status и журнал."""
+    import re
+    from pathlib import Path
+
+    from oiltech_digest.db import exchange_store
+
+    source = (Path(__file__).resolve().parents[1]
+              / "frontend/src/features/exchangeJournal/ExchangePackageEntry.tsx").read_text(encoding="utf-8")
+    block = source.split("const RECEIPT_LABELS", 1)[1].split("\n};", 1)[0]
+
+    assert dict(re.findall(r'(\w+): "([^"]+)"', block)) == exchange_store.RECEIPT_OUTCOMES

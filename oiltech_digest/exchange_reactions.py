@@ -43,15 +43,6 @@ class Rejected(exchange_envelope.Rejected):
     """Содержимое пакета откликов не по формату."""
 
 
-def _fields(value: dict[str, Any], fields: Sequence[str], where: str) -> None:
-    extra = sorted(str(name) for name in value if name not in fields)
-    if extra:
-        raise Rejected(f"{where}: лишнее поле {extra[0][:40]}")
-    missing = [name for name in fields if name not in value]
-    if missing:
-        raise Rejected(f"{where}: нет поля {missing[0]}")
-
-
 def _number(value: Any) -> bool:
     return type(value) is int and 0 < value < _MAX_NUMBER
 
@@ -69,7 +60,7 @@ def _day(value: Any) -> bool:
 def _reaction(item: Any, where: str) -> None:
     if not isinstance(item, dict):
         raise Rejected(f"{where}: нужен объект")
-    _fields(item, _REACTION_FIELDS, where)
+    exchange_envelope.exact_fields(item, _REACTION_FIELDS, where)
     if not _number(item["signal_id"]):
         raise Rejected(f"{where}.signal_id: нужно целое число больше нуля")
     if not isinstance(item["reaction"], str) or item["reaction"] not in LABELS:
@@ -88,7 +79,7 @@ def parse(payload: bytes, number: int) -> dict[str, Any]:
         raise Rejected("содержимое не читается как JSON") from None
     if not isinstance(content, dict):
         raise Rejected("содержимое не JSON-объект")
-    _fields(content, _CONTENT_FIELDS, "содержимое")
+    exchange_envelope.exact_fields(content, _CONTENT_FIELDS, "содержимое")
     if not _number(content["number"]):
         raise Rejected("number: нужно целое число больше нуля")
     if content["kind"] != "reactions":

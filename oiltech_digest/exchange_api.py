@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from oiltech_digest import exchange_packages, exchange_reactions, exchange_updates
+from oiltech_digest import exchange_envelope, exchange_packages, exchange_reactions, exchange_updates
+from oiltech_digest.exchange_journal import journal as journal_state
 from oiltech_digest.api_access import exchange_point_refusal, require_admin
 from oiltech_digest.db import connection, exchange_store
 
@@ -63,29 +64,25 @@ def _sentence(text: str) -> str:
 
 def _receipt(body: bytes, number: int) -> tuple[str, str]:
     """Квитанция из тела запроса по формату: ровно number, outcome, message; номер тот же, что в адресе. Не так:
-    ValueError с причиной."""
+    exchange_envelope.Rejected с причиной."""
+    Rejected = exchange_envelope.Rejected
     try:
         data = json.loads(body)
     except (ValueError, RecursionError):
-        raise ValueError("тело не читается как JSON") from None
+        raise Rejected("тело не читается как JSON") from None
     if not isinstance(data, dict):
-        raise ValueError("квитанция не JSON-объект")
-    extra = sorted(str(name) for name in data if name not in _RECEIPT_FIELDS)
-    if extra:
-        raise ValueError(f"лишнее поле {extra[0][:40]}")
-    missing = [name for name in _RECEIPT_FIELDS if name not in data]
-    if missing:
-        raise ValueError(f"нет поля {missing[0]}")
+        raise Rejected("квитанция не JSON-объект")
+    exchange_envelope.exact_fields(data, _RECEIPT_FIELDS)
     if type(data["number"]) is not int:
-        raise ValueError("number: нужно целое число")
+        raise Rejected("number: нужно целое число")
     if not isinstance(data["outcome"], str) or data["outcome"] not in exchange_store.RECEIPT_OUTCOMES:
-        raise ValueError(f"outcome: неизвестный итог «{str(data['outcome'])[:40]}»")
+        raise Rejected(f"outcome: неизвестный итог «{str(data['outcome'])[:40]}»")
     if not isinstance(data["message"], str):
-        raise ValueError("message: нужна строка")
+        raise Rejected("message: нужна строка")
     if len(data["message"]) > _RECEIPT_CHARS:
-        raise ValueError(f"message длиннее {_RECEIPT_CHARS} знаков")
+        raise Rejected(f"message длиннее {_RECEIPT_CHARS} знаков")
     if data["number"] != number:
-        raise ValueError(f"номер в квитанции {data['number']}, а в адресе {number}")
+        raise Rejected(f"номер в квитанции {data['number']}, а в адресе {number}")
     return data["outcome"], data["message"]
 
 
@@ -94,15 +91,15 @@ def _take_receipt(number: int, body: bytes) -> tuple[int, dict[str, Any]]:
     try:
         outcome, message = _receipt(body, number)
         refusal = None
-    except ValueError as problem:
+    except exchange_envelope.Rejected as problem:
         refusal = 422, f"Квитанция не по формату: {problem}."
     with connection.get_connection() as conn:
         if refusal is None:
-            found = exchange_store.record_receipt(conn, number, outcome, message)
-            if found in ("recorded", "same"):
+            written = exchange_store.record_receipt(conn, number, outcome, message)
+            if written in ("recorded", "same"):
                 conn.commit()
-                return 200, {"number": number, "receipt": "принята" if found == "recorded" else "уже была"}
-            if found == "missing":
+                return 200, {"number": number, "receipt": "принята" if written == "recorded" else "уже была"}
+            if written == "missing":
                 refusal = 404, f"Пакета №{number} нет."
             else:
                 had = exchange_store.RECEIPT_OUTCOMES.get(exchange_store.receipt_outcome(conn, number) or "", "")
@@ -139,7 +136,7 @@ async def point_receipt(number: Annotated[int, Path(ge=1, le=_MAX_NUMBER)], requ
 def exchange_journal(limit: int = Query(200, ge=1, le=1000),
                      user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """Пакеты для потребителя (вид, номер, месяц, состав, когда собран и забран) и настройки обмена без ключей."""
-    return exchange_packages.journal(limit=limit)
+    return journal_state(limit=limit)
 
 
 _MONTH = r"^[0-9]{4}-(0[1-9]|1[0-2])$"
@@ -175,7 +172,7 @@ def exchange_update_now(user: dict[str, Any] = Depends(require_admin)) -> dict[s
     """«Собрать обновление сейчас» (#200): изменённые карточки, склейки, снятия и возвраты отправленных сигналов, если
     на платформе что-то изменилось; пустое обновление не выкладывается. Ключей нет: 409 с причиной."""
     try:
-        result = exchange_updates.build_update(by=user.get("email"), trigger=exchange_updates.MANUAL)
+        result = exchange_updates.build_update(by=user.get("email"), trigger=exchange_store.MANUAL)
     except exchange_packages.Refused as exc:
         raise HTTPException(status_code=409, detail=_sentence(str(exc))) from exc
     built = result.built

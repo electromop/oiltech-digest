@@ -13,7 +13,7 @@ import { READINESS_LABELS } from "../digest/DigestMaterialEditor";
 import { Dialog } from "../shared/Dialog";
 import { monthLabel } from "../shared/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
-import { cardHref, PackageEntry } from "./ExchangePackageEntry";
+import { cardHref, KIND_LABELS, PackageEntry, packageState, STATE_LABELS } from "./ExchangePackageEntry";
 import { ExchangeReactionsPanel } from "./ExchangeReactionsPanel";
 import { ExchangeUpdatePanel } from "./ExchangeUpdatePanel";
 import { reportFailure, type Outcome } from "./outcome";
@@ -29,8 +29,6 @@ type Props = {
 };
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-export { cardHref };
 
 // Номера через запятую, точку с запятой или пробел; не число: null.
 function parseNumbers(text: string): number[] | null {
@@ -180,6 +178,9 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
   const [numbers, setNumbers] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ refused: boolean; text: string; answer?: AdditionResult } | null>(null);
+  // Фильтры пакетов по виду и состоянию: на загруженном журнале, без запроса.
+  const [kindFilter, setKindFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
 
   // Перечитать журнал при открытии и после дозагрузки; от обработчиков App не зависит, иначе каждая перерисовка App
   // (тост) перечитывала бы журнал.
@@ -231,6 +232,8 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
   }
 
   const settings = journal?.settings;
+  const packages = (journal?.packages ?? []).filter((item) =>
+    (!kindFilter || item.kind === kindFilter) && (!stateFilter || packageState(item) === stateFilter));
   return (
     <section className="screenStack">
       <header className="screenHeader">
@@ -313,12 +316,31 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel" aria-label="Пакеты">
         <div className="panelHeader"><h2>Пакеты</h2></div>
+        <div className="jobsFilters">
+          <label className="field">
+            <span>Вид</span>
+            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
+              <option value="">Все</option>
+              {Object.entries(KIND_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Состояние</span>
+            <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+              <option value="">Все</option>
+              {Object.entries(STATE_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+          </label>
+        </div>
         {journal === null ? <SkeletonList rows={3} label="Загружаем журнал обмена" /> : null}
         {journal !== null && journal.packages.length === 0 ? (
           <div className="emptyState">Пакетов для потребителя ещё нет.</div>
         ) : null}
+        {journal !== null && journal.packages.length > 0 && packages.length === 0 ? (
+          <div className="emptyState">Пакетов такого вида и состояния нет.</div>
+        ) : null}
         <div className="journalList">
-          {journal?.packages.map((item) => <PackageEntry key={item.number} item={item} />)}
+          {packages.map((item) => <PackageEntry key={item.number} item={item} />)}
         </div>
       </section>
 

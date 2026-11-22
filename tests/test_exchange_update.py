@@ -19,21 +19,28 @@ from tests.digest_user_path_support import SEPT, add_signal, feed_signal, msk, s
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
 from tests.exchange_consumer import State
 from tests.exchange_support import exchange  # noqa: F401: фикстура обмена
-from tests.exchange_support import freeze, packages, ready, sent_signals
+from tests.exchange_support import HEADERS, freeze, packages, point, ready, sent_signals
 
 
 class Follower:
-    """Потребитель, который забирает новые пакеты и принимает их по своим правилам."""
+    """Потребитель, который забирает новые пакеты, принимает их по своим правилам и отдаёт квитанции (receipts=False:
+    забрал, а квитанция ещё не дошла)."""
 
     def __init__(self, exchange) -> None:
         self.exchange, self.state, self.seen = exchange, State(), set()
 
-    def take(self) -> list[dict]:
+    def take(self, *, receipts: bool = True) -> list[dict]:
         fresh = [one for one in self.exchange.take() if one["number"] not in self.seen]
         for package in fresh:
             self.state.apply(package)
             self.seen.add(package["number"])
+            if receipts:
+                self.receipt(package["number"])
         return fresh
+
+    def receipt(self, number: int) -> None:
+        answer = self.exchange.consumer.receipt(point(), HEADERS, number, "accepted", f"Принято: пакет №{number}.")
+        assert answer.status_code == 200, answer.text
 
 
 def _update(**kwargs) -> exchange_updates.Update:
@@ -190,8 +197,9 @@ def test_explicit_decisions_remove_self_acting_rules_do_not_and_a_return_comes_n
     assert sent_signals()[ids["archived"]]["state"] == "active"
 
 
-def test_a_return_waits_until_the_consumer_took_the_removal(exchange, monkeypatch):
-    """Потребитель помечает снятие временем, когда принял пакет: возврат с датой раньше его не снял бы пометку."""
+def test_a_return_waits_for_the_receipt_on_the_removal(exchange, monkeypatch):
+    """Потребитель помечает снятие временем, когда принял пакет: возврат с датой раньше его не снял бы пометку. Забрать
+    пакет мало (принять он может и следующим проходом): возврат ждёт его квитанцию."""
     consumer, ids = _sent(exchange, monkeypatch, "one")
     one = ids["one"]
     _sql("UPDATE signals SET archived_at = now() WHERE id = %s", one)
@@ -200,9 +208,10 @@ def test_a_return_waits_until_the_consumer_took_the_removal(exchange, monkeypatc
 
     held = _update()
     assert held.built is None
-    assert held.notes == [f"Возврат №{one} ждёт: потребитель ещё не забрал пакет №{removal.number} со снятием"]
-    consumer.take()
-    assert one in consumer.state.removed
+    assert held.notes == [f"Возврат №{one} ждёт квитанцию потребителя на пакет №{removal.number} со снятием"]
+    consumer.take(receipts=False)
+    assert one in consumer.state.removed and _update().built is None
+    consumer.receipt(removal.number)
     [package] = (_update(), consumer.take())[1]
     assert _ids(package) == ([one], [], [])
     assert one not in consumer.state.removed
@@ -220,6 +229,25 @@ def test_merge_into_a_signal_removed_by_the_same_update_waits_for_the_next_one(e
     [package] = (_update(), consumer.take())[1]
     assert _ids(package) == ([], [{"signal_id": ids["dup"], "merged_into": ids["root"]}], [])
     assert consumer.state.merged[ids["dup"]] == ids["root"]
+
+
+def test_a_merge_waiting_for_the_next_update_does_not_mark_an_earlier_merge_as_undone(exchange, monkeypatch):
+    """№a ушёл склейкой в №b; на платформе №b склеен с №c, а №c снимается: склейка b → c ждёт следующего обновления,
+    и №a за это время не помечается расклеенным."""
+    consumer, ids = _sent(exchange, monkeypatch, "a", "b", "c")
+    _merge(ids["a"], ids["b"])
+    _update()
+    consumer.take()
+    _merge(ids["b"], ids["c"])
+    _sql("UPDATE signals SET archived_at = now() WHERE id = %s", ids["c"])
+
+    first = _update()
+    assert first.built.details["removals"] == [{"signal_id": ids["c"], "reason": "в архиве"}]
+    assert sent_signals()[ids["a"]]["state"] == "merged"
+    consumer.take()
+    [package] = (_update(), consumer.take())[1]
+    assert package["merges"] == [{"signal_id": ids["b"], "merged_into": ids["c"]}]
+    assert sent_signals()[ids["a"]]["state"] == "merged" and consumer.state.root(ids["a"]) == ids["c"]
 
 
 def test_step_runs_once_a_day_behind_the_flag_and_the_tab_builds_an_update_now(exchange, monkeypatch, capsys):

@@ -253,38 +253,37 @@ def checked_changes(answer: Any, card: dict[str, Any], marks: list[dict[str, Any
             problems.append("улучшение не по схеме")
             continue
         field, raw = str(one.get("field") or ""), str(one.get("value") or "")
-        cited, pressed = _numbers(one.get("marks")), _numbers(one.get("reactions"))
+        cited, cited_reactions = _numbers(one.get("marks")), _numbers(one.get("reactions"))
         problem = None
         if field not in feedback_changes.FIELDS:
             problem = f"поле «{field[:40]}» не из списка"
         elif field in seen:
             problem = f"поле «{field}» дважды"
-        elif (not cited and not pressed) or any(number not in by_id for number in cited) or any(
-                number not in by_reaction for number in pressed):
+        elif (not cited and not cited_reactions) or any(number not in by_id for number in cited) or any(
+                number not in by_reaction for number in cited_reactions):
             problem = f"{field}: номера отметок не из этой карточки"
-        elif len(set(cited)) + len(set(pressed)) < threshold:
+        elif len(set(cited)) + len(set(cited_reactions)) < threshold:
             problem = f"{field}: отметок меньше порога ({threshold})"
         elif not _quoted(str(one.get("quote") or ""), [by_id[number] for number in cited],
                          verdicts=feedback_changes.FIELDS[field].kind in _VERDICT_KINDS,
-                         reactions=[by_reaction[number] for number in pressed]):
+                         reactions=[by_reaction[number] for number in cited_reactions]):
             problem = f"{field}: цитаты нет в тексте отметок"
         if problem is None:
-            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited],
-                                         reactions=[by_reaction[number] for number in pressed])
+            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited])
         if problem:
             problems.append(problem)
             continue
         seen.add(field)
         changes.append(_change(field, value, card, quote=" ".join(str(one["quote"]).split())[:500],
-                               event_ids=sorted(set(cited)), reaction_ids=sorted(set(pressed))))
+                               event_ids=sorted(set(cited)), reaction_ids=sorted(set(cited_reactions))))
     return changes, problems
 
 
 def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, Any], *,
-                cited: list[dict[str, Any]] | None = None,
-                reactions: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
+                cited: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
     """Значение поля из строки ответа модели или правки администратора. (значение, None) или (None, почему нет).
-    cited и reactions: отметки и отклики, на которых стоит изменение (у правки администратора их нет)."""
+    cited: отметки, на которых стоит изменение (у правки администратора их нет). Категорию, «Дубль» и уборку
+    обосновывают только отметки людей платформы, отклики потребителя нет."""
     spec = feedback_changes.FIELDS[field]
     text = " ".join(raw.split())
     label = spec.label
@@ -334,8 +333,7 @@ def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, A
         if cited is not None and not any(mark.get("duplicate_of_signal_id") == int(digits) for mark in cited):
             return None, f"{label}: нет отметки «Дубль» с №{digits}"
         return int(digits), None
-    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited) and not any(
-            row.get("reaction") == feedback_review_reactions.REMOVAL for row in reactions or []):
+    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited):
         return None, f"{label}: нет отметки «Не релевантно»"
     return True, None
 

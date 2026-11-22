@@ -14,8 +14,8 @@
   пометка статьи на удаление. Правила показа, которые срабатывают сами (срок события, качество радара), смена категории
   и архив источника снятия не дают;
 - возвраты: снятый сигнал снова действует, его карточка приходит с датой новее снятия. Потребитель помечает снятие
-  временем, когда принял пакет, поэтому возврат ждёт, пока потребитель не заберёт пакет со снятием: иначе карточка с
-  датой раньше его пометки пометку не сняла бы.
+  временем, когда принял пакет, поэтому возврат ждёт его квитанцию на пакет со снятием (любой итог: пакет он уже
+  обработал): забранный, но не принятый пакет он примет позже, и карточка с датой раньше его пометки её не сняла бы.
 Сигнал в пакете встречается один раз: карточкой, склейкой или снятием. Склейка в сигнал, который снимается этим же
 пакетом, ждёт следующего обновления: такой пакет потребитель отклонил бы. Пустое обновление не выкладывается (номер
 пакета не тратится), но запуск записывается: шаг идёт раз в сутки по Москве.
@@ -30,10 +30,8 @@ from typing import Any
 
 from oiltech_digest import config, exchange_card, exchange_envelope, exchange_packages
 from oiltech_digest.db import connection, exchange_store, showcase_cards
-from oiltech_digest.db.exchange_store import ACTIVE, MERGED, REMOVED, UNMERGED, UPDATE
+from oiltech_digest.db.exchange_store import ACTIVE, MERGED, REMOVED, SCHEDULE, UNMERGED, UPDATE
 from oiltech_digest.feed_window import MSK
-
-SCHEDULE, MANUAL = "schedule", "manual"
 NOTHING = "Изменений нет: пакет обновления не собран"
 # Сколько шагов цепочки склеек у потребителя пройти до оставшегося сигнала (предел лишь от петли).
 _CHAIN_STEPS = 50
@@ -59,6 +57,8 @@ class _Plan:
     returned: list[int] = field(default_factory=list)
     roots: dict[int, str] = field(default_factory=dict)
     merges: list[tuple[int, int]] = field(default_factory=list)
+    # Склейки, которые ждут следующего обновления: потребитель получит их позже.
+    waiting_merges: list[tuple[int, int]] = field(default_factory=list)
     removals: dict[int, str] = field(default_factory=dict)
     flips: list[tuple[int, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -98,6 +98,7 @@ def _structure(conn, plan: _Plan, journal: dict[int, dict[str, Any]], roots: dic
             continue
         if root in plan.removals:
             plan.notes.append(f"Склейка №{one} в №{root} ждёт: №{root} снимается этим пакетом")
+            plan.waiting_merges.append((one, root))
             continue
         if root not in journal:
             if root in inactive:
@@ -120,6 +121,7 @@ def _cards(conn, plan: _Plan, journal: dict[int, dict[str, Any]], roots: dict[in
         if root not in bodies:
             plan.notes.append(f"Склейка в №{root} ждёт: {problems.get(root, 'сигнала нет')}")
             del plan.roots[root]
+            plan.waiting_merges += [(one, into) for one, into in plan.merges if into == root]
             plan.merges = [(one, into) for one, into in plan.merges if into != root]
         else:
             plan.cards[root] = bodies[root]
@@ -128,8 +130,8 @@ def _cards(conn, plan: _Plan, journal: dict[int, dict[str, Any]], roots: dict[in
         if body is None:
             plan.notes.append(f"Карточка №{one} не обновлена: {problems.get(one, 'сигнала нет')}")
         elif row["state"] == REMOVED:
-            if row["state_package"] is not None and row["state_package_taken_at"] is None:
-                plan.notes.append(f"Возврат №{one} ждёт: потребитель ещё не забрал пакет №{row['state_package']} "
+            if row["state_package"] is not None and row["state_package_receipt_at"] is None:
+                plan.notes.append(f"Возврат №{one} ждёт квитанцию потребителя на пакет №{row['state_package']} "
                                   "со снятием")
                 continue
             plan.cards[one] = body
@@ -140,11 +142,13 @@ def _cards(conn, plan: _Plan, journal: dict[int, dict[str, Any]], roots: dict[in
 
 
 def _flips(plan: _Plan, journal: dict[int, dict[str, Any]], roots: dict[int, int]) -> None:
-    """Номера, ушедшие склейкой: склеены ли они на платформе так же, как у потребителя (с учётом склеек этого пакета).
-    Нет: «расклеен на платформе, у потребителя склеен»; формат расклейку не передаёт, меняется только журнал."""
+    """Номера, ушедшие склейкой: склеены ли они на платформе так же, как у потребителя (с учётом склеек этого пакета и
+    тех, что ждут следующего: они не расклейка). Нет: «расклеен на платформе, у потребителя склеен»; формат расклейку
+    не передаёт, меняется только журнал."""
     merged_into = {one: int(row["merged_into"]) for one, row in journal.items()
                    if row["state"] in (MERGED, UNMERGED) and row["merged_into"] is not None}
     merged_into.update(plan.merges)
+    merged_into.update(plan.waiting_merges)
 
     def consumer_root(signal_id: int) -> int | None:
         for _ in range(_CHAIN_STEPS):
@@ -183,7 +187,7 @@ def _details(plan: _Plan, journal: dict[int, dict[str, Any]]) -> dict[str, Any]:
 def build_update(*, by: str | None, trigger: str, scheduled_since: datetime | None = None) -> Update:
     """Собрать и выложить обновление, если на платформе что-то изменилось; запуск записывается в любом случае.
     scheduled_since: запуск шага, и шаг с этого момента уже был: ничего не делать. Ключей нет: Refused."""
-    keys = exchange_packages._keys()
+    keys = exchange_packages.sending_keys()
     with connection.get_connection() as conn:
         exchange_store.lock(conn)
         if scheduled_since is not None and exchange_store.scheduled_update_since(conn, scheduled_since):
@@ -225,11 +229,11 @@ def build_update(*, by: str | None, trigger: str, scheduled_since: datetime | No
     return Update(built=built, notes=plan.notes, message=built.describe())
 
 
-def update_step(*, now: datetime | None = None) -> Update | None:
+def update_step() -> Update | None:
     """Шаг планировщика: обновление раз в сутки по Москве, за флагом EXCHANGE_ENABLED. Флаг выключен: None."""
     if not config.EXCHANGE_ENABLED:
         return None
-    moment = (now or _now()).astimezone(MSK)
+    moment = _now().astimezone(MSK)
     return build_update(by="планировщик", trigger=SCHEDULE, scheduled_since=datetime.combine(moment.date(), time(),
                                                                                              MSK))
 

@@ -52,20 +52,21 @@ def test_negative_reactions_come_into_the_slice_without_authors_and_a_proposal_c
     exchange.take()
     reference = _reference()
     by_colleague = mark(colleague, marked, comment="Это уже было в прошлом месяце")
-    ids = _send(exchange, 1, [(quiet, "not_oilfield", True, DAY), (quiet, "useful", True, DAY),
+    ids = _send(exchange, 1, [(quiet, "few_facts", True, DAY), (quiet, "useful", True, DAY),
                               (quiet, "card_error", True, DAY), (quiet, "card_error", False, DAY),
-                              (quiet, "not_oilfield", True, "2026-10-07"), (marked, "not_new", True, DAY),
+                              (quiet, "few_facts", True, "2026-10-07"), (marked, "not_new", True, DAY),
                               (marked, "work", True, DAY)])
-    not_oilfield = [ids[0], ids[4]]
+    few_facts = [ids[0], ids[4]]
+    summary = "Оператор заключил контракт на бурение 40 скважин на шельфе, работы начнутся в 2027 году."
 
     assert _collect(admin)["signals"] == 2
     model = review(monkeypatch, {quiet: {"improvements": [
-        {**improvement("removed", "да", [], "Не про нефтесервис"), "reactions": not_oilfield}]}})
+        {**improvement("summary", summary, [], "Мало фактов"), "reactions": few_facts}]}})
 
     calls = {int(call["input"].splitlines()[0].split("№")[1]): call["input"] for call in model.calls}
     assert sorted(calls) == sorted([quiet, marked])
-    assert f"Отклик №{ids[0]} (сотрудник потребителя, {DAY}): Не про нефтесервис" in calls[quiet]
-    assert f"Отклик №{ids[4]} (сотрудник потребителя, 2026-10-07): Не про нефтесервис" in calls[quiet]
+    assert f"Отклик №{ids[0]} (сотрудник потребителя, {DAY}): Мало фактов" in calls[quiet]
+    assert f"Отклик №{ids[4]} (сотрудник потребителя, 2026-10-07): Мало фактов" in calls[quiet]
     # Положительные отклики и снятый «Ошибка в карточке» в срез не идут; автора и метки источника нет.
     assert "Полезный сигнал" not in calls[quiet] and "Ошибка в карточке" not in calls[quiet]
     assert "Тестовый потребитель" not in calls[quiet]
@@ -77,20 +78,23 @@ def test_negative_reactions_come_into_the_slice_without_authors_and_a_proposal_c
     [proposal] = journal(admin, kind="signal_proposal")
     assert (proposal["signal_id"], proposal["event_ids"], proposal["status"]) == (quiet, [], "pending")
     assert [(one["id"], one["reaction"], one["role"]) for one in proposal["reactions"]] == [
-        (ids[0], "Не про нефтесервис", "сотрудник потребителя"), (ids[4], "Не про нефтесервис", "сотрудник потребителя")]
-    assert proposal["changes"][0]["reaction_ids"] == not_oilfield
+        (ids[0], "Мало фактов", "сотрудник потребителя"), (ids[4], "Мало фактов", "сотрудник потребителя")]
+    assert (proposal["changes"][0]["field"], proposal["changes"][0]["reaction_ids"]) == ("summary", few_facts)
     # Отклики в эталон ОС не входят.
     assert _reference() == reference
     # Следующий срез: новых откликов нет, сигнал без новых отметок в разбор не идёт.
     assert _collect(admin)["signals"] == 0
 
 
-def test_cited_reaction_of_another_card_or_below_the_threshold_is_not_written(exchange, contour, monkeypatch):
+def test_reaction_of_another_card_below_the_threshold_or_for_a_removal_is_not_written(exchange, contour, monkeypatch):
+    """Номер отклика чужой карточки, откликов меньше порога и уборка по одному отклику «Не про нефтесервис»: уборку,
+    категорию и «Дубль» обосновывают только отметки людей платформы."""
     admin = exchange.admin
-    one, other = business(exchange.a["hi"]), business(exchange.a["mid"])
-    exchange_packages.build_addition([one, other], SEPT, by="test")
+    one, other, third = business(exchange.a["hi"]), business(exchange.a["mid"]), business(exchange.a["low"])
+    exchange_packages.build_addition([one, other, third], SEPT, by="test")
     exchange.take()
-    ids = _send(exchange, 1, [(one, "few_facts", True, DAY), (other, "few_facts", True, DAY)])
+    ids = _send(exchange, 1, [(one, "few_facts", True, DAY), (other, "few_facts", True, DAY),
+                              (third, "not_oilfield", True, DAY), (third, "not_oilfield", True, DAY)])
     admin.put("/api/feedback-journal/settings", json={"values": {"card_threshold_marks": 2}})
 
     _collect(admin)
@@ -99,6 +103,8 @@ def test_cited_reaction_of_another_card_or_below_the_threshold_is_not_written(ex
                                 "reactions": [ids[0]]}]},
         other: {"improvements": [{**improvement("summary", "Другая суть.", [], "Мало фактов"),
                                   "reactions": [ids[0], ids[1]]}]},
+        third: {"improvements": [{**improvement("removed", "да", [], "Не про нефтесервис"),
+                                  "reactions": [ids[2], ids[3]]}]},
     })
 
     assert journal(admin, kind="signal_proposal") == []

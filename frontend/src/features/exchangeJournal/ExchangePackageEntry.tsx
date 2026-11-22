@@ -6,10 +6,20 @@ import { monthLabel } from "../shared/feedWindow";
 // забран, принят, уже был, отклонён с ответом потребителя), состав со ссылками на карточки витрины и что сборка сделала
 // сверх состава.
 
-const KIND_LABELS: Record<string, string> = { release: "Выпуск", addition: "Дозагрузка", update: "Обновление" };
+export const KIND_LABELS: Record<string, string> = { release: "Выпуск", addition: "Дозагрузка", update: "Обновление" };
+// Итог квитанции потребителя: те же слова, что у сервера (exchange_store.RECEIPT_OUTCOMES, тест сверяет).
 const RECEIPT_LABELS: Record<ExchangeReceipt["outcome"], string> = {
   accepted: "принят", already: "уже был", rejected: "отклонён",
 };
+
+// Состояние пакета: собран, забран или итог квитанции потребителя.
+export type PackageState = "built" | "taken" | ExchangeReceipt["outcome"];
+export const STATE_LABELS: Record<PackageState, string> = { built: "собран", taken: "забран", ...RECEIPT_LABELS };
+
+export function packageState(item: ExchangePackage): PackageState {
+  if (item.receipt) return item.receipt.outcome;
+  return item.first_taken_at ? "taken" : "built";
+}
 
 // Карточка в витрине: бизнес на бизнес-ленте, остальное на технологическом радаре; витрина ищет её по номеру.
 export function cardHref(card: ExchangeCard): string {
@@ -23,13 +33,9 @@ export function packageTitle(item: ExchangePackage): string {
 }
 
 function State({ item }: { item: ExchangePackage }) {
-  const receipt = item.receipt;
-  if (receipt) {
-    const tone = receipt.outcome === "rejected" ? "bad" : "ok";
-    return <span className={`miniPill ${tone}`}>{RECEIPT_LABELS[receipt.outcome] ?? receipt.outcome}</span>;
-  }
-  const taken = Boolean(item.first_taken_at);
-  return <span className={`miniPill ${taken ? "ok" : "warn"}`}>{taken ? "забран" : "собран"}</span>;
+  const state = packageState(item);
+  const tone = state === "rejected" ? "bad" : state === "built" ? "warn" : "ok";
+  return <span className={`miniPill ${tone}`}>{STATE_LABELS[state] ?? state}</span>;
 }
 
 function Composition({ item }: { item: ExchangePackage }) {

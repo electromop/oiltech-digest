@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import hashlib
 import json
 import re
@@ -175,6 +175,18 @@ def _base64(value: Any, name: str) -> bytes:
         raise Rejected(f"{name}: не base64 со стандартным алфавитом") from None
 
 
+def exact_fields(value: dict[str, Any], fields: Sequence[str], where: str = "") -> None:
+    """Поля объекта ровно по формату (файл пакета, содержимое, отклик, квитанция): лишнее или пропущенное поле даёт
+    Rejected с местом where."""
+    place = f"{where}: " if where else ""
+    extra = sorted(str(name) for name in value if name not in fields)
+    if extra:
+        raise Rejected(f"{place}лишнее поле {extra[0][:40]}")
+    missing = [name for name in fields if name not in value]
+    if missing:
+        raise Rejected(f"{place}нет поля {missing[0]}")
+
+
 def _envelope(data: bytes) -> dict[str, Any]:
     """Файл пакета: JSON-объект ровно с полями формата."""
     try:
@@ -183,12 +195,7 @@ def _envelope(data: bytes) -> dict[str, Any]:
         raise Rejected("файл пакета не читается как JSON") from None
     if not isinstance(envelope, dict):
         raise Rejected("файл пакета не JSON-объект")
-    extra = sorted(str(name) for name in envelope if name not in ENVELOPE_FIELDS)
-    if extra:
-        raise Rejected(f"в файле пакета лишнее поле {extra[0][:40]}")
-    missing = [name for name in ENVELOPE_FIELDS if name not in envelope]
-    if missing:
-        raise Rejected(f"в файле пакета нет поля {missing[0]}")
+    exact_fields(envelope, ENVELOPE_FIELDS, "файл пакета")
     return envelope
 
 

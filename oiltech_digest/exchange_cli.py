@@ -24,8 +24,6 @@ import re
 from zoneinfo import ZoneInfo
 
 _MSK = ZoneInfo("Europe/Moscow")
-# Итоги квитанции потребителя словами (как exchange_store.RECEIPT_OUTCOMES: модуль базы команды грузят при вызове).
-RECEIPT_OUTCOMES = {"accepted": "принят", "already": "уже был", "rejected": "отклонён"}
 
 
 def _moment(value) -> str:
@@ -101,9 +99,10 @@ def cmd_digest_readiness(args: argparse.Namespace) -> None:
 
 def cmd_exchange_update(args: argparse.Namespace) -> None:
     from oiltech_digest import exchange_packages, exchange_updates
+    from oiltech_digest.db import exchange_store
 
     try:
-        result = (exchange_updates.build_update(by="команда", trigger=exchange_updates.MANUAL) if args.now
+        result = (exchange_updates.build_update(by="команда", trigger=exchange_store.MANUAL) if args.now
                   else exchange_updates.update_step())
     except exchange_packages.Refused as exc:
         raise SystemExit(f"exchange-update: {exc}") from exc
@@ -133,7 +132,7 @@ def cmd_exchange_reactions(args: argparse.Namespace) -> None:
     from oiltech_digest import config, exchange_packages, exchange_reactions, feed_window
 
     try:
-        month = exchange_packages._checked_month(args.month)
+        month = exchange_packages.checked_month(args.month)
     except exchange_packages.Refused as exc:
         raise SystemExit(f"exchange-reactions: {exc}") from exc
     target = Path(args.out) if args.out else config.EXPORTS_DIR / f"exchange-reactions-{month}.xlsx"
@@ -153,9 +152,10 @@ def cmd_exchange_new_key(args: argparse.Namespace) -> None:
 
 
 def cmd_exchange_status(args: argparse.Namespace) -> None:
-    from oiltech_digest import exchange_packages
+    from oiltech_digest import exchange_journal, exchange_packages
+    from oiltech_digest.db import exchange_store
 
-    state = exchange_packages.journal(limit=args.limit)
+    state = exchange_journal.journal(limit=args.limit)
     settings = state["settings"]
     print(f"Шаг выпуска: {'включён' if settings['enabled'] else 'выключен'}; первый месяц: "
           f"{settings['first_month'] or 'не задан'}")
@@ -182,7 +182,7 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
               f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}{overdue}")
         receipt = package.get("receipt")
         if receipt:
-            outcome = RECEIPT_OUTCOMES.get(receipt["outcome"], receipt["outcome"])
+            outcome = exchange_store.RECEIPT_OUTCOMES.get(receipt["outcome"], receipt["outcome"])
             print(f"    Квитанция {_moment(receipt['at'])} МСК: {outcome}. {receipt['message']}")
         if package["cards"]:
             print("    " + ", ".join(str(card["signal_id"]) for card in package["cards"]))
@@ -193,8 +193,10 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
 
 def _print_exchange_activity(state: dict) -> None:
     """Обновление, особые состояния отправленного, пакеты откликов и отказы точки (#200), как во вкладке."""
+    from oiltech_digest.db import exchange_store
+
     for run in state["updates"]:
-        how = "шаг" if run["trigger"] == "schedule" else f"вручную ({run['author'] or 'кто, не записано'})"
+        how = "шаг" if run["trigger"] == exchange_store.SCHEDULE else f"вручную ({run['author'] or 'кто, не записано'})"
         print(f"Обновление {_moment(run['started_at'])} МСК, {how}: {run['note']}")
     for row in state["sent_states"]:
         print(f"Сигнал №{row['signal_id']}: {row['state_label']}")
@@ -203,7 +205,7 @@ def _print_exchange_activity(state: dict) -> None:
         print(f"Пакет откликов №{package['number']} ({package['source']}): откликов {package['reactions']}, принят "
               f"{_moment(package['received_at'])} МСК{repeats}")
     for refusal in state["refusals"]:
-        what = "пакет откликов" if refusal["kind"] == "reactions" else "квитанция на пакет"
+        what = "пакет откликов" if refusal["kind"] == exchange_store.REFUSED_REACTIONS else "квитанция на пакет"
         print(f"Отказ точки: {what} №{refusal['number']}: {refusal['reason']} Попыток {refusal['attempts']}, "
               f"последняя {_moment(refusal['last_at'])} МСК")
 

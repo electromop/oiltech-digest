@@ -117,9 +117,10 @@ def _broken_ciphertext(exchange, content) -> bytes:
     ("foreign recipient", "пакет зашифрован на ключ {recipient}, а не на ключ платформы"),
     ("broken ciphertext", "пакет не расшифровывается ключом платформы"),
     ("version 1", "формат «digest-exchange-package» версии 1, точка принимает «digest-exchange-package» версии 2"),
-    ("extra envelope field", "в файле пакета лишнее поле note"),
+    ("extra envelope field", "файл пакета: лишнее поле note"),
     ("extra field", "содержимое: лишнее поле note"),
     ("missing field", "содержимое: нет поля source"),
+    ("long source", "source: нужна непустая строка до 200 знаков"),
     ("unknown kind", "reactions[0].reaction: неизвестный вид «like»"),
     ("placed not bool", "reactions[0].placed: нужно true или false"),
     ("bad day", "reactions[0].day: нужна дата ГГГГ-ММ-ДД"),
@@ -144,6 +145,7 @@ def test_foreign_or_broken_reactions_package_is_refused_with_a_reason_and_nothin
         "extra envelope field": lambda: consumer.seal(good, note="x"),
         "extra field": lambda: consumer.seal({**good, "note": "x"}),
         "missing field": lambda: consumer.seal({key: value for key, value in good.items() if key != "source"}),
+        "long source": lambda: consumer.seal({**good, "source": "ж" * 201}),
         "unknown kind": lambda: consumer.seal({**good, "reactions": [{**one, "reaction": "like"}]}),
         "placed not bool": lambda: consumer.seal({**good, "reactions": [{**one, "placed": 1}]}),
         "bad day": lambda: consumer.seal({**good, "reactions": [{**one, "day": "06.10.2026"}]}),
@@ -223,3 +225,19 @@ def test_reactions_of_a_month_are_exported_by_a_command(exchange, monkeypatch, t
     values = dict(zip(rows[0], row))
     assert (values["Сигнал"], values["Месяц выпуска"], values["В работе у групп"]) == (ids["root"], SEPT, 2)
     assert values["Ошибка в карточке"] == 1 and values["Сохранить"] == 0
+
+
+def test_card_names_the_reactions_as_the_server_does():
+    """Строка откликов на карточке витрины пишет виды теми же словами, что выгрузка и разбор ОС; «В работу» на
+    карточке словами «в работе у N групп»."""
+    import re
+    from pathlib import Path
+
+    from oiltech_digest import exchange_reactions
+
+    source = (Path(__file__).resolve().parents[1]
+              / "frontend/src/features/signals/SignalConsumerReactions.tsx").read_text(encoding="utf-8")
+    block = source.split("const LABELS", 1)[1].split("\n};", 1)[0]
+
+    labels = {kind: label for kind, label in exchange_reactions.LABELS.items() if kind != "work"}
+    assert dict(re.findall(r'(\w+): "([^"]+)"', block)) == labels

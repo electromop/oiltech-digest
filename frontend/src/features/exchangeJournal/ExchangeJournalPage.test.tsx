@@ -299,6 +299,24 @@ describe("вкладка «Журнал обмена»: обновление, к
     await waitFor(() => expect(fetchMock.mock.calls.filter(([one]) => one === "/api/exchange-journal")).toHaveLength(2));
   });
 
+  it("фильтры пакетов по виду и состоянию", async () => {
+    serveExchange();
+    renderPage();
+    await screen.findByRole("article", { name: "Обновление №3" });
+    const names = () => screen.getAllByRole("article").map((one) => one.getAttribute("aria-label"));
+
+    fireEvent.change(screen.getByLabelText("Вид"), { target: { value: "update" } });
+    expect(names()).toEqual(["Обновление №3"]);
+    fireEvent.change(screen.getByLabelText("Вид"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Состояние"), { target: { value: "rejected" } });
+    expect(names()).toEqual(["Дозагрузка №2 · сентябрь 2026"]);
+    fireEvent.change(screen.getByLabelText("Состояние"), { target: { value: "built" } });
+    expect(names()).toEqual(["Выпуск №1 · сентябрь 2026"]);
+    fireEvent.change(screen.getByLabelText("Вид"), { target: { value: "update" } });
+    expect(screen.queryAllByRole("article")).toEqual([]);
+    expect(screen.getByText("Пакетов такого вида и состояния нет.")).toBeInTheDocument();
+  });
+
   it("отказ сборки обновления показан у кнопки", async () => {
     serveExchange(() => json({ detail: "Пакет не собран: нет ключа подписи платформы (EXCHANGE_SIGNING_KEYS)." }, 409));
     renderPage();

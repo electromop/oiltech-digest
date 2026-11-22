@@ -35,6 +35,8 @@ RELEASE, ADDITION, UPDATE = "release", "addition", "update"
 ACTIVE, REMOVED, MERGED, UNMERGED = "active", "removed", "merged", "unmerged"
 # Итоги квитанции потребителя словами: принят, уже был, отклонён.
 RECEIPT_OUTCOMES = {"accepted": "принят", "already": "уже был", "rejected": "отклонён"}
+# Запуск обновления: шаг планировщика раз в сутки или вручную (кнопка вкладки, команда).
+SCHEDULE, MANUAL = "schedule", "manual"
 # Отказ точки обмена: что не принято (пакет откликов или квитанция), причина не длиннее стольких знаков.
 REFUSED_REACTIONS, REFUSED_RECEIPT = "reactions", "receipt"
 _REASON_CHARS = 500
@@ -269,9 +271,9 @@ def refusals(conn, *, limit: int) -> list[dict[str, Any]]:
 
 def journal_rows(conn) -> dict[int, dict[str, Any]]:
     """Весь журнал отправленного: что у потребителя сейчас (действует, снят, ушёл склейкой, расклеен), отпечаток
-    последней отправленной карточки и пакет последней смены состояния с отметкой, забрал ли его потребитель."""
+    последней отправленной карточки и пакет последней смены состояния с отметкой, пришла ли на него квитанция."""
     rows = conn.cursor(row_factory=dict_row).execute(
-        "SELECT ss.*, p.first_taken_at AS state_package_taken_at FROM exchange_sent_signals ss"
+        "SELECT ss.*, p.receipt_at AS state_package_receipt_at FROM exchange_sent_signals ss"
         " LEFT JOIN exchange_packages p ON p.number = ss.state_package").fetchall()
     return {int(row["signal_id"]): row for row in rows}
 
@@ -321,8 +323,8 @@ def set_states(conn, states: Sequence[tuple[int, str, int | None]], *, package: 
 
 def scheduled_update_since(conn, moment: datetime) -> bool:
     """Был ли запуск шага обновления с этого момента: шаг идёт раз в сутки."""
-    return conn.execute("SELECT 1 FROM exchange_update_runs WHERE trigger = 'schedule' AND started_at >= %s LIMIT 1",
-                        (moment,)).fetchone() is not None
+    return conn.execute("SELECT 1 FROM exchange_update_runs WHERE trigger = %s AND started_at >= %s LIMIT 1",
+                        (SCHEDULE, moment)).fetchone() is not None
 
 
 def record_update_run(conn, *, trigger: str, package: int | None, author: str | None, note: str) -> None:

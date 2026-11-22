@@ -79,15 +79,15 @@ class Consumer:
         return self.signing_key.public_key().public_bytes_raw()
 
     def seal(self, content: Any, *, recipient: bytes | None = None, signing_key: Ed25519PrivateKey | None = None,
-             label: bytes = LABEL, **envelope: Any) -> bytes:
+             **envelope: Any) -> bytes:
         """Пакет откликов по описанию формата: содержимое в JSON, HPKE на ключ платформы (recipient), подпись своим
         ключом над строкой формата и шифротекстом. envelope: поля конверта поверх собранных (испорченный пакет)."""
         recipient = recipient or self.platform_encryption_key
         assert recipient is not None, "нет открытого ключа платформы"
         payload = content if isinstance(content, bytes) else json.dumps(content, ensure_ascii=False).encode("utf-8")
-        ciphertext = SUITE.encrypt(payload, X25519PublicKey.from_public_bytes(recipient), info=label)
+        ciphertext = SUITE.encrypt(payload, X25519PublicKey.from_public_bytes(recipient), info=LABEL)
         signer = signing_key or self.signing_key
-        signature = signer.sign(label + ciphertext)
+        signature = signer.sign(LABEL + ciphertext)
         sealed = {
             "format": FORMAT, "version": VERSION,
             "signer": key_id(signer.public_key().public_bytes_raw()), "recipient": key_id(recipient),
@@ -96,15 +96,13 @@ class Consumer:
         }
         return json.dumps({**sealed, **envelope}).encode("ascii")
 
-    def send_reactions(self, client: Any, headers: dict[str, str], number: int, data: bytes,
-                       *, prefix: str = "/api/exchange/v1") -> Any:
-        return client.put(f"{prefix}/reactions/{number}", content=data, headers={**headers,
-                                                                                "Content-Type": "application/json"})
+    def send_reactions(self, client: Any, headers: dict[str, str], number: int, data: bytes) -> Any:
+        return client.put(f"/api/exchange/v1/reactions/{number}", content=data,
+                          headers={**headers, "Content-Type": "application/json"})
 
-    def receipt(self, client: Any, headers: dict[str, str], number: int, outcome: str, message: str,
-                *, prefix: str = "/api/exchange/v1") -> Any:
-        return client.put(f"{prefix}/receipts/{number}", json={"number": number, "outcome": outcome,
-                                                                "message": message}, headers=headers)
+    def receipt(self, client: Any, headers: dict[str, str], number: int, outcome: str, message: str) -> Any:
+        return client.put(f"/api/exchange/v1/receipts/{number}",
+                          json={"number": number, "outcome": outcome, "message": message}, headers=headers)
 
     @property
     def public_key(self) -> bytes:
