@@ -941,6 +941,40 @@ describe("App smoke", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/exchange-journal"))).toBe(false);
   });
 
+  // Боковое меню администратора по группам; hypothesisEnabled: включён ли раздел «Гипотеза для Компании».
+  async function adminSidebar(hypothesisEnabled?: boolean) {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/auth/login"
+        ? Promise.resolve(jsonResponse({
+          ok: true, user: { id: 1, email: "user@example.com", role: "admin", hypothesis_enabled: hypothesisEnabled },
+        }))
+        : base(input, init));
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    await screen.findByRole("heading", { name: "Бизнес-лента" });
+    const sidebar = document.querySelector(".sidebar") as HTMLElement;
+    const group = (label: string) => Array.from(sidebar.querySelectorAll<HTMLElement>(".sidebarGroup"))
+      .find((one) => one.querySelector(".sidebarSection")?.textContent === label);
+    const items = (element: HTMLElement | undefined) =>
+      element ? within(element).getAllByRole("button").map((one) => one.textContent) : [];
+    return { all: items(sidebar), settings: items(group("Настройки")), references: items(group("Справочники")) };
+  }
+
+  it("«Группы компаний» в «Справочниках»; «Описания Компании» нет, пока раздел гипотезы выключен", async () => {
+    const menu = await adminSidebar();
+    expect(menu.references).toEqual(["Группы компаний"]);
+    expect(menu.settings).not.toContain("Группы компаний");
+    expect(menu.all).not.toContain("Дочерние общества");
+    expect(menu.all).not.toContain("Описание Компании");
+  });
+
+  it("включённый раздел гипотезы возвращает «Описание Компании» в «Настройки»", async () => {
+    const menu = await adminSidebar(true);
+    expect(menu.settings).toContain("Описание Компании");
+  });
+
   it("прошлый выпуск в дайджесте — только просмотр и выгрузка", async () => {
     withArchiveMocks();
     const user = userEvent.setup();

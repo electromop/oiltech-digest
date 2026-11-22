@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from oiltech_digest import exchange_card, exchange_packages
+from oiltech_digest import config, exchange_card, exchange_packages
 from oiltech_digest.db import connection
 from tests.digest_user_path_support import SEPT, add_signal, msk, set_card
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
@@ -40,7 +40,7 @@ def _screen_card(person, signal_id: int) -> dict:
     return card
 
 
-def test_package_card_is_the_showcase_card_with_corrections_after_the_close(exchange, monkeypatch):
+def test_package_card_is_the_showcase_card_with_corrections_after_the_close(exchange, monkeypatch, hypothesis_on):
     sep = exchange.s["sep"]
     duplicate = add_signal("dup", first_seen=msk(2026, 9, 13, 9, 0))
     with connection.get_connection() as conn:
@@ -105,6 +105,25 @@ def test_why_important_author_hypothesis_and_dates_follow_who_set_them():
     unknown = exchange_card.card(_row(event_date=None, event_date_source="не определено",
                                       card_set_by={"event_date": "agent"}))
     assert unknown["event_date"] is None
+
+
+def test_switched_off_hypothesis_section_sends_no_hypothesis_and_the_screen_shows_none(exchange, monkeypatch):
+    """Раздел «Гипотеза для Компании» выключен (по умолчанию, решение владельца 22.11): ни в пакете, ни на экране
+    витрины гипотезы нет, хотя её поставил человек; в базе она остаётся."""
+    assert config.ISSUE_HYPOTHESIS_ENABLED is False
+    sep = exchange.s["sep"]
+    set_card(sep, hypothesis="Оценить датчики в колонне.", hypothesis_author="admin@example.test",
+             card_set_by={"hypothesis": "human"})
+    exchange.analyst.mark_signal(sep)
+    freeze(monkeypatch, exchange.after_close)
+
+    exchange_packages.build_release(SEPT, by="test")
+    [package] = exchange.take()
+    [card] = package["cards"]
+    assert card["hypothesis"] is None
+    screen = _screen_card(exchange.admin, sep)
+    assert (screen["hypothesis"], screen["hypothesis_author"], screen["hypothesis_set_at"]) == (None, None, None)
+    assert "hypothesis" not in screen["card_set_by"]
 
 
 def test_blank_is_null_undefined_stays_and_only_web_links_go():

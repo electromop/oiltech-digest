@@ -42,6 +42,9 @@ config.AUTH_ATTEMPTS_RETENTION_DAYS = 30
 # Обмен с потребителем выпуска (#198): по умолчанию выключен и без ключей, адресов и токена, как прод до выката; ключи и
 # адреса ставят свои тесты, а не .env разработчика.
 config.EXCHANGE_ENABLED = False
+# Раздел «Гипотеза для Компании» (#162): по умолчанию выключен (решение владельца 22.11), как прод; включает его
+# фикстура hypothesis_on в тестах самого раздела, а не .env разработчика.
+config.ISSUE_HYPOTHESIS_ENABLED = False
 config.EXCHANGE_FIRST_MONTH = ""
 config.EXCHANGE_SIGNING_KEYS = ""
 config.EXCHANGE_DECRYPTION_KEYS = ""
@@ -102,3 +105,9 @@ def isolated_db(monkeypatch, db_clock_steady):
         with psycopg.connect(DATABASE_URL) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
             admin.commit()
+
+
+@pytest.fixture()
+def hypothesis_on(monkeypatch):
+    """Раздел «Гипотеза для Компании» включён: тесты самого раздела (#162). По умолчанию он выключен."""
+    monkeypatch.setattr(config, "ISSUE_HYPOTHESIS_ENABLED", True)

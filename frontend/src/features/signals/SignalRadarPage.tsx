@@ -56,6 +56,9 @@ type Props = {
   // карточка события, публикации снизу, атрибуты чипами. «В дайджест» и блоки ОС: в обеих витринах,
   // одной механикой (решение владельца 23.10, #130); служебное радара: только у радара.
   showcase?: SignalShowcase;
+  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_enabled; выключен решением владельца 22.11): выключенный
+  // блок гипотезы на карточке не рисуется.
+  hypothesisEnabled?: boolean;
 };
 
 // Подписи экрана по витрине. Публикаций у события ленты (статья и перепечатки): сколько сервер отдаёт
@@ -230,7 +233,9 @@ function searchHealthNotice(health: SignalSearchHealth | null): string {
   );
 }
 
-export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, showcase = "technology" }: Props) {
+export function SignalRadarPage({
+  onUnauthorized, showToast, isAdmin = false, showcase = "technology", hypothesisEnabled = false,
+}: Props) {
   const business = showcase === "business";
   const screenText = SCREENS[showcase];
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -1134,9 +1139,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                           <p>{signal.oilfield_application}</p>
                         </div>
                       ) : null}
-                      {/* «Гипотеза для Компании» (#162) сразу после «Применения», та же, что в выпуске. */}
-                      <SignalHypothesis signal={signal} saving={savingThis} editable={isAdmin}
-                        onSave={(text) => void saveHypothesis(signal, text)} />
+                      {/* «Гипотеза для Компании» (#162) сразу после «Применения», та же, что в выпуске;
+                          раздел выключен: блока нет. */}
+                      {hypothesisEnabled ? (
+                        <SignalHypothesis signal={signal} saving={savingThis} editable={isAdmin}
+                          onSave={(text) => void saveHypothesis(signal, text)} />
+                      ) : null}
                       {judgeFieldsOptional && !signal.transferability ? null : (
                         <div>
                           <span>Переносимость</span>

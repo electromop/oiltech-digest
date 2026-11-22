@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from psycopg.rows import dict_row
 
+from oiltech_digest import config
 from oiltech_digest.feed_window import FeedWindow, signal_month_sql
 
 # repository.SIGNAL_ORIGIN_FEED: repository импортирует этот модуль, а не наоборот.
@@ -96,9 +97,26 @@ def titles(conn, signal_ids: Sequence[int]) -> dict[int, dict]:
             for row in rows}
 
 
+# Поля «Гипотезы для Компании» в строке сигнала и в полях материала выпуска (#162).
+_HYPOTHESIS_FIELDS = ("hypothesis", "hypothesis_author", "hypothesis_set_at", "hypothesis_set_by")
+
+
+def without_hypothesis(row: dict) -> dict:
+    """Строка без «Гипотезы для Компании», пока раздел выключен (config.ISSUE_HYPOTHESIS_ENABLED, решение владельца
+    22.11): гипотеза, её автор и время пусты, отметки «кто поставил» нет. Так её не видят ни витрина, ни выпуск, ни
+    пакет обмена; данные в базе остаются. Включённый раздел строку не трогает."""
+    if config.ISSUE_HYPOTHESIS_ENABLED:
+        return row
+    hidden = {**row, **{name: None for name in _HYPOTHESIS_FIELDS if name in row}}
+    set_by = hidden.get("card_set_by")
+    if isinstance(set_by, dict) and "hypothesis" in set_by:
+        hidden["card_set_by"] = {name: value for name, value in set_by.items() if name != "hypothesis"}
+    return hidden
+
+
 def read(conn, signal_ids: Sequence[int]) -> dict[int, dict]:
     """Карточки по номерам, как на экране витрины: все поля сигнала, заголовок и суть с применёнными правками (все, в
-    том числе поданные после закрытия месяца). Нет сигнала: нет и ключа."""
+    том числе поданные после закрытия месяца), гипотеза только при включённом разделе. Нет сигнала: нет и ключа."""
     ids = sorted({int(signal_id) for signal_id in signal_ids})
     if not ids:
         return {}
@@ -111,7 +129,7 @@ def read(conn, signal_ids: Sequence[int]) -> dict[int, dict]:
         """,
         (ids,),
     ).fetchall()
-    return {int(row["id"]): apply_corrections(row) for row in rows}
+    return {int(row["id"]): without_hypothesis(apply_corrections(row)) for row in rows}
 
 
 def publications(conn, signal_ids: Sequence[int], *, limit: int | None = None) -> dict[int, list[dict]]:

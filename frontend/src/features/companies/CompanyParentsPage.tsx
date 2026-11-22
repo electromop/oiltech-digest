@@ -39,7 +39,7 @@ function formatMoment(value: string | null): string {
   return date.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-// Экран «Дочерние общества» (решение владельца 20.10): список «дочка → мать» для фильтра «всё про компанию».
+// Экран «Группы компаний» (решение владельца 20.10): список «дочка → мать» для фильтра «всё про компанию».
 // Правят сами, без выката: форма по одной связи и вставка списком (так заносится черновик). Проверки на
 // сервере, одни для формы и вставки: дочка не мать сама себе, у дочки одна мать, без циклов.
 export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
@@ -172,11 +172,13 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <h1>Дочерние общества</h1>
+          <h1>Группы компаний</h1>
           <p>
-            Список «дочка → мать» для фильтра «всё про компанию»: компания показывается вместе с дочерними обществами по
-            цепочке. Форму собственности, регистр и падеж сверка учитывает сама; другое написание (латиница, прежнее
-            название) добавьте отдельной строкой.
+            Справочник «дочка → мать» для компаний из новостей. На отбор, баллы и выпуск он не влияет и сигналы
+            обществам не направляет. Нужен фильтру «всё про компанию»: нажмите на компанию в карточке ленты или
+            радара, и подборка покажет её вместе с дочерними компаниями по цепочке, а над подборкой появится
+            подсказка вида «Halliburton и дочерние: …». Форму собственности, регистр и падеж сверка учитывает сама;
+            другое написание (латиница, прежнее название) добавьте отдельной строкой.
           </p>
         </div>
         <div className="statusPill">{pluralRu(pairs.length, "связь", "связи", "связей")}</div>
@@ -199,7 +201,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
               list={NAMES_LIST_ID}
               value={child}
               maxLength={MAX_NAME}
-              placeholder="Газпромнефть-Заполярье"
+              placeholder="Halliburton Energy Services"
               onChange={(event) => {
                 setChild(event.target.value);
                 setRefusal(null);
@@ -212,7 +214,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
               list={NAMES_LIST_ID}
               value={parent}
               maxLength={MAX_NAME}
-              placeholder="Газпром нефть"
+              placeholder="Halliburton"
               onChange={(event) => {
                 setParent(event.target.value);
                 setRefusal(null);
@@ -312,7 +314,10 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
           <textarea
             className={styles.paste}
             value={text}
-            placeholder={"Газпром нефть; Газпром\nГазпромнефть-Заполярье; Газпром нефть; контроль 100%"}
+            placeholder={
+              "Halliburton Energy Services; Halliburton; основная операционная компания\n" +
+              "Baker Hughes Holdings; Baker Hughes"
+            }
             onChange={(event) => {
               setText(event.target.value);
               setAnalysis(null);

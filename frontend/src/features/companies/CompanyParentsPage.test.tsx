@@ -67,7 +67,7 @@ function bodyOf(call: [RequestInfo | URL, RequestInit?]) {
   return JSON.parse(String(call[1]?.body));
 }
 
-describe("экран «Дочерние общества»", () => {
+describe("экран «Группы компаний»", () => {
   beforeEach(() => {
     pairs = [...pairsFixture];
     addRefusal = null;
