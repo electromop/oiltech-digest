@@ -92,3 +92,17 @@ def test_journal_shows_the_receipt_of_a_package_and_refusals_of_the_point(exchan
     assert refusals[("receipt", number)]["attempts"] == 2
     assert refusals[("receipt", number + 3)]["reason"] == f"Пакета №{number + 3} нет."
     assert exchange.analyst.get("/api/exchange-journal").status_code == 403
+
+
+def test_status_command_shows_the_receipt_and_refusals_like_the_tab(exchange, monkeypatch, capsys):
+    from oiltech_digest import cli
+
+    number = _release(exchange, monkeypatch)
+    _receipt(number, {"number": number, "outcome": "rejected", "message": "Отклонено: подпись не сходится."})
+    _receipt(number + 3, {"number": number + 3, "outcome": "accepted", "message": "Принято."})
+
+    cli.main(["exchange-status"])
+
+    out = capsys.readouterr().out
+    assert "отклонён. Отклонено: подпись не сходится." in out
+    assert f"Отказ точки: квитанция на пакет №{number + 3}: Пакета №{number + 3} нет. Попыток 1" in out

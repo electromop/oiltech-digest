@@ -10,7 +10,8 @@ exchange-update           шаг планировщика «обновление
                           EXCHANGE_ENABLED) изменённые карточки, склейки, снятия и возвраты; --now: сейчас, флаг не нужен
 exchange-new-key          новая пара ключей платформы: закрытая часть в .env ядра, открытая с отпечатком потребителю
 exchange-reactions        выгрузка откликов потребителя за месяц в xlsx: счёт по корню склейки на конец месяца
-exchange-status           то же состояние, что вкладка «Журнал обмена»
+exchange-status           то же состояние, что вкладка «Журнал обмена»: пакеты с квитанциями, обновление, особые
+                          состояния отправленного, пакеты откликов и отказы точки
 digest-readiness          шаг планировщика «перепроверка готовности»: в последний день перед закрытием месяца с часа
                           READINESS_RECHECK_HOUR и после закрытия до сборки выпуска недостающие шаги конвейера заново;
                           --month: готовность выпуска названного месяца, только чтение
@@ -23,6 +24,8 @@ import re
 from zoneinfo import ZoneInfo
 
 _MSK = ZoneInfo("Europe/Moscow")
+# Итоги квитанции потребителя словами (как exchange_store.RECEIPT_OUTCOMES: модуль базы команды грузят при вызове).
+RECEIPT_OUTCOMES = {"accepted": "принят", "already": "уже был", "rejected": "отклонён"}
 
 
 def _moment(value) -> str:
@@ -159,8 +162,12 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
     print(f"Ключ подписи платформы: {', '.join(settings['signing_keys']) or 'нет'}; ключ потребителя: "
           f"{', '.join(settings['consumer_keys']) or 'нет'}")
     print(f"Адресов потребителя: {settings['addresses']}; токен: {'задан' if settings['token'] else 'не задан'}")
+    print(f"Ключ откликов платформы: {', '.join(settings['decryption_keys']) or 'нет'}; ключ подписи потребителя: "
+          f"{', '.join(settings['consumer_signing_keys']) or 'нет'}")
     for problem in settings["problems"]:
         print(f"Пакеты не соберутся: {problem}")
+    for problem in settings["reaction_problems"]:
+        print(f"Отклики не примутся: {problem}")
     for problem in settings["point_problems"]:
         print(f"Потребитель не заберёт пакеты: {problem}")
     _print_readiness(state["readiness"])
@@ -170,12 +177,35 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
         label = exchange_packages.package_label(package["kind"], package["month"])
         taken = (f"забран {_moment(package['first_taken_at'])}, последний раз {_moment(package['last_taken_at'])}"
                  if package["first_taken_at"] else "не забран")
+        overdue = ", не забран больше суток" if package.get("overdue") else ""
         print(f"№{package['number']} {label}: карточек {len(package['cards'])}, собран "
-              f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}")
+              f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}{overdue}")
+        receipt = package.get("receipt")
+        if receipt:
+            outcome = RECEIPT_OUTCOMES.get(receipt["outcome"], receipt["outcome"])
+            print(f"    Квитанция {_moment(receipt['at'])} МСК: {outcome}. {receipt['message']}")
         if package["cards"]:
             print("    " + ", ".join(str(card["signal_id"]) for card in package["cards"]))
         for note in package["notes"]:
             print(f"    {note}")
+    _print_exchange_activity(state)
+
+
+def _print_exchange_activity(state: dict) -> None:
+    """Обновление, особые состояния отправленного, пакеты откликов и отказы точки (#200), как во вкладке."""
+    for run in state["updates"]:
+        how = "шаг" if run["trigger"] == "schedule" else f"вручную ({run['author'] or 'кто, не записано'})"
+        print(f"Обновление {_moment(run['started_at'])} МСК, {how}: {run['note']}")
+    for row in state["sent_states"]:
+        print(f"Сигнал №{row['signal_id']}: {row['state_label']}")
+    for package in state["reaction_packages"]:
+        repeats = f", повторов {package['repeats']}" if package["repeats"] else ""
+        print(f"Пакет откликов №{package['number']} ({package['source']}): откликов {package['reactions']}, принят "
+              f"{_moment(package['received_at'])} МСК{repeats}")
+    for refusal in state["refusals"]:
+        what = "пакет откликов" if refusal["kind"] == "reactions" else "квитанция на пакет"
+        print(f"Отказ точки: {what} №{refusal['number']}: {refusal['reason']} Попыток {refusal['attempts']}, "
+              f"последняя {_moment(refusal['last_at'])} МСК")
 
 
 def add_commands(sub) -> None:
