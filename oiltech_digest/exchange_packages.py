@@ -23,12 +23,14 @@ from datetime import date, datetime, timedelta
 import json
 from typing import Any, Sequence
 
-from oiltech_digest import config, exchange_card, exchange_envelope, feed_window, material_readiness
+from oiltech_digest import config, exchange_card, exchange_envelope, exchange_reactions, feed_window, material_readiness
 from oiltech_digest.api_access import consumer_networks, exchange_setup_problems
 from oiltech_digest.db import connection, exchange_store, repository, showcase_cards
 
-# Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026».
-KIND_LABELS = {exchange_store.RELEASE: "выпуск за", exchange_store.ADDITION: "дозагрузка к выпуску за"}
+# Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026»,
+# «пакет №3: обновление» (#200: месяца у обновления нет).
+KIND_LABELS = {exchange_store.RELEASE: "выпуск за", exchange_store.ADDITION: "дозагрузка к выпуску за",
+               exchange_store.UPDATE: "обновление"}
 
 
 class Refused(Exception):
@@ -52,12 +54,16 @@ class NotReady(Refused):
 class Built:
     number: int
     kind: str
-    month: str
+    month: str | None
     signal_ids: list[int]
     details: dict[str, Any] = field(default_factory=dict)
 
     def describe(self) -> str:
-        return f"пакет №{self.number}: {package_label(self.kind, self.month)}, карточек {len(self.signal_ids)}"
+        text = f"пакет №{self.number}: {package_label(self.kind, self.month)}, карточек {len(self.signal_ids)}"
+        if self.kind == exchange_store.UPDATE:
+            text += (f", склеек {len(self.details.get('merges') or [])}, "
+                     f"снятий {len(self.details.get('removals') or [])}")
+        return text
 
     def report(self) -> str:
         """Ответ сборки словами: что собрано, а у выпуска «как есть» ещё что было не готово."""
@@ -78,10 +84,19 @@ def package_label(kind: str, month: str | None) -> str:
 
 def package_notes(details: dict[str, Any]) -> list[str]:
     """Что сборка сделала сверх состава, строками для вкладки «Журнал обмена» и команды exchange-status: дубли ушли
-    корнем склейки, уже отправленные пропущены, выпуск отправлен как есть и что в нём было не готово."""
+    корнем склейки, уже отправленные и ушедшие склейкой пропущены, выпуск отправлен как есть и что в нём было не
+    готово; у обновления (#200) склейки, снятия, возвраты, оставшиеся сигналы склеек, расклейки и что ждёт."""
     notes = ([f"Дубль №{one['requested']} ушёл корнем склейки №{one['root']}" for one in details.get("moved") or ()]
              + [f"№{one['signal_id']} уже отправлен: пакет №{one['package']}, выпуск за {_label(one['month'])}"
-                for one in details.get("skipped") or ()])
+                for one in details.get("skipped") or ()]
+             + [f"№{one} не отправлен: он ушёл потребителю склейкой" for one in details.get("merged_away") or ()]
+             + [f"№{one['signal_id']} ушёл склейкой в №{one['merged_into']}" for one in details.get("merges") or ()]
+             + [f"№{one['signal_id']} снят: {one['reason']}" for one in details.get("removals") or ()]
+             + [f"№{one} вернулся: снятие на платформе отменено" for one in details.get("returned") or ()]
+             + [f"№{one} пришёл карточкой: оставшийся сигнал склейки" for one in details.get("roots") or ()]
+             + [f"№{one['signal_id']} расклеен на платформе, у потребителя склеен с №{one['merged_into']}"
+                for one in details.get("unmerged") or ()]
+             + list(details.get("waiting") or ()))
     if details.get("as_is"):
         notes += [f"Отправлен как есть: №{one['signal_id']} не был готов ({material_readiness.labels(one['missing'])})"
                   for one in details.get("not_ready") or ()] or ["Отправлен как есть: все материалы были готовы"]
@@ -116,12 +131,17 @@ def _publish(conn, keys: tuple[bytes, bytes], *, kind: str, month: str, signal_i
     """Собрать и выложить пакет в транзакции conn под замком сборки (exchange_store.lock уже взят): номер, карточки
     экрана витрины, конверт, строка пакета и журнал отправленного. Коммит за вызывающим."""
     rows = showcase_cards.read(conn, signal_ids)
+    previous = exchange_store.sent(conn, rows)
+    # Номер, ушедший потребителю склейкой (#200), больше не отправляется: у потребителя его карточки нет.
+    gone = [one for one in sorted(rows) if (previous.get(one) or {}).get("state") in (exchange_store.MERGED,
+                                                                                      exchange_store.UNMERGED)]
+    if gone:
+        details["merged_away"] = gone
     # Сигнал, удалённый между выбором состава и чтением карточек, в пакет не идёт (карточки у него нет).
-    ids = sorted(rows)
+    ids = [one for one in sorted(rows) if one not in gone]
     number = exchange_store.next_number(conn)
     found = showcase_cards.publications(conn, ids)
     moment = exchange_store.now(conn)
-    previous = exchange_store.sent(conn, ids)
     cards, journal = [], []
     for signal_id in ids:
         try:
@@ -335,10 +355,13 @@ def journal(*, limit: int = 200) -> dict[str, Any]:
     """Состояние обмена для вкладки «Журнал обмена» и команды exchange-status: настройки (без ключей и адресов, только
     отпечатки и число адресов; что мешает собрать пакет и что мешает потребителю его забрать), готовность выпуска
     месяца и пакеты, новые сверху, с тем, что сборка сделала сверх состава."""
+    from oiltech_digest import exchange_updates
+
     keys = exchange_envelope.describe()
     point_problems = exchange_setup_problems()
     with connection.get_connection() as conn:
         packages = exchange_store.packages(conn, limit=limit)
+        refusals = exchange_store.refusals(conn, limit=limit)
     for package in packages:
         package["notes"] = package_notes(package.pop("details") or {})
     return {
@@ -348,10 +371,16 @@ def journal(*, limit: int = 200) -> dict[str, Any]:
             "first_month": config.EXCHANGE_FIRST_MONTH or None,
             "signing_keys": keys["signing"],
             "consumer_keys": keys["consumer"],
+            "decryption_keys": keys["decryption"],
+            "consumer_signing_keys": keys["consumer_signing"],
             "addresses": len(consumer_networks()),
             "token": not any("EXCHANGE_TOKEN_HASH" in problem for problem in point_problems),
             "problems": keys["problems"],
+            "reaction_problems": keys["reaction_problems"],
             "point_problems": point_problems,
         },
         "packages": packages,
+        "refusals": refusals,
+        "reaction_packages": exchange_reactions.journal(limit=limit),
+        **exchange_updates.journal(limit=limit),
     }

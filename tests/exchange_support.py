@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api, config, exchange_envelope, feed_window
@@ -79,11 +80,15 @@ def ready(*signal_ids: int) -> None:
 
 @pytest.fixture()
 def exchange(issue, monkeypatch):
-    """Выпуск сентября на тестовой базе и потребитель: ключи, адрес и токен в настройках ядра."""
+    """Выпуск сентября на тестовой базе и потребитель: ключи (подпись пакетов и расшифровка откликов платформы, ключи
+    потребителя), адрес и токен в настройках ядра."""
     signing = Ed25519PrivateKey.generate().private_bytes_raw()
-    consumer = Consumer(exchange_envelope._signing_public(signing))
+    decryption = X25519PrivateKey.generate()
+    consumer = Consumer(exchange_envelope._signing_public(signing), decryption.public_key().public_bytes_raw())
     monkeypatch.setattr(config, "EXCHANGE_SIGNING_KEYS", b64(signing))
+    monkeypatch.setattr(config, "EXCHANGE_DECRYPTION_KEYS", b64(decryption.private_bytes_raw()))
     monkeypatch.setattr(config, "EXCHANGE_CONSUMER_KEYS", b64(consumer.public_key))
+    monkeypatch.setattr(config, "EXCHANGE_CONSUMER_SIGNING_KEYS", b64(consumer.signing_public))
     monkeypatch.setattr(config, "EXCHANGE_CONSUMER_IPS", CONSUMER_IP)
     monkeypatch.setattr(config, "EXCHANGE_TOKEN_HASH", hashlib.sha256(TOKEN.encode()).hexdigest())
     return SimpleNamespace(**issue, consumer=consumer, take=lambda: consumer.take(point(), HEADERS),

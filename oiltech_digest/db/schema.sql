@@ -1497,7 +1497,7 @@ CREATE TRIGGER exchange_packages_immutable BEFORE UPDATE OR DELETE ON exchange_p
 -- Журнал отправленного: строка на сигнал, ушедший потребителю (без внешнего ключа на signals: журнал помнит
 -- отправленное, даже если сигнал потом удалят). Первый пакет и месяц выпуска, с которым сигнал ушёл впервые;
 -- последний пакет и отпечаток последней отправленной карточки; когда платформа увидела этот отпечаток (дата обновления
--- карточки в пакете); состояние у потребителя: active (действует; снятия и склейки добавит #200).
+-- карточки в пакете); состояние у потребителя (колонки состояния ниже, #200).
 CREATE TABLE IF NOT EXISTS exchange_sent_signals (
   signal_id            BIGINT PRIMARY KEY,
   first_package        BIGINT NOT NULL REFERENCES exchange_packages(number),
@@ -1508,4 +1508,68 @@ CREATE TABLE IF NOT EXISTS exchange_sent_signals (
   state                TEXT NOT NULL DEFAULT 'active',
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Обновления, квитанции и отклики потребителя (#200, спека #197). На живой базе:
+-- scripts/exchange/exchange-updates-before-deploy.sql до выката кода, без init-db.
+-- Квитанция потребителя на пакет: итог (accepted, already, rejected), его ответ одной строкой и когда она пришла.
+-- Пишется один раз (другая квитанция на тот же пакет: 409); триггер неизменности пакета эти поля не сравнивает.
+ALTER TABLE exchange_packages ADD COLUMN IF NOT EXISTS receipt_outcome TEXT;
+ALTER TABLE exchange_packages ADD COLUMN IF NOT EXISTS receipt_message TEXT;
+ALTER TABLE exchange_packages ADD COLUMN IF NOT EXISTS receipt_at TIMESTAMPTZ;
+-- Состояние сигнала у потребителя: active (действует), removed (снят), merged (ушёл склейкой в merged_into), unmerged
+-- (расклеен на платформе, у потребителя склеен с merged_into). Пакет и момент последней смены состояния.
+ALTER TABLE exchange_sent_signals ADD COLUMN IF NOT EXISTS merged_into BIGINT;
+ALTER TABLE exchange_sent_signals ADD COLUMN IF NOT EXISTS state_package BIGINT REFERENCES exchange_packages(number);
+ALTER TABLE exchange_sent_signals ADD COLUMN IF NOT EXISTS state_at TIMESTAMPTZ;
+-- Запуски обновления: шаг раз в сутки (schedule) и «Собрать обновление сейчас» (manual); пакет, если что-то изменилось,
+-- и итог словами. Шаг идёт раз за сутки по Москве.
+CREATE TABLE IF NOT EXISTS exchange_update_runs (
+  id              BIGSERIAL PRIMARY KEY,
+  trigger         TEXT NOT NULL,
+  package_number  BIGINT REFERENCES exchange_packages(number),
+  author          TEXT,
+  note            TEXT,
+  started_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_exchange_update_runs_started ON exchange_update_runs(started_at);
+-- Пакеты откликов потребителя: номер его счёта, отпечаток содержимого (повтор с тем же: «уже было»), метка источника,
+-- отпечаток ключа подписи, число откликов, ответ платформы, когда принят, когда пришёл последний повтор и сколько их.
+CREATE TABLE IF NOT EXISTS exchange_reaction_packages (
+  number               BIGINT PRIMARY KEY,
+  content_fingerprint  TEXT NOT NULL,
+  source               TEXT NOT NULL,
+  signer               TEXT NOT NULL,
+  reactions            INTEGER NOT NULL,
+  answer               TEXT NOT NULL,
+  received_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  repeats              INTEGER NOT NULL DEFAULT 0
+);
+-- Отклики: своя таблица, не журнал отметок ОС. Номер сигнала, как пришёл (счёт идёт по корню склейки при чтении), вид,
+-- поставлен или снят, день по Москве, метка источника, когда принят.
+CREATE TABLE IF NOT EXISTS exchange_reactions (
+  id              BIGSERIAL PRIMARY KEY,
+  package_number  BIGINT NOT NULL REFERENCES exchange_reaction_packages(number),
+  position        INTEGER NOT NULL,
+  signal_id       BIGINT NOT NULL,
+  reaction        TEXT NOT NULL,
+  placed          BOOLEAN NOT NULL,
+  day             DATE NOT NULL,
+  source          TEXT NOT NULL,
+  accepted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (package_number, position)
+);
+CREATE INDEX IF NOT EXISTS idx_exchange_reactions_signal ON exchange_reactions(signal_id);
+CREATE INDEX IF NOT EXISTS idx_exchange_reactions_accepted ON exchange_reactions(accepted_at);
+-- Отказы точки обмена: пакет откликов или квитанция, которые точка не приняла, с причиной (не длиннее 500 знаков);
+-- повтор того же отказа считается попыткой: непринятое потребитель шлёт каждым проходом. Для вкладки «Журнал обмена».
+CREATE TABLE IF NOT EXISTS exchange_point_refusals (
+  id        BIGSERIAL PRIMARY KEY,
+  kind      TEXT NOT NULL,
+  number    BIGINT NOT NULL,
+  reason    TEXT NOT NULL,
+  attempts  INTEGER NOT NULL DEFAULT 1,
+  first_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (kind, number, reason)
 );
