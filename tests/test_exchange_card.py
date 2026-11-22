@@ -116,6 +116,7 @@ def test_switched_off_hypothesis_section_sends_no_hypothesis_and_the_screen_show
     set_card(sep, hypothesis="Оценить датчики в колонне.", hypothesis_author="admin@example.test",
              card_set_by={"hypothesis": "human"})
     exchange.analyst.mark_signal(sep)
+    ready(sep)
     freeze(monkeypatch, exchange.after_close)
 
     exchange_packages.build_release(SEPT, by="test")
