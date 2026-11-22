@@ -24,6 +24,12 @@ SINCE = (date.today() - timedelta(days=14)).isoformat()
 pytestmark = pytest.mark.usefixtures("window_of_published")
 
 
+def _queued() -> list[int]:
+    """Номера задач в очереди."""
+    with repository.get_connection() as conn:
+        return [int(row[0]) for row in conn.execute("SELECT id FROM background_jobs ORDER BY id").fetchall()]
+
+
 @pytest.fixture()
 def before_flag(monkeypatch):
     """Прод до переключения (#134, история): ИИ на внешнем воркере, полоса пересчётов есть, модель «Отбора» задана;
@@ -99,6 +105,8 @@ def test_dry_run_counts_window_articles_and_price_and_queues_nothing(user, befor
     _gated("Закрытый месяц", "Schlumberger открыла центр цементирования в Тюмени.", True,
            published=datetime(2026, 1, 15, 9, tzinfo=timezone.utc))
     capsys.readouterr()
+    # Отметка «в дайджест» сама ставит материалу недостающие шаги конвейера (#199): это её задачи, не прогона.
+    queued = _queued()
 
     cli.main(["otbor-shadow", "--since", SINCE])
 
@@ -108,7 +116,7 @@ def test_dry_run_counts_window_articles_and_price_and_queues_nothing(user, befor
     assert "статей 2" in out
     assert "$" in out and MODEL in out
     assert "сухой прогон" in out
-    assert run_worker("external-ai-bulk") == []
+    assert _queued() == queued
 
 
 def test_apply_writes_decisions_beside_and_leaves_feed_and_showcases_as_they_were(

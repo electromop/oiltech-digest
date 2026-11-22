@@ -33,7 +33,7 @@ from oiltech_digest import (contract, feedback_changes, feedback_journal, feedba
                             rule_check,
                             network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
                             signal_summary)
-from oiltech_digest import material_signals
+from oiltech_digest import material_readiness, material_signals
 from oiltech_digest import exchange_api, feedback_journal_api
 from oiltech_digest import request_guard
 from oiltech_digest.api_access import external_worker_refusal, optional_user, require_admin, require_user
@@ -2310,6 +2310,8 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         # Конверт ЗАМЕНЯЕТСЯ итогом: счёт автопроверки уже лежит в её прогоне (#190).
         applied = rule_check.apply_result(result, job_id=job_id, job_payload=job.get("payload_json") or {})
         result = {"rule_check": True, "applied": applied}
+    # Готовность материала выпуска (#199): отмеченным «в дайджест» материалам задачи следующий шаг конвейера.
+    material_readiness.after_step(job)
     return result
 
 

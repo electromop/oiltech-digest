@@ -16,7 +16,7 @@ from tests.digest_user_path_support import SEPT, add_signal, feed_signal, msk
 from tests.digest_user_path_support import issue  # noqa: F401: фикстура выпуска
 from tests.exchange_consumer import same_fields_as_sample
 from tests.exchange_support import exchange  # noqa: F401: фикстура обмена
-from tests.exchange_support import freeze, packages, sent_signals
+from tests.exchange_support import freeze, packages, ready, sent_signals
 
 
 def _merge(duplicate: int, root: int) -> None:
@@ -27,13 +27,14 @@ def _merge(duplicate: int, root: int) -> None:
 
 def _september(exchange) -> dict[str, int]:
     """Выпуск сентября: две статьи (у второй сигнал ленты склеен с карточкой радара, которой нет в выпуске) и
-    карточка радара. Отмечают 29.09, пока сентябрь открыт."""
+    карточка радара. Отмечают 29.09, пока сентябрь открыт; материалы готовы (#199)."""
     hi, mid = feed_signal(exchange.a["hi"]), feed_signal(exchange.a["mid"])
     other = add_signal("other", first_seen=msk(2026, 9, 14, 10, 0))
     _merge(mid, other)
     exchange.analyst.mark(exchange.a["hi"])
     exchange.analyst.mark(exchange.a["mid"])
     exchange.analyst.mark_signal(exchange.s["sep"])
+    ready(hi, other, exchange.s["sep"])
     return {"hi": hi, "mid": mid, "other": other, "sep": exchange.s["sep"]}
 
 
@@ -80,6 +81,7 @@ def test_release_waits_until_every_article_of_the_issue_has_a_feed_signal(exchan
     assert packages() == []
 
     low = feed_signal(exchange.a["low"])
+    ready(hi, low)
     built = exchange_packages.build_release(SEPT, by="test")
     assert built.signal_ids == sorted([hi, low])
     assert [card["signal_id"] for card in exchange.take()[0]["cards"]] == sorted([hi, low])
@@ -124,13 +126,13 @@ def test_step_builds_the_release_in_the_first_cycle_after_the_close_from_the_fir
 
     # 04.10 23:59 МСК сентябрь ещё открыт (смена окна 5-го): собирать нечего.
     freeze(monkeypatch, msk(2026, 10, 4, 23, 59))
-    assert exchange_packages.release_step() == []
+    assert exchange_packages.release_step() == exchange_packages.ReleaseStep(built=[], waiting=[])
     # Первый цикл после закрытия: выпуск сентября; август раньше первого месяца шага, его шаг не трогает.
     freeze(monkeypatch, msk(2026, 10, 5, 0, 30))
-    [built] = exchange_packages.release_step()
+    [built] = exchange_packages.release_step().built
     assert (built.kind, built.month, built.signal_ids) == ("release", SEPT, sorted([ids["hi"], ids["other"], ids["sep"]]))
     # Следующий цикл: выпуск у месяца уже есть.
-    assert exchange_packages.release_step() == []
+    assert exchange_packages.release_step() == exchange_packages.ReleaseStep(built=[], waiting=[])
     assert [(row["kind"], row["month"]) for row in packages()] == [("release", SEPT)]
 
 

@@ -244,6 +244,7 @@ def _execute(job: dict[str, Any], *, mark_running: bool) -> None:
             repository.mark_background_job_running(job_id)
             job = repository.get_background_job(job_id) or job
         result = handler(dict(job.get("payload_json") or {}), job_id)
+        _after_pipeline_step(job)
         repository.finish_background_job(job_id, result)
         logger.info(
             "background_job_finished job_id=%s kind=%s queue=%s",
@@ -261,6 +262,14 @@ def _execute(job: dict[str, Any], *, mark_running: bool) -> None:
             job.get("queue_name"),
             retry_delay,
         )
+
+
+def _after_pipeline_step(job: dict[str, Any]) -> None:
+    """Готовность материала выпуска (#199): после шага конвейера в местном контуре отмеченным «в дайджест» материалам
+    задачи следующий шаг, как после записи итога внешней задачи. Лениво: модуль готовности ставит задачи шагов."""
+    from oiltech_digest import material_readiness
+
+    material_readiness.after_step(job)
 
 
 def _retry_delay_seconds(job: dict[str, Any]) -> int | None:

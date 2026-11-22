@@ -6,7 +6,9 @@
 когда поставил её последним. Нет строки: «новая» / «наблюдать».
 
 Все запросы, которые читают или пишут отметку, берут её отсюда: SQL-обрывки для выборок и
-функции записи; мимо них пишет только разовый перенос (db/marks_migration.py). Личные таблицы
+функции записи; мимо них пишет только разовый перенос (db/marks_migration.py). Отметка «в дайджест»
+сама повод для прогона конвейера (#199): после записи материал получает недостающие шаги
+(material_readiness.after_digest_mark), и у статьи ленты, и у сигнала. Личные таблицы
 `user_article_states` и `user_signal_states`, архив только для чтения: их читают перенос и
 статистика «кто сколько пометил» (repository.monthly_user_activity): после переноса она видит
 только прежние месяцы, новые: по журналу (#112).
@@ -19,6 +21,7 @@ from oiltech_digest.feed_window import signal_month_sql
 
 ARTICLE_DEFAULT_STATUS = "new"
 SIGNAL_DEFAULT_STATUS = "watch"
+DIGEST_STATUS = "digest"
 
 
 def _statuses(statuses: tuple[str, ...]) -> str:
@@ -49,8 +52,11 @@ def set_article_mark(article_id: int, *, status: str | None = None, analyst_comm
                      user_id: int | None = None) -> str | None:
     """Поставить отметку статье; status=None: не трогаем (только комментарий). Возвращает
     ПРЕЖНЮЮ отметку (None, её не было): журнал пишет прежнее и новое значение."""
-    return _set_mark("article_marks", "article_id", ARTICLE_DEFAULT_STATUS, article_id,
-                     status=status, analyst_comment=analyst_comment, user_id=user_id)
+    previous = _set_mark("article_marks", "article_id", ARTICLE_DEFAULT_STATUS, article_id,
+                         status=status, analyst_comment=analyst_comment, user_id=user_id)
+    if status == DIGEST_STATUS:
+        _digest_marked(article_id=article_id)
+    return previous
 
 
 # --- Карточки радара ------------------------------------------------------------------------
@@ -107,8 +113,19 @@ def set_signal_mark(signal_id: int, *, status: str | None = None, analyst_commen
     with connection.get_connection() as conn:
         if not conn.execute("SELECT 1 FROM signals WHERE id = %s", (signal_id,)).fetchone():
             raise KeyError(f"Signal not found: {signal_id}")
-    return _set_mark("signal_marks", "signal_id", SIGNAL_DEFAULT_STATUS, signal_id,
-                     status=status, analyst_comment=analyst_comment, user_id=user_id)
+    previous = _set_mark("signal_marks", "signal_id", SIGNAL_DEFAULT_STATUS, signal_id,
+                         status=status, analyst_comment=analyst_comment, user_id=user_id)
+    if status == DIGEST_STATUS:
+        _digest_marked(signal_id=signal_id)
+    return previous
+
+
+def _digest_marked(**material: int) -> None:
+    """Отметка «в дайджест» записана: материалу недостающие шаги конвейера (#199). Лениво: модуль готовности стоит над
+    слоем базы и ставит задачи шагов; сбой постановки он сам пишет в журнал, отметку он не роняет."""
+    from oiltech_digest import material_readiness
+
+    material_readiness.after_digest_mark(**material)
 
 
 def _set_mark(table: str, key: str, default_status: str, row_id: int, *, status: str | None,

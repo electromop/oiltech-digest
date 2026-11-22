@@ -58,6 +58,25 @@ def sent_signals() -> dict[int, dict]:
     return {int(row["signal_id"]): row for row in rows}
 
 
+def ready(*signal_ids: int) -> None:
+    """Материалы готовы к выпуску (#199), как после конвейера: суть и русский заголовок есть, «Карточка» отработала, у
+    принятого «Отбором» бизнеса и технологии посчитаны баллы. Русский заголовок сигнала ленты и у его статьи: мост
+    «лента → сигнал» берёт заголовок оттуда."""
+    ids = [int(one) for one in signal_ids]
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE article_cards c SET title_ru = COALESCE(NULLIF(btrim(c.title_ru), ''), a.title)"
+            " FROM signals s JOIN articles a ON a.id = s.origin_article_id"
+            " WHERE s.id = ANY(%s) AND s.origin = 'feed' AND c.article_id = a.id", (ids,))
+        conn.execute(
+            "UPDATE signals SET summary = COALESCE(NULLIF(btrim(summary), ''), 'Суть.'),"
+            " title_ru = COALESCE(NULLIF(btrim(title_ru), ''), title),"
+            " card_recipe = COALESCE(card_recipe, '{\"prompt_version\": \"test\"}'::jsonb),"
+            " scores_recipe = CASE WHEN otbor_decision = 'accept' THEN COALESCE(scores_recipe, '{}'::jsonb)"
+            " ELSE scores_recipe END, scores_stale_since = NULL WHERE id = ANY(%s)", (ids,))
+        conn.commit()
+
+
 @pytest.fixture()
 def exchange(issue, monkeypatch):
     """Выпуск сентября на тестовой базе и потребитель: ключи, адрес и токен в настройках ядра."""

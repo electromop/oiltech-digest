@@ -3,8 +3,8 @@
 Точка обмена /api/exchange/v1 (версия адресов точки, не формата): список номеров пакетов и пакет по номеру, отдача
 отмечает первую и последнюю выдачу. Пускает только адрес потребителя и только с его токеном: проверка в Caddy
 (Caddyfile), в воротах тела до чтения тела (request_guard) и здесь, зависимостью маршрутов (api_access.
-exchange_point_refusal). Вкладка «Журнал обмена»: только администратору (остальным 403), пакеты и дозагрузка.
-Роутер подключает api.py.
+exchange_point_refusal). Вкладка «Журнал обмена»: только администратору (остальным 403), пакеты, дозагрузка, готовность
+выпуска месяца и «Отправить как есть» (#199). Роутер подключает api.py.
 """
 
 from __future__ import annotations
@@ -61,8 +61,36 @@ def exchange_journal(limit: int = Query(200, ge=1, le=1000),
     return exchange_packages.journal(limit=limit)
 
 
+_MONTH = r"^[0-9]{4}-(0[1-9]|1[0-2])$"
+
+
+@router.get("/api/exchange-journal/readiness")
+def exchange_readiness(month: str | None = Query(None, pattern=_MONTH),
+                       user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Готовность выпуска месяца (#199): сколько готово, неготовые с тем, чего им не хватает, можно ли отправить выпуск
+    как есть. Без месяца: первый закрытый, чей выпуск ждёт, иначе первый открытый."""
+    return exchange_packages.readiness(month)
+
+
+class ReleaseRequest(BaseModel):
+    month: str = Field(pattern=_MONTH)
+
+
+@router.post("/api/exchange-journal/releases")
+def exchange_release_as_is(payload: ReleaseRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """«Отправить как есть» (#199): пакет выпуска закрытого месяца сразу, с тем, что есть; какие материалы были не
+    готовы и чего им не хватало, ложится в журнал обмена. Открытый месяц, уже собранный выпуск, статья без сигнала
+    ленты, ключей нет: отказ 409 с причиной."""
+    try:
+        built = exchange_packages.build_release(payload.month, by=user.get("email"), as_is=True)
+    except exchange_packages.Refused as exc:
+        raise HTTPException(status_code=409, detail=_sentence(str(exc))) from exc
+    return {"package": built.number, "month": built.month, "sent": built.signal_ids,
+            "not_ready": built.details.get("not_ready") or [], "message": _sentence(built.report())}
+
+
 class AdditionRequest(BaseModel):
-    month: str = Field(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$")
+    month: str = Field(pattern=_MONTH)
     numbers: list[Annotated[int, Field(ge=1, le=_MAX_NUMBER)]] = Field(min_length=1, max_length=1000)
 
 

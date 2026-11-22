@@ -1,6 +1,6 @@
 import type { Article, DigestContentItem, DigestMaterial, IssueMaterialPatch } from "../../api/types";
 import { scoreClass } from "../shared/scoreScale";
-import { DigestMaterialEditor, HypothesisLine, MissingLine } from "./DigestMaterialEditor";
+import { DigestMaterialEditor, HypothesisLine, MissingLine, ReadinessLine } from "./DigestMaterialEditor";
 
 export type ItemKind = { kind: string | null; label: string | null };
 // Материал, как он выглядит в самом выпуске: вид и суть, сжатая сервером под площадь карточки выпуска.
@@ -155,6 +155,7 @@ export function DigestQueue(props: Props) {
             <p className="digestPickSummary">{issueItems.get(article.id)?.summary || article.summary || "Суть ещё не сформирована."}</p>
             <HypothesisLine material={materials.get(materialKey("article", article.id))}
               hypothesisEnabled={hypothesisEnabled} />
+            <ReadinessLine material={materials.get(materialKey("article", article.id))} />
             <MissingLine material={materials.get(materialKey("article", article.id))}
               hypothesisEnabled={hypothesisEnabled} />
             <div className="digestPickFooter">
@@ -211,6 +212,7 @@ export function DigestQueue(props: Props) {
             <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
             <HypothesisLine material={materials.get(materialKey("signal", item.signal_id))}
               hypothesisEnabled={hypothesisEnabled} />
+            <ReadinessLine material={materials.get(materialKey("signal", item.signal_id))} />
             <MissingLine material={materials.get(materialKey("signal", item.signal_id))}
               hypothesisEnabled={hypothesisEnabled} />
             <div className="digestPickFooter">

@@ -1004,6 +1004,10 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     # «Главное в выпуске», написанное человеком (#162), тоже из базы.
     monkeypatch.setattr("oiltech_digest.db.issue_edits_store.highlights", lambda month: {})
     monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
+    # Готовность материалов (#199) тоже из базы.
+    monkeypatch.setattr("oiltech_digest.material_readiness.lacking", lambda articles, signals: {})
+    monkeypatch.setattr("oiltech_digest.material_readiness.month_summary",
+                        lambda month: {"materials": 0, "not_ready": 0})
 
     content = digest.build_digest_content("2026-06", min_score=65)
 
