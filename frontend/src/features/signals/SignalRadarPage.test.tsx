@@ -1435,7 +1435,7 @@ describe("«Гипотеза для Компании» на карточке (#1
       { ...baseSignal, id: 804, signal_key: "k804", title_ru: "Закрытый месяц", selected_for_digest: true,
         digest_locked: true, hypothesis: "Изучить опыт закрытого месяца." },
     ]);
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin />);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin hypothesisSection />);
 
     const card = await openCard("Буровая с гипотезой");
     const facts = card.querySelector(".signalRadarFacts") as HTMLElement;
@@ -1468,12 +1468,27 @@ describe("«Гипотеза для Компании» на карточке (#1
         hypothesis: "Оценить применение буровой на месторождениях Компании." },
       { ...baseSignal, id: 812, signal_key: "k812", title_ru: "Выбранная без гипотезы", selected_for_digest: true },
     ]);
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} hypothesisSection />);
 
     const card = await openCard("Буровая с гипотезой");
     expect(within(card).getByText("Оценить применение буровой на месторождениях Компании.")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Править гипотезу" })).not.toBeInTheDocument();
     const empty = await openCard("Выбранная без гипотезы");
     expect(within(empty).queryByRole("button", { name: "Написать гипотезу" })).not.toBeInTheDocument();
+  });
+
+  it("раздел гипотезы выключен (решение владельца 22.11): блока нет и у администратора", async () => {
+    serve([
+      { ...baseSignal, id: 821, signal_key: "k821", title_ru: "Буровая с гипотезой", selected_for_digest: true,
+        hypothesis: "Оценить применение буровой на месторождениях Компании.", card_set_by: { hypothesis: "human" } },
+      { ...baseSignal, id: 822, signal_key: "k822", title_ru: "Выбранная без гипотезы", selected_for_digest: true },
+    ]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin />);
+
+    const card = await openCard("Буровая с гипотезой");
+    expect(within(card).queryByText(/Гипотеза для Компании/)).not.toBeInTheDocument();
+    expect(within(card).queryByText("Оценить применение буровой на месторождениях Компании.")).not.toBeInTheDocument();
+    const empty = await openCard("Выбранная без гипотезы");
+    expect(within(empty).queryByRole("button", { name: /гипотезу/ })).not.toBeInTheDocument();
   });
 });

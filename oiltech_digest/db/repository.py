@@ -1789,7 +1789,7 @@ _COUNTRY_SQL = f"(%s = ANY(s.event_countries) OR EXISTS (SELECT 1 FROM {_PARTICI
 def participant_names() -> list[str]:
     """Все разные имена участников карточек (#97), по всем сигналам: из них фильтр «всё про компанию» берёт те,
     что по правилу «одна компания» та же компания (signal_card_filters.group_names); они же подсказки формы на
-    экране «Дочерние общества». Элемент без имени не в счёт."""
+    экране «Группы компаний». Элемент без имени не в счёт."""
     with get_connection() as conn:
         rows = conn.execute(
             f"SELECT DISTINCT p->>'name' FROM signals s, {_PARTICIPANTS_SQL} WHERE p->>'name' IS NOT NULL"

@@ -7,6 +7,8 @@ type Props = {
   busy: boolean;
   onSave: (patch: IssueMaterialPatch) => void;
   onCancel: () => void;
+  // Раздел «Гипотеза для Компании» включён (сессия, hypothesis_section; выключен решением владельца 22.11).
+  hypothesisSection?: boolean;
 };
 
 // Чего не хватает материалу до выпуска (#162): коды сервера (digest_materials) словами.
@@ -17,18 +19,24 @@ const MISSING_LABELS: Record<DigestMaterial["missing"][number], string> = {
   picture: "нет своей картинки",
 };
 
-export function MissingLine({ material }: { material?: DigestMaterial }) {
-  if (!material?.missing.length) return null;
+// Строка очереди материала: сам материал и включён ли раздел «Гипотеза для Компании» (выключен 22.11).
+type LineProps = { material?: DigestMaterial; hypothesisSection?: boolean };
+
+// Раздел гипотезы выключен: «нет гипотезы» нехваткой не считается (сервер её тогда и не пишет).
+export function MissingLine({ material, hypothesisSection = false }: LineProps) {
+  const missing = (material?.missing ?? []).filter((code) => hypothesisSection || code !== "hypothesis");
+  if (!missing.length) return null;
   return (
     <div className="digestMissing" role="note">
-      Не хватает: {material.missing.map((code) => MISSING_LABELS[code]).join(", ")}
+      Не хватает: {missing.map((code) => MISSING_LABELS[code]).join(", ")}
     </div>
   );
 }
 
 // «Гипотеза для Компании» в строке очереди (#162): текст, кто поставил и когда; видна и в выпуске закрытого месяца.
-export function HypothesisLine({ material }: { material?: DigestMaterial }) {
-  if (!material?.hypothesis) return null;
+// Раздел выключен (решение владельца 22.11): строки нет.
+export function HypothesisLine({ material, hypothesisSection = false }: LineProps) {
+  if (!hypothesisSection || !material?.hypothesis) return null;
   const authorship = hypothesisAuthorship(material.hypothesis_set_by, material.hypothesis_author, material.hypothesis_set_at);
   return (
     <p className="digestPickHypothesis">
@@ -39,7 +47,8 @@ export function HypothesisLine({ material }: { material?: DigestMaterial }) {
 
 // Правка материала выпуска на экране «Дайджест» (#162, ADR 0006): заголовок, суть, подпись, «Гипотеза для Компании»
 // и картинка. Правка ложится на сигнал материала: витрина и выпуск показывают один текст. Уходит только изменённое.
-export function DigestMaterialEditor({ material, busy, onSave, onCancel }: Props) {
+// Раздел гипотезы выключен: поля нет, и гипотеза в правку не уходит (сервер такой правке отказывает).
+export function DigestMaterialEditor({ material, busy, onSave, onCancel, hypothesisSection = false }: Props) {
   const [title, setTitle] = useState(material.title);
   const [summary, setSummary] = useState(material.summary);
   const [label, setLabel] = useState(material.label === material.label_default ? "" : material.label);
@@ -52,7 +61,7 @@ export function DigestMaterialEditor({ material, busy, onSave, onCancel }: Props
     if (title.trim() && title.trim() !== material.title) patch.title = title.trim();
     if (summary.trim() && summary.trim() !== material.summary) patch.summary = summary.trim();
     if (label.trim() !== ownLabel) patch.label = label.trim();
-    if (hypothesis.trim() !== (material.hypothesis ?? "")) patch.hypothesis = hypothesis.trim();
+    if (hypothesisSection && hypothesis.trim() !== (material.hypothesis ?? "")) patch.hypothesis = hypothesis.trim();
     if (picture !== material.picture) patch.picture = picture;
     return patch;
   }
@@ -78,16 +87,18 @@ export function DigestMaterialEditor({ material, busy, onSave, onCancel }: Props
           onChange={(event) => setLabel(event.target.value)}
         />
       </label>
-      <label className="field">
-        <span>Гипотеза для Компании{authorship ? ` · ${authorship}` : ""}</span>
-        <textarea
-          rows={2}
-          value={hypothesis}
-          maxLength={1000}
-          placeholder="Одно предложение: «Оценить…», «Рассмотреть…» или «Изучить…»"
-          onChange={(event) => setHypothesis(event.target.value)}
-        />
-      </label>
+      {hypothesisSection ? (
+        <label className="field">
+          <span>Гипотеза для Компании{authorship ? ` · ${authorship}` : ""}</span>
+          <textarea
+            rows={2}
+            value={hypothesis}
+            maxLength={1000}
+            placeholder="Одно предложение: «Оценить…», «Рассмотреть…» или «Изучить…»"
+            onChange={(event) => setHypothesis(event.target.value)}
+          />
+        </label>
+      ) : null}
       <fieldset className="digestPictureChoice">
         <legend>Картинка в карточке</legend>
         <label>

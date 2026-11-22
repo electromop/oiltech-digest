@@ -294,10 +294,12 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
     criteria = criteria_of(fields)
     relevance = relevance_of(fields.get("oilfield_relevance"))
     # Чего не хватает материалу до выпуска (экран «Дайджест», #162): гипотезы, баллов по критериям, связи, своей
-    # картинки (заглушку, выбранную человеком, нехваткой не считаем: это решение).
+    # картинки (заглушку, выбранную человеком, нехваткой не считаем: это решение). Раздел гипотезы выключен
+    # (config.ISSUE_HYPOTHESIS_ENABLED, решение владельца 22.11): у материала нет гипотезы, и её нехваткой не считаем.
     picture = PICTURE_PLACEHOLDER if fields.get("issue_picture") == PICTURE_PLACEHOLDER else PICTURE_OWN
+    hypothesis_on = config.ISSUE_HYPOTHESIS_ENABLED
     missing = [code for code, lacking in (
-        ("hypothesis", not fields.get("hypothesis")),
+        ("hypothesis", hypothesis_on and not fields.get("hypothesis")),
         ("criteria", not criteria),
         ("relevance", relevance == UNDEFINED),
         ("picture", not item["image_url"] and picture == PICTURE_OWN),
@@ -315,11 +317,12 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
         "label_default": label_default,
         "title": item["title"],
         "summary": item["summary"],
-        # «Гипотеза для Компании» (#162): кто поставил (human или agent), почта человека и когда.
-        "hypothesis": fields.get("hypothesis"),
-        "hypothesis_set_by": fields.get("hypothesis_set_by"),
-        "hypothesis_author": fields.get("hypothesis_author"),
-        "hypothesis_set_at": fields.get("hypothesis_set_at"),
+        # «Гипотеза для Компании» (#162): кто поставил (human или agent), почта человека и когда. Раздел выключен:
+        # пусто, и печать PDF строку гипотезы не рисует (digest_pdf._hypothesis_html).
+        "hypothesis": fields.get("hypothesis") if hypothesis_on else None,
+        "hypothesis_set_by": fields.get("hypothesis_set_by") if hypothesis_on else None,
+        "hypothesis_author": fields.get("hypothesis_author") if hypothesis_on else None,
+        "hypothesis_set_at": fields.get("hypothesis_set_at") if hypothesis_on else None,
         "criteria": criteria,
         "relevance": relevance,
         "url": item["url"],

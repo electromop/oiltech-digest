@@ -387,8 +387,10 @@ class UserUpdate(BaseModel):
 
 def _session_payload(user: dict[str, Any]) -> dict[str, Any]:
     """Ответ входа и проверки сессии. feedback_tab: открыта ли учётке вкладка «Обратная связь» (настройка контура ОС);
-    по нему интерфейс прячет пункт меню у участника, которому вкладка закрыта."""
-    return {"ok": True, "user": {**_clean(user), "feedback_tab": feedback_journal_api.tab_open_to(user)}}
+    по нему интерфейс прячет пункт меню у участника, которому вкладка закрыта. hypothesis_section: включён ли раздел
+    «Гипотеза для Компании» (config.ISSUE_HYPOTHESIS_ENABLED); выключенный интерфейс не показывает нигде."""
+    return {"ok": True, "user": {**_clean(user), "feedback_tab": feedback_journal_api.tab_open_to(user),
+                                 "hypothesis_section": bool(config.ISSUE_HYPOTHESIS_ENABLED)}}
 
 
 @app.get("/", response_model=None)
@@ -1107,7 +1109,7 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
     return {"ok": True}
 
 
-# --- Дочерние общества (решение владельца 20.10) ------------------------------------------------
+# --- Группы компаний, «дочка → мать» (решение владельца 20.10; до 22.11 экран «Дочерние общества») 
 # Список «дочка → мать» для фильтра «всё про компанию»: ведут на экране, правка действует без выката.
 # Проверки и разбор вставки: company_parents.py, база: db/company_parents_repo.py.
 # Одна ли это компания: правило фильтра (signal_card_filters.company_rule), берётся раз на запрос.
@@ -1351,7 +1353,7 @@ def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[st
 
 def _company_filter(
     # «Всё про компанию» (#97): участник карточки: та же компания по правилу «одна компания» (word_forms) или её
-    # дочернее общество по списку «дочка → мать» (экран «Дочерние общества», решение владельца 20.10).
+    # дочернее общество по списку «дочка → мать» (экран «Группы компаний», решение владельца 20.10).
     company: str | None = Query(None, max_length=200),
     # Имена участников и список дочек фильтр читает из базы: только после входа.
     user: dict[str, Any] = Depends(require_user),
@@ -1359,7 +1361,7 @@ def _company_filter(
     """Фильтр «всё про компанию», здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
     signal_card_filters.company_group) и под какими именами участников в базе (names: выборка сверяет их точно).
     Нет компании: нет фильтра; есть: фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
-    сигналов, а не все. Список дочек читается на каждом запросе: правка на экране «Дочерние общества» действует
+    сигналов, а не все. Список дочек читается на каждом запросе: правка на экране «Группы компаний» действует
     сразу, без выката. Список сигналов и сводка берут фильтр зависимостью: в одном запросе он считается один раз."""
     if not (company or "").strip():
         return None
@@ -1697,7 +1699,11 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
     только записывается. Заголовок и суть ложатся в журнал ОС с автором, применённой записью, как правка
     администратора в отметке ОС: это правка текста выпуска. Выпуск закрытого месяца только на
     просмотр (решение владельца 30.09): правка его материала получает отказ, поэтому закрытый выпуск хранит поля,
-    какими они были до закрытия. Месяц тот же, что у выпуска (repository.signal_issue_month_sql)."""
+    какими они были до закрытия. Месяц тот же, что у выпуска (repository.signal_issue_month_sql). Раздел «Гипотеза
+    для Компании» выключен (config.ISSUE_HYPOTHESIS_ENABLED, решение владельца 22.11): правка гипотезы получает
+    отказ."""
+    if patch.hypothesis is not None and not config.ISSUE_HYPOTHESIS_ENABLED:
+        raise HTTPException(status_code=409, detail="Раздел «Гипотеза для Компании» выключен")
     if patch.picture is not None and patch.picture not in issue_edits_store.PICTURES:
         raise HTTPException(status_code=422, detail="Картинка материала: своя (own) или заглушка темы (placeholder)")
     _guard_material_month(signal_id)

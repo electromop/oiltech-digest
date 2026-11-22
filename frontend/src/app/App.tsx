@@ -102,8 +102,10 @@ const screens: ScreenDef[] = [
   },
   {
     id: "company-parents",
-    // Решение владельца 20.10: фильтр «всё про компанию» показывает и дочерние общества по этому списку.
-    label: "Дочерние общества",
+    // Решение владельца 20.10: фильтр «всё про компанию» показывает и дочерние компании по этому списку «дочка →
+    // мать». Компании из новостей, не общества Компании: 22.11 экран переименован из «Дочерних обществ» и перенесён
+    // в «Справочники» (решение владельца: на отбор, баллы и выпуск список не влияет).
+    label: "Группы компаний",
   },
   {
     id: "company-description",
@@ -127,7 +129,12 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Настройки",
-    screens: ["sources", "scoring", "tags", "company-parents", "company-description"],
+    screens: ["sources", "scoring", "tags", "company-description"],
+  },
+  {
+    // Справочники (решение владельца 22.11): списки, которые работу агентов не меняют.
+    label: "Справочники",
+    screens: ["company-parents"],
   },
   {
     label: "Администрирование",
@@ -178,9 +185,12 @@ export function App() {
   const [toast, setToast] = useState<{ text: string; tone: "default" | "error" } | null>(null);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
   const isAdmin = (user?.role ?? "user") === "admin";
+  // Раздел «Гипотеза для Компании» (сессия, hypothesis_section): выключен решением владельца 22.11, тогда нет ни экрана
+  // «Описание Компании» (текст нужен только агенту гипотезы), ни гипотезы на карточке и в «Дайджесте».
+  const hypothesisSection = user?.hypothesis_section === true;
   // Пункт меню виден, если роль пускает; «Обратную связь» участнику может закрыть настройка контура ОС (16.11).
-  const screenInMenu = (screenId: ScreenId) => isAdmin
-    || (!ADMIN_SCREENS.has(screenId) && (screenId !== "feedback-journal" || user?.feedback_tab !== false));
+  const screenInMenu = (screenId: ScreenId) => (screenId !== "company-description" || hypothesisSection) && (isAdmin
+    || (!ADMIN_SCREENS.has(screenId) && (screenId !== "feedback-journal" || user?.feedback_tab !== false)));
 
   useEffect(() => {
     void loadSession();
@@ -250,12 +260,16 @@ export function App() {
         showToast={showToast}
         isAdmin={isAdmin}
         showcase={activeScreen === "business-feed" ? "business" : "technology"}
+        hypothesisSection={hypothesisSection}
       />
     );
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
+    currentScreen = (
+      <DigestPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin}
+        hypothesisSection={hypothesisSection} />
+    );
   }
 
   if (activeScreen === "feedback-journal") {
@@ -278,7 +292,7 @@ export function App() {
     currentScreen = <CompanyParentsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  if (activeScreen === "company-description") {
+  if (activeScreen === "company-description" && hypothesisSection) {
     currentScreen = <CompanyDescriptionPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
