@@ -86,9 +86,10 @@ def test_negative_reactions_come_into_the_slice_without_authors_and_a_proposal_c
     assert _collect(admin)["signals"] == 0
 
 
-def test_reaction_of_another_card_below_the_threshold_or_for_a_removal_is_not_written(exchange, contour, monkeypatch):
-    """Номер отклика чужой карточки, откликов меньше порога и уборка по одному отклику «Не про нефтесервис»: уборку,
-    категорию и «Дубль» обосновывают только отметки людей платформы."""
+def test_reactions_ground_a_removal_but_not_a_category_another_card_or_below_the_threshold(
+        exchange, contour, monkeypatch):
+    """Отклик «Не про нефтесервис» обосновывает предложение убрать карточку (убирает администратор, согласовав его),
+    категорию отклик не обосновывает; номер отклика чужой карточки и откликов меньше порога: не пишется."""
     admin = exchange.admin
     one, other, third = business(exchange.a["hi"]), business(exchange.a["mid"]), business(exchange.a["low"])
     exchange_packages.build_addition([one, other, third], SEPT, by="test")
@@ -104,10 +105,18 @@ def test_reaction_of_another_card_below_the_threshold_or_for_a_removal_is_not_wr
         other: {"improvements": [{**improvement("summary", "Другая суть.", [], "Мало фактов"),
                                   "reactions": [ids[0], ids[1]]}]},
         third: {"improvements": [{**improvement("removed", "да", [], "Не про нефтесервис"),
+                                  "reactions": [ids[2], ids[3]]},
+                                 {**improvement("signal_category", "технология", [], "Не про нефтесервис"),
                                   "reactions": [ids[2], ids[3]]}]},
     })
 
-    assert journal(admin, kind="signal_proposal") == []
+    [proposal] = journal(admin, kind="signal_proposal")
+    assert proposal["signal_id"] == third and proposal["event_ids"] == []
+    assert [(change["field"], change["reaction_ids"]) for change in proposal["changes"]] == [
+        ("removed", [ids[2], ids[3]])]
+    # Сам разбор ничего не меняет: карточка на витрине, пока администратор не согласует.
+    assert third in {row["id"] for row in admin.get("/api/signals", params={"limit": 200,
+                                                                              "showcase": "business"}).json()}
 
 
 def test_old_nl_build_does_not_get_a_review_with_reactions(exchange, contour, monkeypatch):

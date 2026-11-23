@@ -30,7 +30,7 @@ from oiltech_digest.signal_card_pack import load_dictionaries, publication_text
 KIND = "feedback_review"
 # Стадия расхода в учёте расхода ИИ: расход разбора ОС отдельной стадией.
 STAGE = KIND
-PROMPT_VERSION = "2026-11-22.1"
+PROMPT_VERSION = "2026-11-23.1"
 REVIEW_AUTHOR = "Разбор ОС"
 _OUTPUT_TOKENS = 1500
 _TEXT_CHARS = 4000
@@ -269,7 +269,8 @@ def checked_changes(answer: Any, card: dict[str, Any], marks: list[dict[str, Any
                          reactions=[by_reaction[number] for number in cited_reactions]):
             problem = f"{field}: цитаты нет в тексте отметок"
         if problem is None:
-            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited])
+            value, problem = parse_value(field, raw, card, context, cited=[by_id[number] for number in cited],
+                                         reactions=[by_reaction[number] for number in cited_reactions])
         if problem:
             problems.append(problem)
             continue
@@ -280,10 +281,12 @@ def checked_changes(answer: Any, card: dict[str, Any], marks: list[dict[str, Any
 
 
 def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, Any], *,
-                cited: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
+                cited: list[dict[str, Any]] | None = None,
+                reactions: list[dict[str, Any]] | None = None) -> tuple[Any, str | None]:
     """Значение поля из строки ответа модели или правки администратора. (значение, None) или (None, почему нет).
-    cited: отметки, на которых стоит изменение (у правки администратора их нет). Категорию, «Дубль» и уборку
-    обосновывают только отметки людей платформы, отклики потребителя нет."""
+    cited и reactions: отметки и отклики потребителя, на которых стоит изменение (у правки администратора их нет).
+    Категорию и «Дубль» обосновывают только отметки людей платформы; уборку и отклик «Не про нефтесервис»: убирает
+    карточку всё равно администратор, согласовав предложение."""
     spec = feedback_changes.FIELDS[field]
     text = " ".join(raw.split())
     label = spec.label
@@ -333,8 +336,9 @@ def parse_value(field: str, raw: str, card: dict[str, Any], context: dict[str, A
         if cited is not None and not any(mark.get("duplicate_of_signal_id") == int(digits) for mark in cited):
             return None, f"{label}: нет отметки «Дубль» с №{digits}"
         return int(digits), None
-    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited):
-        return None, f"{label}: нет отметки «Не релевантно»"
+    if cited is not None and not any(mark.get("verdict") == "wrong_domain" for mark in cited) and not any(
+            row.get("reaction") == feedback_review_reactions.REMOVAL for row in reactions or []):
+        return None, f"{label}: нет отметки «Не релевантно» или отклика «Не про нефтесервис»"
     return True, None
 
 
