@@ -6,97 +6,35 @@ import {
   getExchangeReadiness,
   sendReleaseAsIs,
   type AdditionResult,
-  type ExchangeCard,
   type ExchangeJournal,
-  type ExchangePackage,
   type ExchangeReadiness,
 } from "../../api/exchangeJournal";
 import { READINESS_LABELS } from "../digest/DigestMaterialEditor";
-import { formatMoment } from "../feedbackJournal/JournalEntryCard";
 import { Dialog } from "../shared/Dialog";
 import { monthLabel } from "../shared/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
+import { cardHref, KIND_LABELS, PackageEntry, packageState, STATE_LABELS } from "./ExchangePackageEntry";
+import { ExchangeReactionsPanel } from "./ExchangeReactionsPanel";
+import { ExchangeUpdatePanel } from "./ExchangeUpdatePanel";
+import { reportFailure, type Outcome } from "./outcome";
 
-// Вкладка «Журнал обмена» (#198, спека #197): пакеты для потребителя выпуска, их состав и состояние (собран, забран),
-// дозагрузка по номерам, готовность выпуска месяца и «Отправить как есть» (#199). Только администратору: пункта меню у
-// участника нет, по прямой ссылке сервер отвечает 403.
+// Вкладка «Журнал обмена» (#198, спека #197): пакеты для потребителя выпуска, их состав и состояние (собран, забран,
+// принят, уже был, отклонён с ответом потребителя), дозагрузка по номерам, готовность выпуска месяца и «Отправить как
+// есть» (#199), обновление и пакеты откликов с отказами точки (#200). Только администратору: пункта меню у участника
+// нет, по прямой ссылке сервер отвечает 403.
 
 type Props = {
   onUnauthorized: () => void;
   showToast: (text: string, tone?: "default" | "error") => void;
 };
 
-const KIND_LABELS: Record<string, string> = { release: "Выпуск", addition: "Дозагрузка" };
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-// Карточка в витрине: бизнес на бизнес-ленте, остальное на технологическом радаре; витрина ищет её по номеру.
-export function cardHref(card: ExchangeCard): string {
-  const screen = card.category === "business" ? "business-feed" : "signal-radar";
-  return `?screen=${screen}&q=${encodeURIComponent(`#${card.signal_id}`)}`;
-}
 
 // Номера через запятую, точку с запятой или пробел; не число: null.
 function parseNumbers(text: string): number[] | null {
   const parts = text.split(/[\s,;]+/).filter(Boolean);
   if (!parts.every((part) => /^\d{1,18}$/.test(part))) return null;
   return parts.map(Number).filter((one) => one > 0);
-}
-
-function packageTitle(item: ExchangePackage): string {
-  const kind = KIND_LABELS[item.kind] ?? item.kind;
-  return item.month ? `${kind} №${item.number} · ${monthLabel(item.month)}` : `${kind} №${item.number}`;
-}
-
-function PackageEntry({ item }: { item: ExchangePackage }) {
-  const taken = Boolean(item.first_taken_at);
-  const notes = item.notes ?? [];
-  return (
-    <article className="journalEntry" aria-label={packageTitle(item)}>
-      <header className="journalEntryHead">
-        <span className="journalKind">{packageTitle(item)}</span>
-        <span className={`miniPill ${taken ? "ok" : "warn"}`}>{taken ? "забран" : "собран"}</span>
-        <span className="metaText">Собран {formatMoment(item.built_at)}{item.built_by ? ` · ${item.built_by}` : ""}</span>
-        <span className="metaText">
-          {taken
-            ? `Забран ${formatMoment(item.first_taken_at)}, последний раз ${formatMoment(item.last_taken_at)}`
-            : "Потребитель ещё не забирал"}
-        </span>
-      </header>
-      <div className="journalEntryBody">
-        <section aria-label={`Состав пакета №${item.number}`}>
-          <p className="journalLabel">Карточек: {item.cards.length}</p>
-          {item.cards.length ? (
-            <ul className="journalLines">
-              {item.cards.map((card) => (
-                <li key={card.signal_id}>
-                  <a href={cardHref(card)}>№{card.signal_id}{card.title ? ` ${card.title}` : ""}</a>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="metaText">Пустой выпуск: в месяце не было отметок «в дайджест».</p>
-          )}
-        </section>
-        {notes.length ? (
-          <section aria-label={`Сборка пакета №${item.number}`}>
-            <p className="journalLabel">Сборка</p>
-            <ul className="journalLines">{notes.map((note) => <li key={note}>{note}</li>)}</ul>
-          </section>
-        ) : null}
-      </div>
-    </article>
-  );
-}
-
-type Outcome = { refused: boolean; text: string };
-
-// Сбой действия вкладки: вход истёк (401), отказ сервера с причиной (409, 422) строкой у формы, прочее тостом.
-function reportFailure(error: unknown, fallback: string, onUnauthorized: () => void,
-  showToast: (text: string, tone?: "default" | "error") => void, setResult: (outcome: Outcome) => void) {
-  if (error instanceof ApiError && error.status === 401) onUnauthorized();
-  else if (error instanceof ApiError && (error.status === 409 || error.status === 422)) {
-    setResult({ refused: true, text: error.message });
-  } else showToast(error instanceof Error ? error.message : fallback, "error");
 }
 
 type ReadinessProps = {
@@ -240,6 +178,9 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
   const [numbers, setNumbers] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ refused: boolean; text: string; answer?: AdditionResult } | null>(null);
+  // Фильтры пакетов по виду и состоянию: на загруженном журнале, без запроса.
+  const [kindFilter, setKindFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
 
   // Перечитать журнал при открытии и после дозагрузки; от обработчиков App не зависит, иначе каждая перерисовка App
   // (тост) перечитывала бы журнал.
@@ -291,6 +232,8 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
   }
 
   const settings = journal?.settings;
+  const packages = (journal?.packages ?? []).filter((item) =>
+    (!kindFilter || item.kind === kindFilter) && (!stateFilter || packageState(item) === stateFilter));
   return (
     <section className="screenStack">
       <header className="screenHeader">
@@ -313,8 +256,17 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
               {settings.consumer_keys.join(", ") || "нет"}; адресов потребителя: {settings.addresses}; токен:{" "}
               {settings.token ? "задан" : "не задан"}.
             </p>
+            <p className="metaText">
+              Ключ откликов платформы: {(settings.decryption_keys ?? []).join(", ") || "нет"}; ключ подписи
+              потребителя: {(settings.consumer_signing_keys ?? []).join(", ") || "нет"}.
+            </p>
             {settings.problems.length ? (
               <div className="documentAlert warn" role="alert">Пакеты не соберутся: {settings.problems.join("; ")}.</div>
+            ) : null}
+            {settings.reaction_problems?.length ? (
+              <div className="documentAlert warn" role="alert">
+                Отклики не примутся: {settings.reaction_problems.join("; ")}.
+              </div>
             ) : null}
             {settings.point_problems.length ? (
               <div className="documentAlert warn" role="alert">
@@ -327,6 +279,9 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
 
       <ReadinessPanel initial={journal?.readiness ?? null} onUnauthorized={onUnauthorized} showToast={showToast}
         onSent={reload} />
+
+      <ExchangeUpdatePanel runs={journal?.updates ?? []} states={journal?.sent_states ?? []}
+        onUnauthorized={onUnauthorized} showToast={showToast} onBuilt={reload} />
 
       <section className="panel" aria-label="Дозагрузка">
         <div className="panelHeader"><h2>Дозагрузка</h2></div>
@@ -361,14 +316,37 @@ export function ExchangeJournalPage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel" aria-label="Пакеты">
         <div className="panelHeader"><h2>Пакеты</h2></div>
+        <div className="jobsFilters">
+          <label className="field">
+            <span>Вид</span>
+            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
+              <option value="">Все</option>
+              {Object.entries(KIND_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Состояние</span>
+            <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+              <option value="">Все</option>
+              {Object.entries(STATE_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+          </label>
+        </div>
         {journal === null ? <SkeletonList rows={3} label="Загружаем журнал обмена" /> : null}
         {journal !== null && journal.packages.length === 0 ? (
           <div className="emptyState">Пакетов для потребителя ещё нет.</div>
         ) : null}
+        {journal !== null && journal.packages.length > 0 && packages.length === 0 ? (
+          <div className="emptyState">Пакетов такого вида и состояния нет.</div>
+        ) : null}
         <div className="journalList">
-          {journal?.packages.map((item) => <PackageEntry key={item.number} item={item} />)}
+          {packages.map((item) => <PackageEntry key={item.number} item={item} />)}
         </div>
       </section>
+
+      {journal !== null ? (
+        <ExchangeReactionsPanel packages={journal.reaction_packages ?? []} refusals={journal.refusals ?? []} />
+      ) : null}
     </section>
   );
 }

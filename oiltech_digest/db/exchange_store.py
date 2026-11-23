@@ -7,7 +7,11 @@ exchange_packages: каждый пакет со своим номером из �
 
 exchange_sent_signals: журнал отправленного, строка на сигнал: первый пакет и месяц выпуска, отпечаток последней
 отправленной карточки, когда платформа увидела этот отпечаток (дата обновления карточки в пакете), последний пакет,
-состояние у потребителя (здесь только «действует»; снятия и склейки добавит тикет обновлений #200).
+состояние у потребителя: действует, снят, ушёл склейкой в номер, расклеен на платформе (у потребителя склеен), и пакет
+и момент последней смены состояния (#200).
+
+Квитанции потребителя лежат в полях пакета (receipt_*), отказы точки обмена (пакет откликов, квитанция) в
+exchange_point_refusals: строка на номер и причину, повтор считается попыткой.
 
 Соединение модуль получает от вызывающего (exchange_packages, exchange_api): сборка и выкладка идут одной транзакцией.
 """
@@ -26,8 +30,16 @@ from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, feed_signal_order_s
 
 # Ключ pg_advisory_xact_lock сборки пакетов: номер, сборка и выкладка идут под ним одной транзакцией.
 _LOCK = 19_811_198
-RELEASE, ADDITION = "release", "addition"
-ACTIVE = "active"
+RELEASE, ADDITION, UPDATE = "release", "addition", "update"
+# Состояние сигнала у потребителя (журнал отправленного): действует, снят, ушёл склейкой, расклеен на платформе.
+ACTIVE, REMOVED, MERGED, UNMERGED = "active", "removed", "merged", "unmerged"
+# Итоги квитанции потребителя словами: принят, уже был, отклонён.
+RECEIPT_OUTCOMES = {"accepted": "принят", "already": "уже был", "rejected": "отклонён"}
+# Запуск обновления: шаг планировщика раз в сутки или вручную (кнопка вкладки, команда).
+SCHEDULE, MANUAL = "schedule", "manual"
+# Отказ точки обмена: что не принято (пакет откликов или квитанция), причина не длиннее стольких знаков.
+REFUSED_REACTIONS, REFUSED_RECEIPT = "reactions", "receipt"
+_REASON_CHARS = 500
 # Сколько шагов склейки пройти до корня, как у repository.resolve_signal_merge_root: склейки сводятся к корню звездой
 # (feed_signals._FLATTEN_MERGED), предел лишь от петли.
 _CHAIN_STEPS = 10
@@ -191,12 +203,14 @@ def take(conn, number: int) -> bytes | None:
 
 
 def packages(conn, *, limit: int) -> list[dict[str, Any]]:
-    """Пакеты для журнала обмена, новые сверху: вид, номер, месяц, когда собран и забран, состав с заголовками карточек
-    (с правками людей, как на витрине) и их категорией (по ней экран ведёт на витрину)."""
+    """Пакеты для журнала обмена, новые сверху: вид, номер, месяц, когда собран и забран (и не лежит ли он незабранным
+    дольше суток), квитанция потребителя, состав с заголовками карточек (с правками людей, как на витрине) и их
+    категорией (по ней экран ведёт на витрину)."""
     rows = conn.cursor(row_factory=dict_row).execute(
         """
         SELECT number, kind, month, content_fingerprint, signal_ids, details, built_by, built_at, first_taken_at,
-               last_taken_at
+               last_taken_at, receipt_outcome, receipt_message, receipt_at,
+               (first_taken_at IS NULL AND built_at < now() - interval '1 day') AS overdue
         FROM exchange_packages ORDER BY number DESC LIMIT %s
         """,
         (int(limit),),
@@ -205,4 +219,134 @@ def packages(conn, *, limit: int) -> list[dict[str, Any]]:
     for row in rows:
         row["cards"] = [{"signal_id": int(one), **titles.get(int(one), {"title": None, "category": None})}
                         for one in row.pop("signal_ids")]
+        outcome, message, at = row.pop("receipt_outcome"), row.pop("receipt_message"), row.pop("receipt_at")
+        row["receipt"] = {"outcome": outcome, "message": message, "at": at} if outcome else None
+    return rows
+
+
+def record_receipt(conn, number: int, outcome: str, message: str) -> str:
+    """Квитанция потребителя на пакет: recorded (первая), same (повтор с тем же содержимым: ничего не меняется), other
+    (на пакет уже другая), missing (пакета нет). Пишется один раз."""
+    if conn.execute(
+        "UPDATE exchange_packages SET receipt_outcome = %s, receipt_message = %s, receipt_at = now()"
+        " WHERE number = %s AND receipt_outcome IS NULL RETURNING number",
+        (outcome, message, int(number)),
+    ).fetchone() is not None:
+        return "recorded"
+    row = conn.execute("SELECT receipt_outcome, receipt_message FROM exchange_packages WHERE number = %s",
+                       (int(number),)).fetchone()
+    if row is None:
+        return "missing"
+    return "same" if (row[0], row[1]) == (outcome, message) else "other"
+
+
+def receipt_outcome(conn, number: int) -> str | None:
+    row = conn.execute("SELECT receipt_outcome FROM exchange_packages WHERE number = %s", (int(number),)).fetchone()
+    return row[0] if row else None
+
+
+def record_refusal(conn, kind: str, number: int, reason: str) -> None:
+    """Отказ точки обмена для журнала: тот же отказ того же номера считается ещё одной попыткой."""
+    conn.execute(
+        """
+        INSERT INTO exchange_point_refusals (kind, number, reason) VALUES (%s, %s, %s)
+        ON CONFLICT (kind, number, reason) DO UPDATE SET attempts = exchange_point_refusals.attempts + 1,
+          last_at = now()
+        """,
+        (kind, int(number), reason[:_REASON_CHARS]),
+    )
+
+
+def refusals(conn, *, limit: int) -> list[dict[str, Any]]:
+    """Отказы точки обмена, последние сверху: что не принято, номер, причина, попыток, первая и последняя."""
+    return conn.cursor(row_factory=dict_row).execute(
+        "SELECT kind, number, reason, attempts, first_at, last_at FROM exchange_point_refusals"
+        " ORDER BY last_at DESC, id DESC LIMIT %s",
+        (int(limit),),
+    ).fetchall()
+
+
+# --- Обновление (#200) -------------------------------------------------------------------------------------------------
+
+
+def journal_rows(conn) -> dict[int, dict[str, Any]]:
+    """Весь журнал отправленного: что у потребителя сейчас (действует, снят, ушёл склейкой, расклеен), отпечаток
+    последней отправленной карточки и пакет последней смены состояния с отметкой, пришла ли на него квитанция."""
+    rows = conn.cursor(row_factory=dict_row).execute(
+        "SELECT ss.*, p.receipt_at AS state_package_receipt_at FROM exchange_sent_signals ss"
+        " LEFT JOIN exchange_packages p ON p.number = ss.state_package").fetchall()
+    return {int(row["signal_id"]): row for row in rows}
+
+
+def set_cards(conn, cards: Sequence[tuple[int, str]], *, package: int, moment: datetime, returned: Sequence[int]) -> None:
+    """Карточки обновления в журнале: новый отпечаток и момент, когда его увидели, последний пакет; вернувшиеся
+    снова действуют (пакет и момент возврата)."""
+    back = {int(one) for one in returned}
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE exchange_sent_signals SET card_fingerprint = %s, fingerprint_seen_at = %s, last_package = %s,
+              state = %s, state_package = CASE WHEN %s THEN %s ELSE state_package END,
+              state_at = CASE WHEN %s THEN %s ELSE state_at END, updated_at = now()
+            WHERE signal_id = %s
+            """,
+            [(fingerprint, moment, package, ACTIVE, signal_id in back, package, signal_id in back, moment, signal_id)
+             for signal_id, fingerprint in cards],
+        )
+
+
+def add_roots(conn, roots: Sequence[tuple[int, str, str]], *, package: int, moment: datetime) -> None:
+    """Оставшиеся сигналы склейки, пришедшие потребителю карточкой обновления: месяц выпуска склеенной карточки."""
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO exchange_sent_signals (signal_id, first_package, last_package, month, card_fingerprint,"
+            " fingerprint_seen_at, state) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            [(int(root), package, package, month, fingerprint, moment, ACTIVE) for root, month, fingerprint in roots],
+        )
+
+
+def set_states(conn, states: Sequence[tuple[int, str, int | None]], *, package: int | None,
+               moment: datetime) -> None:
+    """Смена состояния у потребителя: снят, ушёл склейкой (в merged_into), расклеен на платформе. С пакетом: он же
+    последний пакет сигнала; без пакета (расклейка, её формат не передаёт) меняется только состояние."""
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE exchange_sent_signals SET state = %s, merged_into = COALESCE(%s, merged_into),
+              state_package = COALESCE(%s, state_package), last_package = COALESCE(%s, last_package),
+              state_at = %s, updated_at = now()
+            WHERE signal_id = %s
+            """,
+            [(state, merged_into, package, package, moment, int(signal_id)) for signal_id, state, merged_into in states],
+        )
+
+
+def scheduled_update_since(conn, moment: datetime) -> bool:
+    """Был ли запуск шага обновления с этого момента: шаг идёт раз в сутки."""
+    return conn.execute("SELECT 1 FROM exchange_update_runs WHERE trigger = %s AND started_at >= %s LIMIT 1",
+                        (SCHEDULE, moment)).fetchone() is not None
+
+
+def record_update_run(conn, *, trigger: str, package: int | None, author: str | None, note: str) -> None:
+    conn.execute("INSERT INTO exchange_update_runs (trigger, package_number, author, note) VALUES (%s, %s, %s, %s)",
+                 (trigger, package, author, note))
+
+
+def update_runs(conn, *, limit: int) -> list[dict[str, Any]]:
+    """Последние запуски обновления, новые сверху: как запущен, кем, пакет и итог словами."""
+    return conn.cursor(row_factory=dict_row).execute(
+        "SELECT trigger, package_number, author, note, started_at FROM exchange_update_runs"
+        " ORDER BY started_at DESC, id DESC LIMIT %s", (int(limit),)).fetchall()
+
+
+def special_states(conn, *, limit: int) -> list[dict[str, Any]]:
+    """Отправленные сигналы, которые у потребителя не действуют как прежде: сняты, ушли склейкой, расклеены на
+    платформе; с заголовками карточек, как на витрине, и пакетом последней смены состояния."""
+    rows = conn.cursor(row_factory=dict_row).execute(
+        "SELECT signal_id, state, merged_into, state_package, state_at FROM exchange_sent_signals"
+        " WHERE state <> %s ORDER BY state_at DESC NULLS LAST, signal_id DESC LIMIT %s", (ACTIVE, int(limit)),
+    ).fetchall()
+    titles = showcase_cards.titles(conn, [row["signal_id"] for row in rows])
+    for row in rows:
+        row.update(titles.get(int(row["signal_id"]), {"title": None, "category": None}))
     return rows

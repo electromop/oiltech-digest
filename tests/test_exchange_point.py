@@ -58,7 +58,7 @@ def _release(exchange, monkeypatch) -> int:
 def test_foreign_address_and_wrong_token_are_refused_before_the_body_is_read(exchange, ip, headers):
     expected = 403 if ip != CONSUMER_IP else 401
     for method, path in (("GET", "/api/exchange/v1/packages"), ("GET", "/api/exchange/v1/packages/1"),
-                         ("PUT", "/api/exchange/v1/reactions/1"), ("POST", "/api/exchange/v1/receipts/1")):
+                         ("PUT", "/api/exchange/v1/reactions/1"), ("PUT", "/api/exchange/v1/receipts/1")):
         body = _Body()
         answer = point(ip).request(method, path, headers=headers, content=body if method != "GET" else None)
         assert answer.status_code == expected, (ip, headers, method, path, answer.text)

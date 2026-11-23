@@ -8,19 +8,24 @@ RFC 9180: режим base, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Pol
 списке подписывает и шифрует, остальные действуют для приёма: так ключи меняются без простоя, а пакет называет свой
 ключ отпечатком. Закрытые ключи платформы: подпись пакетов (EXCHANGE_SIGNING_KEYS) и расшифровка откликов
 (EXCHANGE_DECRYPTION_KEYS); открытые ключи потребителя: шифрование пакетов (EXCHANGE_CONSUMER_KEYS) и проверка подписи
-откликов (EXCHANGE_CONSUMER_SIGNING_KEYS). Отклики принимает следующий тикет (#200), здесь их ключи только читаются.
+откликов (EXCHANGE_CONSUMER_SIGNING_KEYS). Пакет откликов потребитель подписывает своим ключом и шифрует на ключ
+платформы (#200): open_package проверяет его по порядку (формат и версия, подпись до расшифровки, получатель,
+расшифровка), первое несовпадение даёт Rejected с причиной.
 """
 
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
+import binascii
+from collections.abc import Callable, Sequence
 import hashlib
 import json
+import re
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives import hpke
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 
 from oiltech_digest import config
@@ -35,10 +40,20 @@ SIGNING, DECRYPTION = "EXCHANGE_SIGNING_KEYS", "EXCHANGE_DECRYPTION_KEYS"
 CONSUMER, CONSUMER_SIGNING = "EXCHANGE_CONSUMER_KEYS", "EXCHANGE_CONSUMER_SIGNING_KEYS"
 NO_SIGNING_KEY = f"нет ключа подписи платформы ({SIGNING})"
 NO_CONSUMER_KEY = f"нет открытого ключа потребителя ({CONSUMER})"
+NO_DECRYPTION_KEY = f"нет ключа платформы для расшифровки откликов ({DECRYPTION})"
+NO_CONSUMER_SIGNING_KEY = f"нет открытого ключа подписи потребителя ({CONSUMER_SIGNING})"
+# Поля файла пакета, ровно такие, и отпечаток ключа в них.
+ENVELOPE_FIELDS = ("format", "version", "signer", "recipient", "ciphertext", "signature")
+_KEY_ID = re.compile(r"[0-9a-f]{16}")
 
 
 class NotConfigured(Exception):
     """Ключей для отправки нет или они испорчены: текст называет настройку и номер ключа, но не сам ключ."""
+
+
+class Rejected(Exception):
+    """Пакет откликов не принят: причина словами (отпечатки ключей, но не сами ключи), её получают потребитель и журнал
+    обмена."""
 
 
 def key_id(public_key: bytes) -> str:
@@ -125,7 +140,14 @@ def describe() -> dict[str, Any]:
         problems.append(NO_SIGNING_KEY)
     if not found["consumer"] and not any(problem.startswith(CONSUMER + ":") for problem in problems):
         problems.append(NO_CONSUMER_KEY)
-    return {**found, "problems": problems}
+    # Что мешает принять пакет откликов (#200): своя строка во вкладке, отправке пакетов это не мешает.
+    reactions = [problem for problem in problems if problem.startswith((DECRYPTION + ":", CONSUMER_SIGNING + ":"))]
+    problems = [problem for problem in problems if problem not in reactions]
+    if not found["decryption"] and not any(one.startswith(DECRYPTION + ":") for one in reactions):
+        reactions.append(NO_DECRYPTION_KEY)
+    if not found["consumer_signing"] and not any(one.startswith(CONSUMER_SIGNING + ":") for one in reactions):
+        reactions.append(NO_CONSUMER_SIGNING_KEY)
+    return {**found, "problems": problems, "reaction_problems": reactions}
 
 
 def seal(payload: bytes, signing_key: bytes, recipient: bytes) -> bytes:
@@ -142,3 +164,74 @@ def seal(payload: bytes, signing_key: bytes, recipient: bytes) -> bytes:
         "signature": _b64(signature),
     }
     return json.dumps(envelope).encode("ascii")
+
+
+def _base64(value: Any, name: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise Rejected(f"{name}: нужна строка base64")
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise Rejected(f"{name}: не base64 со стандартным алфавитом") from None
+
+
+def exact_fields(value: dict[str, Any], fields: Sequence[str], where: str = "") -> None:
+    """Поля объекта ровно по формату (файл пакета, содержимое, отклик, квитанция): лишнее или пропущенное поле даёт
+    Rejected с местом where."""
+    place = f"{where}: " if where else ""
+    extra = sorted(str(name) for name in value if name not in fields)
+    if extra:
+        raise Rejected(f"{place}лишнее поле {extra[0][:40]}")
+    missing = [name for name in fields if name not in value]
+    if missing:
+        raise Rejected(f"{place}нет поля {missing[0]}")
+
+
+def _envelope(data: bytes) -> dict[str, Any]:
+    """Файл пакета: JSON-объект ровно с полями формата."""
+    try:
+        envelope = json.loads(data)
+    except (ValueError, RecursionError):
+        raise Rejected("файл пакета не читается как JSON") from None
+    if not isinstance(envelope, dict):
+        raise Rejected("файл пакета не JSON-объект")
+    exact_fields(envelope, ENVELOPE_FIELDS, "файл пакета")
+    return envelope
+
+
+def open_package(data: bytes) -> tuple[bytes, str]:
+    """Файл пакета откликов → (содержимое, отпечаток ключа подписи потребителя). Проверка по порядку, первое
+    несовпадение: Rejected с причиной: формат и версия файла, подпись открытым ключом потребителя до расшифровки,
+    получатель, расшифровка ключом платформы. Ключей откликов в настройках нет: NotConfigured (сбой платформы, а не
+    пакета)."""
+    envelope = _envelope(data)
+    kind, version = envelope["format"], envelope["version"]
+    if kind != FORMAT or type(version) is not int or version != VERSION:
+        raise Rejected(f"формат «{str(kind)[:60]}» версии {str(version)[:10]}, точка принимает «{FORMAT}» версии "
+                       f"{VERSION}")
+    signer, recipient = envelope["signer"], envelope["recipient"]
+    for name, value in (("signer", signer), ("recipient", recipient)):
+        if not isinstance(value, str) or not _KEY_ID.fullmatch(value):
+            raise Rejected(f"{name}: нужен отпечаток ключа, 16 знаков hex")
+    ciphertext = _base64(envelope["ciphertext"], "ciphertext")
+    signature = _base64(envelope["signature"], "signature")
+    trusted, own = _keys(CONSUMER_SIGNING), _keys(DECRYPTION)
+    if not trusted:
+        raise NotConfigured(NO_CONSUMER_SIGNING_KEY)
+    if not own:
+        raise NotConfigured(NO_DECRYPTION_KEY)
+    public = next((key for key in trusted if key_id(key) == signer), None)
+    if public is None:
+        raise Rejected(f"пакет подписан ключом {signer}, которого платформа не знает")
+    try:
+        Ed25519PublicKey.from_public_bytes(public).verify(signature, LABEL + ciphertext)
+    except InvalidSignature:
+        raise Rejected("подпись не сходится") from None
+    private = next((key for key in own if key_id(_encryption_public(key)) == recipient), None)
+    if private is None:
+        raise Rejected(f"пакет зашифрован на ключ {recipient}, а не на ключ платформы")
+    try:
+        payload = SUITE.decrypt(ciphertext, X25519PrivateKey.from_private_bytes(private), info=LABEL)
+    except (InvalidTag, ValueError):
+        raise Rejected("пакет не расшифровывается ключом платформы") from None
+    return payload, signer

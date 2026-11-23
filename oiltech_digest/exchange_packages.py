@@ -24,11 +24,12 @@ import json
 from typing import Any, Sequence
 
 from oiltech_digest import config, exchange_card, exchange_envelope, feed_window, material_readiness
-from oiltech_digest.api_access import consumer_networks, exchange_setup_problems
 from oiltech_digest.db import connection, exchange_store, repository, showcase_cards
 
-# Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026».
-KIND_LABELS = {exchange_store.RELEASE: "выпуск за", exchange_store.ADDITION: "дозагрузка к выпуску за"}
+# Вид пакета словами: «пакет №1: выпуск за сентябрь 2026», «пакет №2: дозагрузка к выпуску за сентябрь 2026»,
+# «пакет №3: обновление» (#200: месяца у обновления нет).
+KIND_LABELS = {exchange_store.RELEASE: "выпуск за", exchange_store.ADDITION: "дозагрузка к выпуску за",
+               exchange_store.UPDATE: "обновление"}
 
 
 class Refused(Exception):
@@ -52,12 +53,16 @@ class NotReady(Refused):
 class Built:
     number: int
     kind: str
-    month: str
+    month: str | None
     signal_ids: list[int]
     details: dict[str, Any] = field(default_factory=dict)
 
     def describe(self) -> str:
-        return f"пакет №{self.number}: {package_label(self.kind, self.month)}, карточек {len(self.signal_ids)}"
+        text = f"пакет №{self.number}: {package_label(self.kind, self.month)}, карточек {len(self.signal_ids)}"
+        if self.kind == exchange_store.UPDATE:
+            text += (f", склеек {len(self.details.get('merges') or [])}, "
+                     f"снятий {len(self.details.get('removals') or [])}")
+        return text
 
     def report(self) -> str:
         """Ответ сборки словами: что собрано, а у выпуска «как есть» ещё что было не готово."""
@@ -78,10 +83,19 @@ def package_label(kind: str, month: str | None) -> str:
 
 def package_notes(details: dict[str, Any]) -> list[str]:
     """Что сборка сделала сверх состава, строками для вкладки «Журнал обмена» и команды exchange-status: дубли ушли
-    корнем склейки, уже отправленные пропущены, выпуск отправлен как есть и что в нём было не готово."""
+    корнем склейки, уже отправленные и ушедшие склейкой пропущены, выпуск отправлен как есть и что в нём было не
+    готово; у обновления (#200) склейки, снятия, возвраты, оставшиеся сигналы склеек, расклейки и что ждёт."""
     notes = ([f"Дубль №{one['requested']} ушёл корнем склейки №{one['root']}" for one in details.get("moved") or ()]
              + [f"№{one['signal_id']} уже отправлен: пакет №{one['package']}, выпуск за {_label(one['month'])}"
-                for one in details.get("skipped") or ()])
+                for one in details.get("skipped") or ()]
+             + [f"№{one} не отправлен: он ушёл потребителю склейкой" for one in details.get("merged_away") or ()]
+             + [f"№{one['signal_id']} ушёл склейкой в №{one['merged_into']}" for one in details.get("merges") or ()]
+             + [f"№{one['signal_id']} снят: {one['reason']}" for one in details.get("removals") or ()]
+             + [f"№{one} вернулся: снятие на платформе отменено" for one in details.get("returned") or ()]
+             + [f"№{one} пришёл карточкой: оставшийся сигнал склейки" for one in details.get("roots") or ()]
+             + [f"№{one['signal_id']} расклеен на платформе, у потребителя склеен с №{one['merged_into']}"
+                for one in details.get("unmerged") or ()]
+             + list(details.get("waiting") or ()))
     if details.get("as_is"):
         notes += [f"Отправлен как есть: №{one['signal_id']} не был готов ({material_readiness.labels(one['missing'])})"
                   for one in details.get("not_ready") or ()] or ["Отправлен как есть: все материалы были готовы"]
@@ -93,7 +107,7 @@ def _moved(requested: Sequence[int], roots: dict[int, int]) -> list[dict[str, in
     return [{"requested": one, "root": roots[one]} for one in requested if one in roots and roots[one] != one]
 
 
-def _checked_month(value: str) -> str:
+def checked_month(value: str) -> str:
     try:
         return feed_window.month_key(feed_window.parse_month((value or "").strip()))
     except ValueError:
@@ -104,7 +118,7 @@ def _label(month: str) -> str:
     return feed_window.month_label(feed_window.parse_month(month))
 
 
-def _keys() -> tuple[bytes, bytes]:
+def sending_keys() -> tuple[bytes, bytes]:
     try:
         return exchange_envelope.sending_keys()
     except exchange_envelope.NotConfigured as error:
@@ -116,12 +130,17 @@ def _publish(conn, keys: tuple[bytes, bytes], *, kind: str, month: str, signal_i
     """Собрать и выложить пакет в транзакции conn под замком сборки (exchange_store.lock уже взят): номер, карточки
     экрана витрины, конверт, строка пакета и журнал отправленного. Коммит за вызывающим."""
     rows = showcase_cards.read(conn, signal_ids)
+    previous = exchange_store.sent(conn, rows)
+    # Номер, ушедший потребителю склейкой (#200), больше не отправляется: у потребителя его карточки нет.
+    gone = [one for one in sorted(rows) if (previous.get(one) or {}).get("state") in (exchange_store.MERGED,
+                                                                                      exchange_store.UNMERGED)]
+    if gone:
+        details["merged_away"] = gone
     # Сигнал, удалённый между выбором состава и чтением карточек, в пакет не идёт (карточки у него нет).
-    ids = sorted(rows)
+    ids = [one for one in sorted(rows) if one not in gone]
     number = exchange_store.next_number(conn)
     found = showcase_cards.publications(conn, ids)
     moment = exchange_store.now(conn)
-    previous = exchange_store.sent(conn, ids)
     cards, journal = [], []
     for signal_id in ids:
         try:
@@ -146,11 +165,11 @@ def build_release(month: str, *, by: str | None, as_is: bool = False) -> Built:
     """Пакет выпуска названного закрытого месяца: состав выпуска платформы, как у PDF и выгрузки. Ждёт готовности всех
     материалов (NotReady); as_is: «Отправить как есть», сразу, с тем, что есть, и с записью, что было не готово. Второй
     пакет выпуска того же месяца не собирается."""
-    month = _checked_month(month)
+    month = checked_month(month)
     if feed_window.current().is_open(month):
         raise Refused(f"выпуск за {_label(month)} ещё открыт: пакет собирается после закрытия месяца "
                       f"({config.FEED_ROLLOVER_DAY}-го числа следующего)")
-    keys = _keys()
+    keys = sending_keys()
     with connection.get_connection() as conn:
         exchange_store.lock(conn)
         existing = exchange_store.release_months(conn, [month]).get(month)
@@ -199,7 +218,7 @@ def pending_release_months(*, now: datetime | None = None) -> list[str]:
     каждый цикл их материалы догоняет перепроверка готовности. Флаг выключен или первый месяц не задан: []."""
     if not config.EXCHANGE_ENABLED or not config.EXCHANGE_FIRST_MONTH:
         return []
-    first = _checked_month(config.EXCHANGE_FIRST_MONTH)
+    first = checked_month(config.EXCHANGE_FIRST_MONTH)
     last_closed = (feed_window.current(now=now).start - timedelta(days=1)).replace(day=1)
     months = _months_between(first, last_closed)
     if not months:
@@ -266,11 +285,11 @@ def _refusal(missing: list[int], inactive: list[tuple[int, int, str]]) -> str:
 def build_addition(numbers: Sequence[int], month: str, *, by: str | None) -> Addition:
     """Дозагрузка номеров с месяцем выпуска: дубль корнем склейки, отказ со списком на несуществующие и не действующие
     номера, уже отправленные пропускаются. Всё уже отправлено: пакета нет."""
-    month = _checked_month(month)
+    month = checked_month(month)
     requested = list(dict.fromkeys(int(one) for one in numbers))
     if not requested:
         raise Refused("дозагрузка не собрана: нет номеров сигналов")
-    keys = _keys()
+    keys = sending_keys()
     with connection.get_connection() as conn:
         exchange_store.lock(conn)
         roots = exchange_store.roots(conn, requested)
@@ -301,7 +320,7 @@ def readiness(month: str | None = None) -> dict[str, Any]:
     открытый (его выпуск закрывается следующим)."""
     window = feed_window.current()
     if month:
-        month = _checked_month(month)
+        month = checked_month(month)
     else:
         try:
             waiting = pending_release_months()
@@ -329,29 +348,3 @@ def readiness(month: str | None = None) -> dict[str, Any]:
     return {"month": month, "closed": closed, "release": release, "total": len(found),
             "ready": len(found) - len(lacking), "not_ready": lacking,
             "as_is": {"allowed": reason is None, "reason": reason}}
-
-
-def journal(*, limit: int = 200) -> dict[str, Any]:
-    """Состояние обмена для вкладки «Журнал обмена» и команды exchange-status: настройки (без ключей и адресов, только
-    отпечатки и число адресов; что мешает собрать пакет и что мешает потребителю его забрать), готовность выпуска
-    месяца и пакеты, новые сверху, с тем, что сборка сделала сверх состава."""
-    keys = exchange_envelope.describe()
-    point_problems = exchange_setup_problems()
-    with connection.get_connection() as conn:
-        packages = exchange_store.packages(conn, limit=limit)
-    for package in packages:
-        package["notes"] = package_notes(package.pop("details") or {})
-    return {
-        "readiness": readiness(),
-        "settings": {
-            "enabled": bool(config.EXCHANGE_ENABLED),
-            "first_month": config.EXCHANGE_FIRST_MONTH or None,
-            "signing_keys": keys["signing"],
-            "consumer_keys": keys["consumer"],
-            "addresses": len(consumer_networks()),
-            "token": not any("EXCHANGE_TOKEN_HASH" in problem for problem in point_problems),
-            "problems": keys["problems"],
-            "point_problems": point_problems,
-        },
-        "packages": packages,
-    }

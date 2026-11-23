@@ -281,4 +281,23 @@ describe("технологический радар", () => {
     expect(badge).toHaveAttribute("href", `?screen=feedback-journal&signal=${contract.id}&action=77`);
     expect(within(await cardOf("Новость без карточки")).queryByRole("link", { name: "Ждёт решения в журнале" })).toBeNull();
   });
+
+  it("отклики потребителя выпуска на карточке видит только администратор: в работе у N групп и остальные кнопки (#200)",
+    async () => {
+      const counts = { work: 2, save: 1, not_oilfield: 1 };
+      serve([{ ...contract, consumer_reactions: counts }]);
+      renderFeed(true);
+
+      const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+      expect(within(card).getByLabelText("Отклики потребителя")).toHaveTextContent(
+        "Отклики потребителя: в работе у 2 групп · Сохранить: 1 · Не про нефтесервис: 1");
+    });
+
+  it("участник строки откликов не видит, даже если счёт пришёл", async () => {
+    serve([{ ...contract, consumer_reactions: { work: 1 } }]);
+    renderFeed(false);
+
+    const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    expect(within(card).queryByLabelText("Отклики потребителя")).toBeNull();
+  });
 });

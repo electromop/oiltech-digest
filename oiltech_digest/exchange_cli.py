@@ -6,8 +6,12 @@ exchange-release          шаг планировщика: выпуск закр
 exchange-release --month  выпуск названного закрытого месяца (стартовая загрузка), флаг не нужен; --as-is: «Отправить
                           как есть», сразу, с записью в журнал обмена, что было не готово
 exchange-addition         дозагрузка номеров с месяцем выпуска
+exchange-update           шаг планировщика «обновление для потребителя»: раз в сутки по Москве (за флагом
+                          EXCHANGE_ENABLED) изменённые карточки, склейки, снятия и возвраты; --now: сейчас, флаг не нужен
 exchange-new-key          новая пара ключей платформы: закрытая часть в .env ядра, открытая с отпечатком потребителю
-exchange-status           то же состояние, что вкладка «Журнал обмена»
+exchange-reactions        выгрузка откликов потребителя за месяц в xlsx: счёт по корню склейки на конец месяца
+exchange-status           то же состояние, что вкладка «Журнал обмена»: пакеты с квитанциями, обновление, особые
+                          состояния отправленного, пакеты откликов и отказы точки
 digest-readiness          шаг планировщика «перепроверка готовности»: в последний день перед закрытием месяца с часа
                           READINESS_RECHECK_HOUR и после закрытия до сборки выпуска недостающие шаги конвейера заново;
                           --month: готовность выпуска названного месяца, только чтение
@@ -93,6 +97,23 @@ def cmd_digest_readiness(args: argparse.Namespace) -> None:
             print(f"    не поставлено: {reason}")
 
 
+def cmd_exchange_update(args: argparse.Namespace) -> None:
+    from oiltech_digest import exchange_packages, exchange_updates
+    from oiltech_digest.db import exchange_store
+
+    try:
+        result = (exchange_updates.build_update(by="команда", trigger=exchange_store.MANUAL) if args.now
+                  else exchange_updates.update_step())
+    except exchange_packages.Refused as exc:
+        raise SystemExit(f"exchange-update: {exc}") from exc
+    if result is None:
+        print("exchange-update: шаг выключен (EXCHANGE_ENABLED)")
+        return
+    print(f"exchange-update: {result.built.describe() if result.built else result.message}")
+    for note in result.notes:
+        print(f"    {note}")
+
+
 def cmd_exchange_addition(args: argparse.Namespace) -> None:
     from oiltech_digest import exchange_packages
 
@@ -103,6 +124,21 @@ def cmd_exchange_addition(args: argparse.Namespace) -> None:
         raise SystemExit(f"exchange-addition: {exc}") from exc
     for line in result.describe():
         print(f"exchange-addition: {line}")
+
+
+def cmd_exchange_reactions(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from oiltech_digest import config, exchange_packages, exchange_reactions, feed_window
+
+    try:
+        month = exchange_packages.checked_month(args.month)
+    except exchange_packages.Refused as exc:
+        raise SystemExit(f"exchange-reactions: {exc}") from exc
+    target = Path(args.out) if args.out else config.EXPORTS_DIR / f"exchange-reactions-{month}.xlsx"
+    rows = exchange_reactions.export_month(month, target)
+    label = feed_window.month_label(feed_window.parse_month(month))
+    print(f"exchange-reactions: отклики за {label}: сигналов {rows}, файл {target}")
 
 
 def cmd_exchange_new_key(args: argparse.Namespace) -> None:
@@ -116,17 +152,22 @@ def cmd_exchange_new_key(args: argparse.Namespace) -> None:
 
 
 def cmd_exchange_status(args: argparse.Namespace) -> None:
-    from oiltech_digest import exchange_packages
+    from oiltech_digest import exchange_journal, exchange_packages
+    from oiltech_digest.db import exchange_store
 
-    state = exchange_packages.journal(limit=args.limit)
+    state = exchange_journal.journal(limit=args.limit)
     settings = state["settings"]
     print(f"Шаг выпуска: {'включён' if settings['enabled'] else 'выключен'}; первый месяц: "
           f"{settings['first_month'] or 'не задан'}")
     print(f"Ключ подписи платформы: {', '.join(settings['signing_keys']) or 'нет'}; ключ потребителя: "
           f"{', '.join(settings['consumer_keys']) or 'нет'}")
     print(f"Адресов потребителя: {settings['addresses']}; токен: {'задан' if settings['token'] else 'не задан'}")
+    print(f"Ключ откликов платформы: {', '.join(settings['decryption_keys']) or 'нет'}; ключ подписи потребителя: "
+          f"{', '.join(settings['consumer_signing_keys']) or 'нет'}")
     for problem in settings["problems"]:
         print(f"Пакеты не соберутся: {problem}")
+    for problem in settings["reaction_problems"]:
+        print(f"Отклики не примутся: {problem}")
     for problem in settings["point_problems"]:
         print(f"Потребитель не заберёт пакеты: {problem}")
     _print_readiness(state["readiness"])
@@ -136,12 +177,37 @@ def cmd_exchange_status(args: argparse.Namespace) -> None:
         label = exchange_packages.package_label(package["kind"], package["month"])
         taken = (f"забран {_moment(package['first_taken_at'])}, последний раз {_moment(package['last_taken_at'])}"
                  if package["first_taken_at"] else "не забран")
+        overdue = ", не забран больше суток" if package.get("overdue") else ""
         print(f"№{package['number']} {label}: карточек {len(package['cards'])}, собран "
-              f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}")
+              f"{_moment(package['built_at'])} МСК ({package['built_by'] or 'кто, не записано'}), {taken}{overdue}")
+        receipt = package.get("receipt")
+        if receipt:
+            outcome = exchange_store.RECEIPT_OUTCOMES.get(receipt["outcome"], receipt["outcome"])
+            print(f"    Квитанция {_moment(receipt['at'])} МСК: {outcome}. {receipt['message']}")
         if package["cards"]:
             print("    " + ", ".join(str(card["signal_id"]) for card in package["cards"]))
         for note in package["notes"]:
             print(f"    {note}")
+    _print_exchange_activity(state)
+
+
+def _print_exchange_activity(state: dict) -> None:
+    """Обновление, особые состояния отправленного, пакеты откликов и отказы точки (#200), как во вкладке."""
+    from oiltech_digest.db import exchange_store
+
+    for run in state["updates"]:
+        how = "шаг" if run["trigger"] == exchange_store.SCHEDULE else f"вручную ({run['author'] or 'кто, не записано'})"
+        print(f"Обновление {_moment(run['started_at'])} МСК, {how}: {run['note']}")
+    for row in state["sent_states"]:
+        print(f"Сигнал №{row['signal_id']}: {row['state_label']}")
+    for package in state["reaction_packages"]:
+        repeats = f", повторов {package['repeats']}" if package["repeats"] else ""
+        print(f"Пакет откликов №{package['number']} ({package['source']}): откликов {package['reactions']}, принят "
+              f"{_moment(package['received_at'])} МСК{repeats}")
+    for refusal in state["refusals"]:
+        what = "пакет откликов" if refusal["kind"] == exchange_store.REFUSED_REACTIONS else "квитанция на пакет"
+        print(f"Отказ точки: {what} №{refusal['number']}: {refusal['reason']} Попыток {refusal['attempts']}, "
+              f"последняя {_moment(refusal['last_at'])} МСК")
 
 
 def add_commands(sub) -> None:
@@ -163,10 +229,22 @@ def add_commands(sub) -> None:
     p_readiness.add_argument("--month", default="", help="месяц выпуска ГГГГ-ММ: показать готовность, ничего не ставить")
     p_readiness.set_defaults(func=cmd_digest_readiness)
 
+    p_update = sub.add_parser(
+        "exchange-update",
+        help="шаг планировщика «обновление для потребителя»: раз в сутки (за флагом EXCHANGE_ENABLED); с --now: сейчас",
+    )
+    p_update.add_argument("--now", action="store_true", help="собрать обновление сейчас, флаг и сутки не нужны")
+    p_update.set_defaults(func=cmd_exchange_update)
+
     p_addition = sub.add_parser("exchange-addition", help="дозагрузка сигналов потребителю по номерам")
     p_addition.add_argument("--month", required=True, help="месяц выпуска ГГГГ-ММ, с которым карточки уйдут")
     p_addition.add_argument("--ids", required=True, help="номера сигналов через запятую или пробел")
     p_addition.set_defaults(func=cmd_exchange_addition)
+
+    p_reactions = sub.add_parser("exchange-reactions", help="выгрузка откликов потребителя за месяц (xlsx)")
+    p_reactions.add_argument("--month", required=True, help="месяц ГГГГ-ММ: отклики, нажатые в этом месяце")
+    p_reactions.add_argument("--out", default="", help="файл xlsx (по умолчанию exports/exchange-reactions-ГГГГ-ММ.xlsx)")
+    p_reactions.set_defaults(func=cmd_exchange_reactions)
 
     p_key = sub.add_parser("exchange-new-key", help="новая пара ключей платформы для обмена с потребителем")
     p_key.add_argument("--kind", choices=["signing", "decryption"], required=True,

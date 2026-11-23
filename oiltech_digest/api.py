@@ -34,7 +34,7 @@ from oiltech_digest import (contract, feedback_changes, feedback_journal, feedba
                             network_policy, otbor, signal_card, signal_card_filters, signal_scores, signal_scoring,
                             signal_summary)
 from oiltech_digest import material_readiness, material_signals
-from oiltech_digest import exchange_api, feedback_journal_api
+from oiltech_digest import exchange_api, exchange_reactions, feedback_journal_api
 from oiltech_digest import request_guard
 from oiltech_digest.api_access import external_worker_refusal, optional_user, require_admin, require_user
 from oiltech_digest.processing.pipeline import (
@@ -1467,6 +1467,9 @@ def list_signals(
         badge = bool(values["card_badge"]) and feedback_journal_api.tab_open_to(user, values)
     # Ссылки всей страницы: одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
+    # Отклики потребителя выпуска (#200): счёт по корню склейки, строка на карточке только администратору.
+    reactions = (exchange_reactions.card_counts([int(row["id"]) for row in cards])
+                 if (user.get("role") or "user") == "admin" else {})
     # Месяц выпуска карточки закрыт: «В дайджест» и «Убрать» на экране неактивны. Правило то
     # же, что у отказа в PATCH /api/signals/{id}: экран своей формулы не держит.
     window = feed_window.current()
@@ -1487,6 +1490,7 @@ def list_signals(
             "digest_locked": not window.is_open(row["digest_month"]),
             "evidence": evidence.get(int(row["id"]), []),
             "feedback_pending": row.get("feedback_pending") if badge else None,
+            **({"consumer_reactions": reactions[int(row["id"])]} if int(row["id"]) in reactions else {}),
         }))
     return rows
 

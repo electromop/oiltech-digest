@@ -136,6 +136,16 @@ describe("вкладка «Обратная связь»", () => {
     }
   });
 
+  it("предложение, которое ссылается на отклики потребителя, показывает их отдельным списком (#200)", async () => {
+    serveJournal([{ ...proposal, event_ids: [], basis: [], reactions: [
+      { id: 41, role: "сотрудник потребителя", reaction: "Не про нефтесервис", day: "2026-11-20", signal_id: 602 }] }]);
+    renderJournal(true);
+
+    const pending = await screen.findByRole("article", { name: "Предложение разбора ОС №77" });
+    expect(within(pending).getByLabelText("Отклики потребителя")).toHaveTextContent(
+      "Отклик №41 · сотрудник потребителя · Не про нефтесервис · 2026-11-20");
+  });
+
   it("фильтрует журнал по статусу, витрине, агенту и автору", async () => {
     serveJournal([proposal]);
     renderJournal(false);

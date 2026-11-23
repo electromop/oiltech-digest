@@ -243,17 +243,27 @@ function Incoming({ entry }: { entry: JournalEntry }) {
     return <p>{entry.seed}{entry.quote ? <span className="journalQuote"> «{entry.quote}»</span> : null}</p>;
   }
   return (
-    <ul className="journalLines" aria-label="Основание">
-      {(entry.basis ?? []).map((mark) => (
-        <li key={mark.id}>
-          Отметка №{mark.id} · {mark.author ?? "без имени"}
-          {mark.verdict ? ` · ${verdictName(mark.verdict)}` : ""}
-          {[mark.reason, mark.comment, mark.corrected_title, mark.corrected_thesis].filter(Boolean).map((text) => (
-            <span className="journalQuote" key={String(text)}> «{text}»</span>
+    <>
+      <ul className="journalLines" aria-label="Основание">
+        {(entry.basis ?? []).map((mark) => (
+          <li key={mark.id}>
+            Отметка №{mark.id} · {mark.author ?? "без имени"}
+            {mark.verdict ? ` · ${verdictName(mark.verdict)}` : ""}
+            {[mark.reason, mark.comment, mark.corrected_title, mark.corrected_thesis].filter(Boolean).map((text) => (
+              <span className="journalQuote" key={String(text)}> «{text}»</span>
+            ))}
+          </li>
+        ))}
+      </ul>
+      {/* Отклики потребителя выпуска (#200): отдельным списком рядом с отметками. */}
+      {entry.reactions?.length ? (
+        <ul className="journalLines" aria-label="Отклики потребителя">
+          {entry.reactions.map((one) => (
+            <li key={one.id}>Отклик №{one.id} · {one.role} · {one.reaction} · {one.day}</li>
           ))}
-        </li>
-      ))}
-    </ul>
+        </ul>
+      ) : null}
+    </>
   );
 }
 
