@@ -43,6 +43,17 @@ logger = logging.getLogger(__name__)
 #     иначе источник парсится локально как обычно (флаг проверяется в parse_all и
 #     enqueue-external-scrape). Каптча/hard-WAF (Cloudflare/Akamai) сюда НЕ помечаем:
 #     они 403 и из NL (нужен challenge-solver, отдельный проект).
+# Сайт JPT (jpt.spe.org, Arc Publishing): карточки ленты .PromoB и .PromoA, ссылка в *-title,
+# дата в *-by-line. С РФ сайт закрыт, браузер NL с 12.11 получает 403: все записи этого сайта
+# собираются через NL обычным запросом. Одно место на все записи сайта, ниже только адреса.
+_JPT_SITE = {
+    "parse_strategy": "request",
+    "listing_selector": ".PromoB, .PromoA",
+    "article_link_selector": ".PromoB-title a, .PromoA-title a",
+    "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+    "network_region": "external",
+}
+
 SOURCE_OVERRIDES: dict[str, dict] = {
     # --- JPT по разделам (13.09) ---------------------------------------------
     # Издание читалось ОДНОЙ страницей /latest-news: 14 карточек, ~5 статей в неделю.
@@ -54,60 +65,34 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # «Quantum Computing Use Cases for the Oil and Gas Industry»).
     # Строки источников заведены в базе разово, реестр их только настраивает: apply_overrides
     # обновляет существующие, а не создаёт.
-    # 28.09 разделы: через NL (network_region external → очередь external-playwright). С РФ
-    # jpt.spe.org (CloudFront) принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа:
-    # 206 КБ за 1,4 с, рендер раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.
+    # 28.09 разделы: через NL (network_region external). С РФ jpt.spe.org (CloudFront)
+    # принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа: 206 КБ за 1,4 с, рендер
+    # раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.
     # Новых статей разделы почти не дают (их раньше забирает основной JPT), но на NL остаются
     # страховкой для него; знакомые адреса воркер не качает (known_urls: по сайту). Исключение
     # из правила «регион, через set-source-region»: эти строки целиком живут в реестре.
-    "JPT — R&D и инновации": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/r-d-innovation",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Роботизация": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/robotics-unmanned-systems",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Бурение": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/drilling",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Заканчивание": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/completions",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Внутрискважинные работы": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/well-intervention",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Инспекция и ТОиР": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/inspection-maintenance",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Промышленная безопасность": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/safety",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
-    "JPT — Водоподготовка": {"source_type": "Journal", "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/topic/water-management",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        "network_region": "external"},
+    # 26.11: с 12.11 браузер NL получает 403 на каждой странице jpt.spe.org, с ядра тоже 403, и
+    # JPT молчал две недели без единой ошибки сбора. Обычный запрос из-за рубежа отдаёт ту же
+    # разметку: карточки, даты и текст статей (проба 26.11: 12 статей по 25.11, текст 1,8-11 тыс.
+    # знаков). Поэтому листинг без браузера, очередь NL external-fetch. Проба шла кодом сбора с
+    # заграничного адреса, а не с самого NL: проходит ли обычный запрос оттуда, видно в итоге
+    # задачи NL (listing ok или fetch_failed).
+    "JPT — R&D и инновации": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/r-d-innovation"},
+    "JPT — Роботизация": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/robotics-unmanned-systems"},
+    "JPT — Бурение": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/drilling"},
+    "JPT — Заканчивание": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/completions"},
+    "JPT — Внутрискважинные работы": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/well-intervention"},
+    "JPT — Инспекция и ТОиР": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/inspection-maintenance"},
+    "JPT — Промышленная безопасность": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/safety"},
+    "JPT — Водоподготовка": {"source_type": "Journal", **_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/water-management"},
 
     # Проверено на проде:
     # Ревизия 17.07: без listing_url скребли главную и замолчали с 01.07. Явный newsroom
@@ -170,23 +155,27 @@ SOURCE_OVERRIDES: dict[str, dict] = {
                        "listing_url": "https://www.akersolutions.com/news/news-archive/"},
     "Rystad Energy": {"parse_strategy": "playwright", "listing_url": "https://www.rystadenergy.com/news"},  # рендер ✓ (свежак 08 июня), scheduler собирает в фоне
     # JPT: личная просьба заказчика (24.08: «для нефтянки это маст хэв, номер 1 в мире,
-    # а оттуда мало что подтягивается»). Рендер всегда был исправен (219 КБ, ни WAF, ни
+    # а оттуда мало что подтягивается»). Рендер до 12.11 был исправен (219 КБ, ни WAF, ни
     # блокировки): теряли на разборе. Замер по сохранённой странице: без селекторов
     # якорный путь давал 42 кандидата, из них 30: рубрики `/topic/...`, и рубрика же
     # шла ПЕРВОЙ по оценке, занимая слот в выдаче. Дат не было ни у одного.
     # Разметка ленты, Arc Publishing: карточки .PromoB (12 шт.) и .PromoA (2 шт.),
     # ссылка в *-title, дата в *-by-line. Комментарий «даты извлекаются» здесь стоял
     # ошибочно: last_seen_published_at у источника был пуст.
-    "Journal of Petroleum Technology": {
-        "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/latest-news",
-        "listing_selector": ".PromoB, .PromoA",
-        "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
-        # 28.09 (решение владельца): с российского адреса CDN JPT принимает соединение и
-        # молчит: как у разделов JPT ниже; на проде уже `set-source-region`, реестр: правда.
-        "network_region": "external",
-    },
+    # 26.11: без браузера, как разделы выше. Адрес с ?page=1 (это первая страница ленты): 26.11
+    # один запрос без него получил из кэша CDN копию ленты, застывшую на 11.11, а с ?page=1 лента
+    # оба раза пришла свежая.
+    # 28.09 (решение владельца): с российского адреса CDN JPT принимает соединение и молчит, как
+    # у разделов JPT выше; на проде уже `set-source-region`, реестр: правда.
+    "Journal of Petroleum Technology": {**_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/latest-news?page=1"},
+    # 26.11: лента SPE живёт на сайте JPT, и с ядра она теперь отвечает 403, как JPT: через NL,
+    # как его разделы. Без селекторов карточек в кандидаты шли рубрики («Fracturing/pressure
+    # pumping», «Business/economics»). НЕ ставить listing_url на www.spe.org/en/about/news/:
+    # там лента живая, но статьи ведут на jpt.spe.org, а _build_candidate_from_anchor отбрасывает
+    # ссылки на чужой хост, и кандидатов 0. RSS у jpt.spe.org мёртвый (0 items, 2021).
+    "SPE (Society of Petroleum Engineers)": {**_JPT_SITE,
+        "listing_url": "https://jpt.spe.org/topic/spe-news"},
     # НЕ в реестре: listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
     # listing_selector или другой URL (тюнинг отдельной задачей):
     #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
@@ -196,8 +185,9 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # source-health большинство западных playwright-источников парсятся с РФ (свежие
     # статьи), а live-аудит у них флапает таймаутом. Реальные кандидаты на external
     # помечаются осознанно по id через `set-source-region` и A/B-тестятся (см. CLI).
-    # Исключение, разделы JPT (вверху): их строки целиком живут в реестре, и таймаут с РФ
-    # у них не флап, а устройство сети (замер 28.09).
+    # Исключение: записи сайта jpt.spe.org (разделы JPT вверху, основной JPT и SPE): их строки
+    # целиком живут в реестре. С РФ этот сайт закрыт (до 26.11 молчал на соединении, теперь
+    # отвечает 403), это не флап, а устройство сети. Исключение держит тест реестра.
     # JS-SPA, ПОДТВЕРЖДЕНЫ playwright-рендером 2026-06-26 (source-dump-listing --render с
     # РФ-core дал реальные ссылки на статьи; request-стратегия давала пустой shell →
     # no_candidates). Гео-доступны с РФ, рендер локальный, роутинг не нужен:
@@ -248,13 +238,6 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # страница публична (200), в Chrome отдаёт ленту со свежими датами (06/07/2026).
 
     # -- Правки существующих записей: прописанный URL перестал быть лентой --
-    "SPE (Society of Petroleum Engineers)": {"parse_strategy": "request",
-                                             "listing_url": "https://jpt.spe.org/topic/spe-news"},
-    # ВАЖНО: НЕ ставить listing_url на www.spe.org/en/about/news/: там лента живая, но статьи
-    # ведут на jpt.spe.org, а _build_candidate_from_anchor (request_parser.py:280) жёстко
-    # отбрасывает ссылки на чужой хост → 0 кандидатов. Листинг обязан жить на том же домене,
-    # что и статьи. RSS у jpt.spe.org мёртвый (0 items, lastBuildDate 2021).
-
     # ==== Ревизия 2026-07-17: РФ-источники ====
     # Все они парсили ГЛАВНУЮ (listing_url не задан → фоллбэк на url), т.е. собирали навигацию.
     "Сургутнефтегаз": {"parse_strategy": "request",

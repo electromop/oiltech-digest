@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion import source_overrides
@@ -427,3 +428,25 @@ def test_page_order_in_registry_always_comes_with_a_selector():
         assert strategy == "page_order", f"{name!r}: неизвестный listing_strategy {strategy!r}"
         assert fields.get("listing_selector") or fields.get("article_link_selector"), (
             f"{name!r}: page_order без селектора ленты не работает")
+
+
+def test_external_region_in_registry_only_for_jpt_site():
+    """Маршрут через NL реестр задаёт только записям сайта jpt.spe.org: с РФ этот сайт закрыт всегда, а
+    остальные источники уводятся на NL по id командой set-source-region, после замера. Запись реестра с
+    external тихо перевела бы источник на NL при каждом применении реестра."""
+    for name, fields in source_overrides.SOURCE_OVERRIDES.items():
+        if fields.get("network_region") != "external":
+            continue
+        host = urlsplit(fields.get("listing_url") or fields.get("url") or "").hostname
+        assert host == "jpt.spe.org", f"{name!r}: external в реестре только у записей сайта jpt.spe.org"
+
+
+def test_jpt_site_entries_share_one_collection_path():
+    """Все записи сайта jpt.spe.org собираются одним путём (общие поля _JPT_SITE): когда сайт снова сменит
+    защиту, путь меняется в одном месте, а не в десяти записях."""
+    entries = {name: fields for name, fields in source_overrides.SOURCE_OVERRIDES.items()
+               if urlsplit(fields.get("listing_url") or "").hostname == "jpt.spe.org"}
+    assert len(entries) == 10
+    for name, fields in entries.items():
+        for key, value in source_overrides._JPT_SITE.items():
+            assert fields.get(key) == value, f"{name!r}: {key} не как у сайта JPT"
