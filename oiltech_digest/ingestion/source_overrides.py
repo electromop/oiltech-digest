@@ -54,55 +54,59 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # «Quantum Computing Use Cases for the Oil and Gas Industry»).
     # Строки источников заведены в базе разово, реестр их только настраивает: apply_overrides
     # обновляет существующие, а не создаёт.
-    # 28.09 разделы: через NL (network_region external → очередь external-playwright). С РФ
-    # jpt.spe.org (CloudFront) принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа:
-    # 206 КБ за 1,4 с, рендер раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.
+    # 28.09 разделы: через NL (network_region external). С РФ jpt.spe.org (CloudFront)
+    # принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа: 206 КБ за 1,4 с, рендер
+    # раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.
     # Новых статей разделы почти не дают (их раньше забирает основной JPT), но на NL остаются
     # страховкой для него; знакомые адреса воркер не качает (known_urls: по сайту). Исключение
     # из правила «регион, через set-source-region»: эти строки целиком живут в реестре.
-    "JPT — R&D и инновации": {"source_type": "Journal", "parse_strategy": "playwright",
+    # 26.11: с 12.11 браузер NL получает 403 на каждой странице jpt.spe.org, с ядра тоже 403, и
+    # JPT молчал две недели без единой ошибки сбора. Обычный запрос из-за рубежа отдаёт ту же
+    # разметку: карточки, даты и текст статей (проба 26.11: 12 статей по 25.11, текст 1,8-11 тыс.
+    # знаков). Поэтому листинг без браузера, очередь NL external-fetch.
+    "JPT — R&D и инновации": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/r-d-innovation",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Роботизация": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Роботизация": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/robotics-unmanned-systems",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Бурение": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Бурение": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/drilling",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Заканчивание": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Заканчивание": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/completions",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Внутрискважинные работы": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Внутрискважинные работы": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/well-intervention",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Инспекция и ТОиР": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Инспекция и ТОиР": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/inspection-maintenance",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Промышленная безопасность": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Промышленная безопасность": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/safety",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
         "network_region": "external"},
-    "JPT — Водоподготовка": {"source_type": "Journal", "parse_strategy": "playwright",
+    "JPT — Водоподготовка": {"source_type": "Journal", "parse_strategy": "request",
         "listing_url": "https://jpt.spe.org/topic/water-management",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
@@ -177,9 +181,11 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # Разметка ленты, Arc Publishing: карточки .PromoB (12 шт.) и .PromoA (2 шт.),
     # ссылка в *-title, дата в *-by-line. Комментарий «даты извлекаются» здесь стоял
     # ошибочно: last_seen_published_at у источника был пуст.
+    # 26.11: без браузера, как разделы выше. Адрес с ?page=1 (это первая страница ленты): без
+    # него CDN отдавал 26.11 копию ленты, застывшую на 11.11, а с ним свежую.
     "Journal of Petroleum Technology": {
-        "parse_strategy": "playwright",
-        "listing_url": "https://jpt.spe.org/latest-news",
+        "parse_strategy": "request",
+        "listing_url": "https://jpt.spe.org/latest-news?page=1",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
@@ -250,8 +256,16 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # страница публична (200), в Chrome отдаёт ленту со свежими датами (06/07/2026).
 
     # -- Правки существующих записей: прописанный URL перестал быть лентой --
-    "SPE (Society of Petroleum Engineers)": {"parse_strategy": "request",
-                                             "listing_url": "https://jpt.spe.org/topic/spe-news"},
+    # 26.11: лента SPE живёт на сайте JPT, и с ядра она теперь отвечает 403, как JPT: через NL,
+    # как его разделы. Селекторы карточек те же, что у JPT: без них в кандидаты шли рубрики
+    # («Fracturing/pressure pumping», «Business/economics»).
+    "SPE (Society of Petroleum Engineers)": {
+        "parse_strategy": "request",
+        "listing_url": "https://jpt.spe.org/topic/spe-news",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     # ВАЖНО: НЕ ставить listing_url на www.spe.org/en/about/news/: там лента живая, но статьи
     # ведут на jpt.spe.org, а _build_candidate_from_anchor (request_parser.py:280) жёстко
     # отбрасывает ссылки на чужой хост → 0 кандидатов. Листинг обязан жить на том же домене,
