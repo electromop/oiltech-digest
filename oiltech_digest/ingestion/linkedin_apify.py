@@ -67,7 +67,7 @@ class ApifyClient:
     """Запуск модуля сервиса, его посты и итоговое списание."""
 
     def __init__(self, token: str, *, session: Any = None, poll_seconds: float = 5.0, run_timeout: float = 300.0,
-                 settle_timeout: float = 90.0, sleep: Callable[[float], None] = time.sleep,
+                 settle_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self._token = token
         self._session = session or requests.Session()
@@ -128,7 +128,8 @@ class ApifyClient:
     def _cost(self, run_id: str, run: dict[str, Any], posts: int | None) -> float:
         """Итоговое списание запуска. Сервис досчитывает его после конца запуска: ждём, пока счёт постов (у пустого
         запуска: «запуск без постов») не сойдётся с полученными постами; не сошёлся за settle_timeout: большее из
-        списания и оценки по ценам."""
+        списания и оценки по ценам. Ожидание короткое: страницы собираются подряд в одном шаге цикла планировщика,
+        а оценка по ценам бесплатного тарифа не меньше настоящего списания."""
         deadline = self._clock() + self._settle_timeout
         while True:
             events = run.get("chargedEventCounts") or {}
