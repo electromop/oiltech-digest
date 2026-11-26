@@ -99,7 +99,8 @@ class ApifyClient:
                     cost = self._cost(run_id, self._call("GET", f"/actor-runs/{run_id}"), None)
                 except (requests.RequestException, ApifyError, ValueError, KeyError, TypeError):
                     cost = START_USD
-            return RunResult(False, cost_usd=cost, error=self._masked(f"{type(exc).__name__}: {str(exc)[:200]}"))
+            # Сначала маска, потом обрезка: иначе кусок ключа на границе обрезки остался бы открытым.
+            return RunResult(False, cost_usd=cost, error=self._masked(f"{type(exc).__name__}: {exc}")[:200])
 
     def _masked(self, text: str) -> str:
         """Текст ошибки без ключа: исключение requests может процитировать заголовок запроса вместе с ним."""
