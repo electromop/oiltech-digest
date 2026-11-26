@@ -8,7 +8,8 @@
 OilTech Digest собирает публикации о нефтесервисе, решает агентами, какие из них брать, и даёт людям разобрать их и
 собрать месячный выпуск для заказчика. Части системы:
 
-1. сбор: каталог источников, RSS, листинги сайтов, браузер, открытые каналы Telegram, полный текст статьи;
+1. сбор: каталог источников, RSS, листинги сайтов, браузер, открытые каналы Telegram, посты страниц LinkedIn через
+   сервис Apify, полный текст статьи;
 2. технологический радар: поиск материалов встроенным поиском модели по расписанию;
 3. бот Telegram «Материалы коллег»: сотрудники вносят ссылки, файлы и события ([tg_materials_bot.md](tg_materials_bot.md));
 4. агенты: «Отбор» (брать или нет), «Суть и перевод», «Карточка» (тема, атрибуты, баллы), «Дедуп»;
@@ -19,7 +20,7 @@ OilTech Digest собирает публикации о нефтесервисе
 
 ```text
 источники
-  → discover-rss, parse (rss, request, playwright, telegram)
+  → discover-rss, parse (rss, request, playwright, telegram), linkedin-collect (страницы LinkedIn через Apify)
   → предфильтр шума, до записи в базу
   → articles
   → fetch-full-text
@@ -55,7 +56,8 @@ OilTech Digest собирает публикации о нефтесервисе
   этапов (`otbor_store.py`, `signal_card_store.py`, `signal_scores_store.py`, `feed_signals.py`, `marks.py`,
   `issue_edits_store.py` и соседние);
 - `ingestion/`: сбор (`rss_discovery.py`, `rss_parser.py`, `request_parser.py`, `playwright_parser.py`,
-  `telegram_parser.py`, `external_fetch.py`), полный текст (`article_fetcher.py`, `article_tails.py`), предфильтр
+  `telegram_parser.py`, `external_fetch.py`; страницы LinkedIn: `linkedin_posts.py`, `linkedin_apify.py`,
+  `post_images.py`), полный текст (`article_fetcher.py`, `article_tails.py`), предфильтр
   (`relevance_filter.py`), диагностика источников (`source_diagnostics.py`, `source_probe.py`), страницы находок
   радара (`publisher_page.py`, `core_page.py`), сид каталога (`excel_seed.py`);
 - `processing/`: клиент OpenAI и офлайн-заглушка (`openai_client.py`), суть и перевод (`pipeline.py`, `prompts.py`,

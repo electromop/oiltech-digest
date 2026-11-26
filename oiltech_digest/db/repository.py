@@ -112,9 +112,12 @@ def get_sources_for_discovery(only_missing: bool = True,
     ровно тем мусором, ради которого источник и правился (#61). Порядок на деплое делает
     это неизбежным: bootstrap применяет реестр, а первый же цикл планировщика запускает
     discover-rss (RUN_DISCOVER_ON_START=1), то есть откат случился бы до первого парса.
+
+    `linkedin`: страница LinkedIn, у неё нет ленты, а главная сайта закрыта; сбрось её discover-rss в request, сбор
+    ходил бы на linkedin.com с ядра и получал отказ.
     """
     query = ("SELECT * FROM sources WHERE enabled = TRUE "
-             "AND parse_strategy NOT IN ('telegram', 'playwright') "
+             "AND parse_strategy NOT IN ('telegram', 'playwright', 'linkedin') "
              "AND (listing_url IS NULL OR listing_url = '')")
     params: list = []
     if only_missing:
@@ -3978,6 +3981,8 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
               -- full_text_status='failed' и больше никогда не переспрашивалась, даже
               -- когда тело уже добрал зарубежный воркер (external_fetch).
               AND COALESCE(s.network_region, 'auto') <> 'external'
+              -- Пост LinkedIn приходит целиком, а страница поста без входа ничего не даёт (с ядра LinkedIn закрыт).
+              AND s.parse_strategy IS DISTINCT FROM 'linkedin'
               {status_filter}
               AND (
                 COALESCE(a.text_truncated, FALSE) = TRUE
@@ -4278,9 +4283,11 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
                    model,
                    -- Радар: отдельной строкой от ленты той же модели (стадии radar_*), агенты
                    -- «Карточка сигнала» (#96), «Отбор» (#130), баллы «Карточки» (#132), разбор ОС (#189) и
-                   -- автопроверка правил эксперта (#190): своими.
+                   -- автопроверка правил эксперта (#190): своими. Сбор LinkedIn через Apify тоже своей строкой: это
+                   -- не ИИ, но тоже расход платформы.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review', 'rule_check')
+                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review', 'rule_check',
+                                       'linkedin_apify')
                         THEN stage
                         ELSE 'feed' END AS area,
                    count(*) AS runs,

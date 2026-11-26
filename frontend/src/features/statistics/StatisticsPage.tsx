@@ -31,6 +31,7 @@ const AREA_LABELS: Record<string, string> = {
   otbor: "«Отбор» · ",
   feedback_review: "разбор ОС · ",
   rule_check: "автопроверка правил · ",
+  linkedin_apify: "LinkedIn через Apify · ",
 };
 
 function pct(part: number, total: number): string {

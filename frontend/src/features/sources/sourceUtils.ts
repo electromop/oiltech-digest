@@ -130,6 +130,7 @@ export function strategyLabel(strategy?: string | null) {
       request: "Разбор страницы",
       playwright: "Браузер",
       telegram: "Telegram",
+      linkedin: "LinkedIn через Apify",
     }[strategy || ""] || "Не задан"
   );
 }
@@ -206,6 +207,8 @@ function defaultActionForStrategy(strategy?: string | null) {
   if (strategy === "playwright") return "Проверьте рендер listing/article и при необходимости прокси для hard-WAF.";
   if (strategy === "rss") return "Проверьте RSS URL и наличие свежих entries.";
   if (strategy === "telegram") return "Проверьте URL канала и доступность preview.";
+  if (strategy === "linkedin")
+    return "Посты собирает шаг linkedin-collect раз в сутки: итог в журнале планировщика, расход в «Статистике». Адрес: linkedin.com/company/<имя>/ или linkedin.com/in/<имя>/.";
   return "Запустите диагностику и проверьте настройки источника.";
 }
 

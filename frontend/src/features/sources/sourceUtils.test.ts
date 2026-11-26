@@ -7,7 +7,16 @@ import {
   lastLoadLabel,
   sourceProblem,
   sourceState,
+  strategyLabel,
 } from "./sourceUtils";
+
+describe("source kind labels", () => {
+  it("names a LinkedIn page collected through Apify", () => {
+    expect(strategyLabel("linkedin")).toBe("LinkedIn через Apify");
+    expect(strategyLabel("telegram")).toBe("Telegram");
+    expect(strategyLabel(null)).toBe("Не задан");
+  });
+});
 
 const baseSource: Source = {
   id: 1,

@@ -44,7 +44,8 @@ from oiltech_digest.processing.pipeline import (
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PROFILES
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
-from oiltech_digest.ingestion import core_page, external_fetch
+from oiltech_digest.ingestion import core_page, external_fetch, linkedin_posts, post_images
+from oiltech_digest.db import linkedin_store
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.documents import parsing as doc_parsing
 from oiltech_digest.documents.model import DocumentError
@@ -409,6 +410,19 @@ def brand_font(name: str) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return FileResponse(path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"})
+
+
+@app.get(post_images.ROUTE + "/{name}", response_model=None)
+def post_image(name: str) -> FileResponse:
+    """Картинка поста LinkedIn, скачанная сбором (post_images). Без сессии: её грузят PDF выпуска, письмо и DOCX.
+    Отдаются только файлы с именем «хэш.расширение» из папки картинок, остальное 404. Имя по хэшу содержимого: файл
+    не меняется, его можно держать в кэше сколько угодно."""
+    path = post_images.file_for(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type=post_images.media_type(name),
+                        headers={"Cache-Control": "public, max-age=31536000, immutable",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 def _set_session_cookie(response: Response, session_token: str) -> None:
@@ -872,6 +886,16 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
     # берётся как есть.
     site_url = (payload.url or payload.rss_url or "").strip()
     rss_url = (payload.rss_url or "").strip()
+    # Страница LinkedIn (компания или профиль): без пробы сайта, посты отдаёт сервис Apify.
+    if not rss_url and linkedin_posts.page_from_url(site_url) is not None:
+        try:
+            added = linkedin_store.add_page(site_url, name=payload.name, priority=payload.priority,
+                                            category=payload.category)
+        except linkedin_store.PageExists as exc:
+            raise HTTPException(status_code=409, detail=f"Страница LinkedIn уже заведена: #{exc.existing['id']} "
+                                                        f"{exc.existing['name']}") from None
+        return {"ok": True, "id": added["id"], "rss_url": None, "parse_strategy": linkedin_posts.STRATEGY,
+                "listing_url": added["url"], "network_region": "auto", "enabled": True, "probe": None}
     parse_strategy, listing_url, network_region, enabled, probe = "rss", None, "auto", True, None
     if not rss_url and site_url:
         probe = probe_strategies(site_url)

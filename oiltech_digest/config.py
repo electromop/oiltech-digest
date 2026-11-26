@@ -431,6 +431,24 @@ EXCHANGE_TOKEN_HASH = os.environ.get("EXCHANGE_TOKEN_HASH", "").strip().lower()
 # отсюда. Меньше 1 правило теряет смысл: при 0 требует внимания каждый источник.
 SOURCE_STALE_DAYS = max(1, int(os.environ.get("SOURCE_STALE_DAYS", "7")))
 
+# Страницы LinkedIn (страница компании или профиль эксперта): посты отдаёт внешний сервис Apify, ядро зовёт его само
+# (ingestion/linkedin_apify.py). Без флага шаг планировщика ничего не делает. Ключ только здесь, в окружении ядра:
+# уходит заголовком запроса к сервису и больше никуда. Страница собирается не чаще раза в LINKEDIN_MIN_INTERVAL_HOURS:
+# страница без нового поста тоже стоит денег. Потолки расхода в долларах: на один запуск сервиса (его передают
+# самому сервису) и на календарный месяц по Москве (сумма запусков в учёте расхода); после месячного сбор стоит до
+# следующего месяца. Постов на запуск не больше LINKEDIN_APIFY_MAX_POSTS.
+LINKEDIN_APIFY_ENABLED = os.environ.get("LINKEDIN_APIFY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
+LINKEDIN_MIN_INTERVAL_HOURS = max(1.0, float(os.environ.get("LINKEDIN_MIN_INTERVAL_HOURS", "20")))
+LINKEDIN_APIFY_RUN_MAX_USD = max(0.01, float(os.environ.get("LINKEDIN_APIFY_RUN_MAX_USD", "1")))
+LINKEDIN_APIFY_MONTH_MAX_USD = max(0.0, float(os.environ.get("LINKEDIN_APIFY_MONTH_MAX_USD", "5")))
+LINKEDIN_APIFY_MAX_POSTS = max(1, int(os.environ.get("LINKEDIN_APIFY_MAX_POSTS", "100")))
+
+# Внешний адрес платформы (https://домен, без косой черты в конце). Нужен там, где адрес файла платформы читает не
+# браузер пользователя на её же странице: PDF выпуска собирается из готовой страницы, письмо и DOCX тянут картинку по
+# полному адресу. Пусто: картинки постов LinkedIn не скачиваются.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
 AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))

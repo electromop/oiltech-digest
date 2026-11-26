@@ -3730,6 +3730,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     exchange_cli.add_commands(sub)
 
+    # Страницы LinkedIn через сервис Apify: команды в своём модуле.
+    from oiltech_digest import linkedin_cli
+
+    linkedin_cli.add_commands(sub)
+
     return parser
 
 
