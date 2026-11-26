@@ -221,12 +221,6 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # -- Иностранные: RSS вместо скрейпа (RSS гео-независим и надёжнее) --
     "NOV": {"parse_strategy": "rss",
             "rss_url": "https://investors.nov.com/rss/news-releases.xml"},  # IR-фид, 10 items
-    # КазМунайГаз, 26.11: RSS пресс-релизов с 23.10 отдаёт код 200 с ошибкой PHP вместо записей (0 пунктов), и
-    # сбор молчал без единой ошибки. Листинг пресс-релизов: 10 релизов с датой, текст 1-3 тыс. знаков. Без
-    # :not([href*="?"]) селектор цепляет фильтр по годам и пагинацию.
-    "КазМунайГаз": {"parse_strategy": "request",
-                    "listing_url": "https://www.kmg.kz/ru/press-center/press-releases/",
-                    "article_link_selector": 'a[href*="/press-center/press-releases/"]:not([href*="?"])'},
 
     # -- Иностранные: правильный раздел новостей вместо главной/наград --
     # Petronas, 28.09: лента открывается «Featured News»: свежайшим релизом БЕЗ даты, за ним
@@ -351,12 +345,6 @@ SOURCE_OVERRIDES: dict[str, dict] = {
         "article_link_selector": 'li.list-entry a[href*="/detail-pages/"]'},
     "ТеДо": {"parse_strategy": "playwright", "listing_url": "https://tedo.ru/press-center",
              "article_link_selector": 'a[href*="/press-center/news-"]'},  # 12 с датой, статья 9 тыс. знаков
-    # Минобрнауки, 26.11: с 18.09 по адресу RSS отдаётся служебная HTML-страница (0 пунктов). Листинг новостей
-    # с селектором заголовков: 9 новостей, текст 1,7-5,5 тыс. знаков. Без селектора кандидатами шли разделы
-    # («Новости Министерства», «Экспертный совет»): они и легли в базу статьями в сентябре.
-    "Минобрнауки РФ": {"parse_strategy": "request",
-                       "listing_url": "https://minobrnauki.gov.ru/press-center/news/",
-                       "article_link_selector": "h4.news-item-title a"},
     "Б1": {
         # Отдельного списка нет (/analytics/ = 404): карточки обзоров: на главной.
         "parse_strategy": "request", "listing_url": "https://b1.ru",
@@ -397,21 +385,43 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     #   ONGC: ongcindia.com не отвечает ни из РФ, ни из KZ и US → проба через NL, иначе архив.
 
     # ==== Битые ленты, 26.11 ====
-    # Три журнала одного издателя: при редизайне 12.10 RSS убран, адрес ленты отдаёт 404, ссылки на ленту на
-    # главной нет. Сбор шёл без ошибок и молчал полтора месяца. Листинг /news/ отдаёт 12 последних новостей,
-    # дата в адресе (/26112026/ читается как 26.11.2026), текст со страницы 0,5-8 тыс. знаков: короткие тексты
-    # и на сайте помечены «1 min read».
-    "LNG Industry": {"parse_strategy": "request", "listing_url": "https://www.lngindustry.com/news/"},
-    "Oilfield Technology": {"parse_strategy": "request", "listing_url": "https://www.oilfieldtechnology.com/news/"},
-    "World Pipelines": {"parse_strategy": "request", "listing_url": "https://www.worldpipelines.com/news/"},
-    # АНГИ, сайт: источник читал главную без селектора. На ней три блока ссылок на новости: основная лента,
-    # колонка аналитики и «выбор редакции». Без дат кандидаты шли по очкам, под потолок 12 попадали материалы
-    # колонок, а свежие новости ленты уходили за потолок: за 14 дней до 26.11 сайт выпустил около 475 новостей,
-    # собрано 127. Селектор оставляет основную ленту, и её порядок на странице и есть свежесть. RSS сайта не
-    # годится: в нём анонс около 280 знаков, а добор текста оставил бы короткие новости анонсом.
+    # Сбор у них шёл без ошибок и молчал: лента отвечала, но не тем. Каждая настройка ниже проверена
+    # пробой сбора на живой ленте с РФ-прода 26.11.
+    # Три журнала одного издателя: при редизайне 12.10 RSS убран, адрес ленты отдаёт 404, ссылки на
+    # ленту на главной нет. Листинг /news/ отдаёт 12 последних новостей, дата в адресе (/26112026/
+    # читается как 26.11.2026), текст со страницы 0,5-8 тыс. знаков: короткие тексты и на сайте
+    # помечены «1 min read».
+    "LNG Industry": {"parse_strategy": "request",
+                     "listing_url": "https://www.lngindustry.com/news/"},
+    "Oilfield Technology": {"parse_strategy": "request",
+                            "listing_url": "https://www.oilfieldtechnology.com/news/"},
+    "World Pipelines": {"parse_strategy": "request",
+                        "listing_url": "https://www.worldpipelines.com/news/"},
+    # КазМунайГаз: RSS пресс-релизов с 23.10 отдаёт код 200 с ошибкой PHP вместо записей
+    # (0 пунктов). Листинг пресс-релизов: 10 релизов с датой, текст 1-3 тыс. знаков. Без
+    # :not([href*="?"]) селектор цепляет фильтр по годам и пагинацию.
+    "КазМунайГаз": {"parse_strategy": "request",
+                    "listing_url": "https://www.kmg.kz/ru/press-center/press-releases/",
+                    "article_link_selector":
+                        'a[href*="/press-center/press-releases/"]:not([href*="?"])'},
+    # Минобрнауки: с 18.09 по адресу RSS отдаётся служебная HTML-страница (0 пунктов). Листинг
+    # новостей с селектором заголовков: 9 новостей, текст 1,7-5,5 тыс. знаков. Без селектора
+    # кандидатами шли разделы («Новости Министерства», «Экспертный совет»): они и легли в базу
+    # статьями в сентябре.
+    "Минобрнауки РФ": {"parse_strategy": "request",
+                       "listing_url": "https://minobrnauki.gov.ru/press-center/news/",
+                       "article_link_selector": "h4.news-item-title a"},
+    # АНГИ, сайт: источник читал главную без селектора. На ней три блока ссылок на новости:
+    # основная лента, колонка аналитики и «выбор редакции». Без дат кандидаты шли по очкам, в лимит
+    # 12 попадали материалы колонок, а свежие новости ленты уходили за лимит: за 14 дней до 26.11
+    # сайт выпустил около 475 новостей, собрано 127. Селектор оставляет основную ленту, её порядок
+    # на странице и есть свежесть. Адрес с http, как у собранных новостей (проба шла по нему). RSS
+    # сайта не годится: в нём анонс около 280 знаков, а добор текста оставил бы короткие новости
+    # анонсом.
     "Агентство нефтегазовой информации (сайт)": {
         "parse_strategy": "request", "listing_url": "http://www.angi.ru/",
-        "listing_selector": "article.oneNews div.newslink", "article_link_selector": 'a[href*="/news/"]',
+        "listing_selector": "article.oneNews div.newslink",
+        "article_link_selector": 'a[href*="/news/"]',
         "listing_strategy": "page_order"},
 }
 
