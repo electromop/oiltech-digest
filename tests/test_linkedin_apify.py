@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 
 from oiltech_digest import config
 from oiltech_digest.db import connection, linkedin_store
@@ -81,6 +82,13 @@ def _spend(cost: float, at: datetime) -> None:
         conn.commit()
 
 
+def _make_due() -> None:
+    """Время сбора база ставит по своим часам: тесты с замороженным «сейчас» сдвигают его назад явно."""
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE sources SET last_parsed_at = NULL")
+        conn.commit()
+
+
 def _collect(client, **kwargs):
     return linkedin_apify.collect(now=kwargs.pop("now", NOW), client=client,
                                   save_image=kwargs.pop("save_image", lambda url: None), **kwargs)
@@ -119,7 +127,8 @@ def test_next_run_asks_only_for_newer_posts_and_skips_known_ones(isolated_db):
     _collect(FakeClient(RunResult(True, [_post(1, "2026-11-20T09:00:00.000Z")], 0.00205)))
     client = FakeClient(RunResult(True, [_post(1, "2026-11-20T09:00:00.000Z"), _post(5, "2026-11-23T09:00:00.000Z")],
                                   0.00405))
-    stats = _collect(client, force=True)  # время сбора база ставит по своим часам: интервал здесь не проверяется
+    _make_due()
+    stats = _collect(client)
 
     assert client.calls[0][1]["postedLimitDate"] == "2026-11-20T09:00:01.000Z"  # последний виденный плюс секунда
     assert stats["known"] == 1 and stats["added"] == 1
@@ -156,7 +165,7 @@ def test_flag_off_no_token_and_dry_run_call_nothing(isolated_db, monkeypatch):
     assert client.calls == [] and _spend_rows() == [] and _source(source_id)["last_parsed_at"] is None
 
 
-def test_page_waits_for_its_interval_unless_forced(isolated_db):
+def test_page_waits_for_its_interval(isolated_db):
     _page()
     with connection.get_connection() as conn:
         conn.execute("UPDATE sources SET last_parsed_at = %s", (NOW - timedelta(hours=5),))
@@ -165,8 +174,7 @@ def test_page_waits_for_its_interval_unless_forced(isolated_db):
     _collect(client)
     assert client.calls == []
     _collect(client, now=NOW + timedelta(hours=16))  # 21 час после прошлого сбора
-    _collect(client, force=True)
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
 
 
 def test_month_cap_stops_collection_and_the_run_cap_is_the_remainder(isolated_db):
@@ -177,7 +185,8 @@ def test_month_cap_stops_collection_and_the_run_cap_is_the_remainder(isolated_db
     _collect(client)
     assert client.calls[0][2] == pytest.approx(0.5)
     _spend(0.6, datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc))
-    stats = _collect(client, force=True)
+    _make_due()
+    stats = _collect(client)
     assert len(client.calls) == 1 and "месячный потолок" in stats["stopped"]
 
 
@@ -212,6 +221,39 @@ def test_same_page_is_not_added_twice(isolated_db):
         linkedin_store.add_page("https://www.linkedin.com/company/other-co/", name="Acme Drilling (LinkedIn)")
     with pytest.raises(ValueError):
         linkedin_store.add_page("https://example.com/company/acme/")
+
+
+def test_a_post_that_fails_to_store_does_not_hold_the_boundary(isolated_db, monkeypatch):
+    """За запуск уже заплачено: пост, который не записался, считается, а граница и время сбора сдвигаются, иначе
+    следующий цикл оплатил бы те же посты снова."""
+    source_id = _page()
+    real_insert = linkedin_apify.repository.insert_article
+
+    def insert(record):
+        if record["url"].endswith("000000009-Ab"):
+            raise RuntimeError("constraint")
+        return real_insert(record)
+
+    monkeypatch.setattr(linkedin_apify.repository, "insert_article", insert)
+    unreadable = {"type": "post", "postedAt": {"date": "2026-11-26T08:00:00.000Z"}, "content": ""}
+    stats = _collect(FakeClient(RunResult(True, [_post(9, "2026-11-24T09:00:00.000Z"),
+                                                 _post(10, "2026-11-25T09:00:00.000Z"), unreadable], 0.00605)))
+
+    assert stats["added"] == 1 and stats["post_errors"] == 1 and stats["unreadable"] == 1 and stats["pages"] == 1
+    state = _source(source_id)
+    assert state["last_parsed_at"] is not None
+    # Самый новый пост нечитаемый, но оплачен: граница по его времени.
+    assert state["last_seen_published_at"] == datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+
+
+def test_page_without_start_date_and_seen_posts_has_no_boundary(isolated_db):
+    _page(since=None)
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE sources SET collect_since = NULL")
+        conn.commit()
+    client = FakeClient()
+    _collect(client)
+    assert "postedLimitDate" not in client.calls[0][1]  # сервис отдаст последние LINKEDIN_APIFY_MAX_POSTS постов
 
 
 # --- клиент сервиса на подменённой сети
@@ -296,3 +338,12 @@ def test_client_aborts_a_run_that_does_not_finish():
     result = _client(session, run_timeout=20, poll_seconds=5).run("a~b", {}, 1.0)
     assert not result.ok and "TIMED-OUT" in result.error
     assert any(method == "POST" and url.endswith("/actor-runs/run-1/abort") for method, url, _ in session.calls)
+
+
+def test_client_error_text_never_carries_the_key():
+    class _Leaky:
+        def request(self, method, url, **kwargs):
+            raise requests.exceptions.InvalidHeader(f"Invalid header value {kwargs['headers']['Authorization']!r}")
+
+    result = _client(_Leaky()).run("a~b", {}, 1.0)
+    assert not result.ok and "secret-token" not in result.error and "***" in result.error

@@ -93,6 +93,9 @@ def _steps(source: dict, listing: dict) -> Iterable[Step]:
                          detail="превью не изменилось с прошлого сбора — посты не смотрятся")
                     for post in posts]
         return telegram_parser.post_steps(source, posts)
+    if strategy == "linkedin":
+        listing["status"] = "collected_by_service (посты отдаёт сервис Apify шагом linkedin-collect, запуск платный)"
+        return ()
     listing["status"] = f"unsupported_strategy ({strategy or '—'})"
     return ()
 

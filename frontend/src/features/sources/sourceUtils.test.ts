@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Source, SourceDiagnostics, SourceHealth } from "../../api/types";
 import {
   countSourceStates,
+  diagnosticVerdictClass,
   diagnosticVerdictLabel,
   getSourceTriage,
   lastLoadLabel,
@@ -15,6 +16,12 @@ describe("source kind labels", () => {
     expect(strategyLabel("linkedin")).toBe("LinkedIn через Apify");
     expect(strategyLabel("telegram")).toBe("Telegram");
     expect(strategyLabel(null)).toBe("Не задан");
+  });
+
+  it("does not flag a LinkedIn page whose posts come from the service", () => {
+    expect(diagnosticVerdictLabel("collected_by_service")).toBe("собирает сервис");
+    expect(diagnosticVerdictClass("collected_by_service")).toBe("ok");
+    expect(diagnosticVerdictClass("unsupported_strategy")).toBe("warn");
   });
 });
 

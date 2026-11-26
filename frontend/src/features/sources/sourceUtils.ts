@@ -147,6 +147,7 @@ export type SourceTriage = {
 
 const diagnosticVerdictLabels: Record<string, string> = {
   ok: "ОК",
+  collected_by_service: "собирает сервис",
   unsupported_strategy: "стратегия не поддержана",
   missing_listing_url: "нет listing URL",
   listing_fetch_failed: "listing не открылся",
@@ -185,8 +186,11 @@ const DIAGNOSTIC_BAD_VERDICTS = new Set([
   "article_render_failed",
 ]);
 
+// Не сбой: источник собирает внешний сервис (страница LinkedIn), проверять с ядра нечего.
+const DIAGNOSTIC_FINE_VERDICTS = new Set(["ok", "collected_by_service"]);
+
 export function diagnosticVerdictClass(verdict?: string): "ok" | "warn" | "bad" {
-  if (!verdict || verdict === "ok") return "ok";
+  if (!verdict || DIAGNOSTIC_FINE_VERDICTS.has(verdict)) return "ok";
   return DIAGNOSTIC_BAD_VERDICTS.has(verdict) ? "bad" : "warn";
 }
 
@@ -213,7 +217,7 @@ function defaultActionForStrategy(strategy?: string | null) {
 }
 
 function diagnosticTriage(source: Source, verdict?: string): SourceTriage | null {
-  if (!verdict || verdict === "ok") return null;
+  if (!verdict || DIAGNOSTIC_FINE_VERDICTS.has(verdict)) return null;
   switch (verdict) {
     case "missing_listing_url":
       return {

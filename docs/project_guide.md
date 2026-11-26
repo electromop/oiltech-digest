@@ -160,6 +160,8 @@ uvicorn oiltech_digest.api:app --reload --host localhost --port 8000
   `auth-attempts` (неудачные входы и регистрации по адресам и почтам), `auth-unlock` (снять паузу почте или адресу).
 - Сбор: `discover-rss`, `parse`, `fetch-full-text`, `parse-process`, `backfill-images`,
   `enqueue-external-scrape`, `enqueue-external-refetch`, `source-retry`, `stats`.
+- Страницы LinkedIn через Apify: `add-linkedin-source` (завести страницу компании или профиль эксперта, `--collect-since`
+  дата начала по Москве), `linkedin-collect` (шаг планировщика; `--source-id`, `--dry-run`: план без сервиса).
 - Источники: `sources`, `source-health`, `source-quality`, `source-enable`, `source-add-rss`,
   `set-source-region`, `apply-source-overrides`, `source-audit`, `source-diagnose`, `source-probe`,
   `source-dump-listing`.

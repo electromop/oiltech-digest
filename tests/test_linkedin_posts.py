@@ -35,7 +35,6 @@ def _item(**overrides):
     ("https://www.linkedin.com/company/acme-drilling/", "company", "acme-drilling"),
     ("https://uk.linkedin.com/company/acme-drilling/posts/?feedView=all", "company", "acme-drilling"),
     ("linkedin.com/company/acme-drilling?lipi=urn%3Ali%3Apage", "company", "acme-drilling"),
-    ("https://www.linkedin.com/showcase/acme-subsea/", "showcase", "acme-subsea"),
     ("https://www.linkedin.com/in/jane-doe-12ab34/", "in", "jane-doe-12ab34"),
     ("www.linkedin.com/in/jane-doe-12ab34/recent-activity/all/", "in", "jane-doe-12ab34"),
 ])
@@ -49,15 +48,14 @@ def test_page_from_url_takes_company_showcase_and_profile_addresses(raw, section
     "", None, "acme-drilling", "https://example.com/company/acme-drilling/",
     "https://www.linkedin.com/posts/acme-drilling_x-activity-1-a", "https://www.linkedin.com/search/results/all/",
     "https://www.linkedin.com/company/", "https://evil.example/?u=linkedin.com/company/acme",
-    "https://www.linkedin.com.evil.example/company/acme/",
+    "https://www.linkedin.com.evil.example/company/acme/", "https://www.linkedin.com/showcase/acme-subsea/",
 ])
 def test_page_from_url_refuses_what_is_not_a_page(raw):
     assert linkedin_posts.page_from_url(raw) is None
 
 
-def test_page_kind_is_company_for_showcase_and_profile_for_in():
+def test_page_kind_is_company_or_profile():
     assert Page("company", "a").kind == COMPANY
-    assert Page("showcase", "a").kind == COMPANY
     assert Page("in", "a").kind == PROFILE
 
 
@@ -130,6 +128,14 @@ def test_image_falls_back_to_video_frame_and_document_cover():
     assert cover.image_source == "https://media.licdn.com/cover-1.jpg"
     nothing = linkedin_posts.parse_post(_item(postImages=[{"url": "http://media.licdn.com/plain-http.jpg"}]))
     assert nothing.image_source is None
+
+
+def test_seen_at_is_taken_even_from_an_unreadable_post():
+    assert linkedin_posts.seen_at({"postedAt": {"date": "2026-11-21T10:00:00.000Z"}, "content": ""}) == datetime(
+        2026, 11, 21, 10, 0, tzinfo=timezone.utc)
+    assert linkedin_posts.seen_at({"repostedAt": {"date": "2026-11-22T10:00:00.000Z"},
+                                   "postedAt": {"date": "2026-11-01T10:00:00.000Z"}}).day == 22
+    assert linkedin_posts.seen_at("not a dict") is None
 
 
 def test_time_falls_back_to_the_millisecond_stamp():

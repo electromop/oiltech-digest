@@ -220,14 +220,18 @@ def set_sources_network_region(ids: list[int], region: str) -> int:
     """Проставить network_region (auto|ru|external) источникам по списку id.
 
     При уходе в/из external сбрасываем request-состояние (last_seen/hash), чтобы
-    смена пути парсинга не коротила на старом хэше. Возвращает число обновлённых строк."""
+    смена пути парсинга не коротила на старом хэше. Возвращает число обновлённых строк.
+
+    У страницы LinkedIn последний виденный пост остаётся: это граница платного сервиса, а регион ей не важен (сервис
+    зовёт ядро). Сброс откатил бы границу к дате начала сбора, и уже собранные посты оплатились бы снова."""
     if not ids:
         return 0
     with get_connection() as conn:
         cur = conn.execute(
             "UPDATE sources SET network_region = %s, last_listing_hash = NULL, "
-            "last_seen_article_url = NULL, last_seen_published_at = NULL, updated_at = now() "
-            "WHERE id = ANY(%s)",
+            "last_seen_article_url = CASE WHEN parse_strategy = 'linkedin' THEN last_seen_article_url END, "
+            "last_seen_published_at = CASE WHEN parse_strategy = 'linkedin' THEN last_seen_published_at END, "
+            "updated_at = now() WHERE id = ANY(%s)",
             (region, list(ids)),
         )
         conn.commit()
@@ -4283,8 +4287,8 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
                    model,
                    -- Радар: отдельной строкой от ленты той же модели (стадии radar_*), агенты
                    -- «Карточка сигнала» (#96), «Отбор» (#130), баллы «Карточки» (#132), разбор ОС (#189) и
-                   -- автопроверка правил эксперта (#190): своими. Сбор LinkedIn через Apify тоже своей строкой: это
-                   -- не ИИ, но тоже расход платформы.
+                   -- автопроверка правил эксперта (#190): своими.
+                   -- Сбор LinkedIn через Apify тоже своей строкой: это не ИИ, но тоже расход платформы.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
                         WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review', 'rule_check',
                                        'linkedin_apify')
@@ -4485,6 +4489,8 @@ def external_refetch_candidates(limit: int = 200) -> list[dict]:
             WHERE a.url IS NOT NULL
               AND s.network_region = 'external'
               AND s.archived_at IS NULL
+              -- Пост LinkedIn приходит целиком, а страница поста без входа ничего не даёт и с NL.
+              AND s.parse_strategy IS DISTINCT FROM 'linkedin'
               AND (
                 a.full_text_status IS NULL
                 -- Повтор после неудачи — но НЕ каждый цикл. Статусы failed/too_short

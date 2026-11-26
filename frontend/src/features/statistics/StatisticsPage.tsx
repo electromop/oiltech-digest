@@ -31,8 +31,10 @@ const AREA_LABELS: Record<string, string> = {
   otbor: "«Отбор» · ",
   feedback_review: "разбор ОС · ",
   rule_check: "автопроверка правил · ",
-  linkedin_apify: "LinkedIn через Apify · ",
 };
+
+// Расход внешних сервисов в том же учёте, но не ИИ: в «Затраты на ИИ» не входит, у него своя панель.
+const SERVICE_AREA = "linkedin_apify";
 
 function pct(part: number, total: number): string {
   if (!total) return "—";
@@ -71,12 +73,26 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
   const costByMonth = useMemo(() => {
     const acc = new Map<string, { runs: number; cost: number; models: string[] }>();
     for (const row of data?.ai_cost ?? []) {
+      if (row.area === SERVICE_AREA) continue;
       const cur = acc.get(row.month) ?? { runs: 0, cost: 0, models: [] };
       cur.runs += row.runs;
       cur.cost += Number(row.cost_usd ?? 0);
       // Радар и агент «Карточка сигнала», с пометкой: та же модель у ленты и у них: разные строки расхода.
       const area = AREA_LABELS[row.area ?? ""] ?? "";
       if (row.model) cur.models.push(`${area}${row.model.split("-2")[0]} · $${Number(row.cost_usd ?? 0).toFixed(2)}`);
+      acc.set(row.month, cur);
+    }
+    return acc;
+  }, [data]);
+
+  // Сбор LinkedIn через Apify по месяцам: запуски сервиса и их стоимость.
+  const serviceByMonth = useMemo(() => {
+    const acc = new Map<string, { runs: number; cost: number }>();
+    for (const row of data?.ai_cost ?? []) {
+      if (row.area !== SERVICE_AREA) continue;
+      const cur = acc.get(row.month) ?? { runs: 0, cost: 0 };
+      cur.runs += row.runs;
+      cur.cost += Number(row.cost_usd ?? 0);
       acc.set(row.month, cur);
     }
     return acc;
@@ -120,6 +136,7 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
   }, [platform]);
 
   const totalCost = [...costByMonth.values()].reduce((acc, v) => acc + v.cost, 0);
+  const serviceCost = [...serviceByMonth.values()].reduce((acc, v) => acc + v.cost, 0);
   const shownMonths = useMemo(() => trimLeadingEmpty(analytics?.months ?? []), [analytics]);
   const selectedMonth = month && shownMonths.some((m) => m.month === month)
     ? month
@@ -235,6 +252,31 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
               ))}
             </div>
           </section>
+
+          {serviceByMonth.size > 0 ? (
+            <section className="panel">
+              <div className="panelHeader">
+                <h3>Сбор LinkedIn через Apify</h3>
+                <div className="statusPill">${serviceCost.toFixed(2)} за период</div>
+              </div>
+              <div className="benchmarkTable statsTable">
+                <div className="benchmarkRow statsCostRow benchmarkHead">
+                  <span>Месяц</span>
+                  <span>Запусков</span>
+                  <span>Стоимость</span>
+                  <span />
+                </div>
+                {[...serviceByMonth.entries()].map(([month, v]) => (
+                  <div className="benchmarkRow statsCostRow" key={month}>
+                    <span>{month}</span>
+                    <span>{v.runs}</span>
+                    <span>${v.cost.toFixed(2)}</span>
+                    <span />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="panel">
             <div className="panelHeader">

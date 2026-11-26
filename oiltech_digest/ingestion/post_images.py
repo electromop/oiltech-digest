@@ -5,9 +5,10 @@ LinkedIn отдаёт картинку поста по ссылке со сро�
 поста к себе (том документов ядра) и пишет статье свой адрес: `PUBLIC_BASE_URL` + `/media/post-images/<имя>`. Полный
 адрес нужен PDF выпуска (страница собирается в браузере без адреса сайта), письму и DOCX.
 
-Защита. Качается только https с доменов картинок LinkedIn (`*.licdn.com`), и после переадресаций тоже; загрузка идёт
-через core_page.download: только публичные адреса, переадресации проверяются заново, предел размера и общий срок.
-Хранится только изображение (JPEG, PNG, GIF, WebP по первым байтам) до 5 МБ, имя файла: хэш содержимого и расширение.
+Защита. Загрузка идёт через core_page.download: только публичные адреса, каждый адрес цепочки (и первый, и каждая
+переадресация) обязан быть https с домена картинок LinkedIn (`*.licdn.com`), только с проверенным сертификатом,
+чтение обрывается на 5 МБ, общий срок. Хранится только изображение (JPEG, PNG, GIF, WebP по первым байтам), имя файла:
+хэш содержимого и расширение.
 Раздача отдаёт только файлы с таким именем из своей папки, без входа: картинку грузят PDF и почтовые программы.
 """
 
@@ -33,7 +34,7 @@ _ALLOWED_HOST = "licdn.com"
 _NAME = re.compile(r"^[0-9a-f]{64}\.(jpg|png|gif|webp)$")
 MEDIA_TYPES = {"jpg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
 
-Download = Callable[[str], dict[str, Any]]
+Download = Callable[..., dict[str, Any]]
 
 
 def allowed_source(url: str | None) -> bool:
@@ -69,7 +70,7 @@ def save(url: str | None, *, download: Download = core_page.download) -> str | N
     """Скачать картинку поста и вернуть её адрес на платформе; нельзя или не вышло: None, статья идёт без картинки."""
     if not config.PUBLIC_BASE_URL or not allowed_source(url):
         return None
-    result = download(str(url))
+    result = download(str(url), allowed=allowed_source, max_bytes=MAX_BYTES, verified_tls=True)
     if not result.get("ok") or not allowed_source(result.get("final_url")):
         logger.info("картинка поста не скачана: %s", result.get("error") or "переадресация с домена LinkedIn")
         return None

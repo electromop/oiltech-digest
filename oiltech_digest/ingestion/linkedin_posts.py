@@ -1,6 +1,6 @@
 """Страница LinkedIn и её пост: адрес страницы, вид страницы и запись статьи из поста, который отдал сервис Apify.
 
-Страница LinkedIn это страница компании (`linkedin.com/company/<имя>/`, у её витрины `showcase`) или профиль эксперта
+Страница LinkedIn это страница компании (`linkedin.com/company/<имя>/`) или профиль эксперта
 (`linkedin.com/in/<имя>/`). Одна страница: один источник; её пост становится статьёй этого источника и идёт обычным
 конвейером. Модуль без сети и без базы: адреса и разбор ответа сервиса, поэтому всё проверяется на выдуманных постах.
 
@@ -26,8 +26,8 @@ SOURCE_TYPE = "LinkedIn"
 HOST = "www.linkedin.com"
 COMPANY = "company"
 PROFILE = "profile"
-# Раздел адреса страницы и вид страницы: витрина (showcase) это та же страница компании.
-_SECTIONS = {"company": COMPANY, "showcase": COMPANY, "in": PROFILE}
+# Раздел адреса страницы и вид страницы.
+_SECTIONS = {"company": COMPANY, "in": PROFILE}
 _POST_PATHS = ("/posts/", "/feed/update/", "/pulse/")
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.%]{0,99}$")
@@ -41,7 +41,7 @@ FALLBACK_TITLE = "LinkedIn post"
 
 @dataclass(frozen=True)
 class Page:
-    """Страница LinkedIn: раздел адреса (company, showcase, in) и имя страницы в адресе."""
+    """Страница LinkedIn: раздел адреса (company или in) и имя страницы в адресе."""
 
     section: str
     slug: str
@@ -130,8 +130,7 @@ def clean_text(text: Any) -> str:
 def post_title(text: str) -> str:
     """Первое предложение поста без ссылок: «… >> https://lnkd.in/…» это приглашение перейти, а не смысл."""
     lines = [_TRAILER.sub("", _URL.sub("", line)).strip() for line in (text or "").splitlines()]
-    title = title_from_text("\n".join(line for line in lines if line))
-    return title if title != "Telegram post" else FALLBACK_TITLE
+    return title_from_text("\n".join(line for line in lines if line), fallback=FALLBACK_TITLE)
 
 
 def guess_language(text: str) -> str:
@@ -152,10 +151,15 @@ def parse_post(item: dict[str, Any]) -> Post | None:
         return None
     article = _dict(item.get("article"))
     title = post_title(own) if own else clean_text(article.get("title")).replace("\n", " ") or FALLBACK_TITLE
-    published = _when(item.get("postedAt"))
-    reposted = _when(item.get("repostedAt"))
-    return Post(url=url, title=title, text=text, published_at=published, seen_at=reposted or published,
+    return Post(url=url, title=title, text=text, published_at=_when(item.get("postedAt")), seen_at=seen_at(item),
                 language=guess_language(text), image_source=_first_image(item))
+
+
+def seen_at(item: Any) -> datetime | None:
+    """Когда пост появился на странице: у репоста время репоста, иначе время поста. По нему сбор спрашивает сервис
+    только о более новых постах, поэтому оно берётся у каждого полученного поста, даже нечитаемого."""
+    item = _dict(item)
+    return _when(item.get("repostedAt")) or _when(item.get("postedAt"))
 
 
 def _full_text(item: dict[str, Any], own: str) -> str:

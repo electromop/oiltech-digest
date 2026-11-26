@@ -18,7 +18,7 @@ import socket
 import ssl
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
 
 from oiltech_digest import config
@@ -65,8 +65,13 @@ def ask(client: Any, job: dict[str, Any], url: str) -> dict[str, Any]:
     return {**answer, "content": base64.b64decode(answer.get("content_b64") or "")}
 
 
-def download(url: str) -> dict[str, Any]:
+def download(url: str, *, allowed: Callable[[str], bool] | None = None, max_bytes: int | None = None,
+             verified_tls: bool = False) -> dict[str, Any]:
     """Ядро РФ: скачать страницу по просьбе воркера. Только http(s) и только публичные адреса.
+
+    Для своих загрузок (картинки постов): allowed проверяет адрес на каждом шаге, и первый, и каждую переадресацию
+    (адрес вне списка: отказ, соединения нет); max_bytes: свой предел размера вместо SIGNAL_PAGE_MAX_BYTES;
+    verified_tls: только с проверенным сертификатом, без последнего шага «без проверки».
 
     Имя сайта разрешается здесь, и все его адреса обязаны быть публичными (ipaddress.is_global). Соединение идёт на
     проверенный адрес, имя сайта, в SNI и в проверке сертификата, а не во втором разрешении имени: подмена DNS после
@@ -77,8 +82,10 @@ def download(url: str) -> dict[str, Any]:
     current = url
     try:
         for _ in range(REDIRECTS + 1):
+            if allowed is not None and not allowed(current):
+                raise PageRefused("адрес вне списка разрешённых")
             target = _public_target(current)
-            response = _get(target, deadline=deadline)
+            response = _get(target, deadline=deadline, verified_tls=verified_tls)
             location = response.headers.get("Location") if response.status in _REDIRECT_STATUSES else None
             if location:
                 response.release_conn()
@@ -89,7 +96,7 @@ def download(url: str) -> dict[str, Any]:
                 return {"ok": False, "status": response.status, "error": f"http_{response.status}",
                         "final_url": current}
             return {"ok": True, "status": response.status, "error": None, "final_url": current,
-                    "content": _read(response, deadline=deadline)}
+                    "content": _read(response, deadline=deadline, limit=max_bytes)}
         return {"ok": False, "status": None, "error": "больше пяти переадресаций", "final_url": current}
     except PageRefused as exc:
         return {"ok": False, "status": None, "error": f"ядро не качает: {exc}", "final_url": current}
@@ -147,9 +154,10 @@ def _limits(deadline: float) -> Any:
     return urllib3.Timeout(connect=min(TIMEOUT_SECONDS, left), read=min(TIMEOUT_SECONDS, left))
 
 
-def _get(target: _Target, *, deadline: float) -> Any:
+def _get(target: _Target, *, deadline: float, verified_tls: bool = False) -> Any:
     """GET на проверенный адрес без переадресаций и повторов; ответ не дочитан (preload_content=False). Каждая
-    попытка (и TLS с другим набором сертификатов) получает остаток общего срока."""
+    попытка (и TLS с другим набором сертификатов) получает остаток общего срока. verified_tls: сертификат не прошёл
+    проверку ни одним набором, и отказ вместо загрузки без проверки."""
     import certifi
     import urllib3
 
@@ -168,18 +176,20 @@ def _get(target: _Target, *, deadline: float) -> Any:
             return pool.urlopen("GET", target.path, **request)
         except (urllib3.exceptions.SSLError, ssl.SSLError) as exc:
             logger.info("core page %s — сертификат не проверен (%s), следующий набор", target.host, str(exc)[:120])
+    if verified_tls:
+        raise PageRefused("сертификат сайта не проверен")
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     pool = urllib3.HTTPSConnectionPool(target.ip, target.port, timeout=_limits(deadline), retries=False,
                                        server_hostname=target.host, cert_reqs="CERT_NONE", assert_hostname=False)
     return pool.urlopen("GET", target.path, **request)
 
 
-def _read(response: Any, *, deadline: float) -> bytes:
+def _read(response: Any, *, deadline: float, limit: int | None = None) -> bytes:
     """Тело ответа до предела размера и до общего срока. Медленная отдача по байту держала бы поток ядра без конца:
     по сроку сторож закрывает соединение на чтение (HTTPResponse.shutdown, из другого потока), и чтение обрывается.
     Разжатие, явно: без decode_content=True urllib3 отдавал сжатый gzip (замер на ядре 04.11: wam.ae, scientica.ru,
     aer.ca, ovintiv: ответ 200, а разбор видел «не HTML»)."""
-    limit = config.SIGNAL_PAGE_MAX_BYTES
+    limit = limit or config.SIGNAL_PAGE_MAX_BYTES
     body = bytearray()
     watchdog = threading.Timer(max(deadline - time.monotonic(), 0.0), _shutdown, (response,))
     watchdog.daemon = True
@@ -188,7 +198,7 @@ def _read(response: Any, *, deadline: float) -> bytes:
         for chunk in response.stream(_CHUNK, decode_content=True):
             body += chunk
             if len(body) > limit:
-                raise PageRefused(f"страница больше {limit // (1024 * 1024)} МБ")
+                raise PageRefused(f"больше {limit // (1024 * 1024)} МБ")
         if time.monotonic() >= deadline:
             raise TimeoutError(f"не дочитана за {DEADLINE_SECONDS:.0f} с")
     finally:

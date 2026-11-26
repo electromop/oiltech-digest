@@ -94,6 +94,8 @@ _COST_SQL = f"""
            COALESCE(sum(r.cost_usd) FILTER (WHERE r.stage LIKE 'radar\\_%%'), 0) AS radar_cost_usd
     FROM ai_processing_runs r
     WHERE r.created_at >= {_SINCE}
+      -- Сбор LinkedIn через Apify пишет расход в тот же учёт, но это не ИИ: «Статистика» показывает его своей строкой.
+      AND r.provider IS DISTINCT FROM 'apify'
       {{extra}}
     GROUP BY 1
     ORDER BY 1

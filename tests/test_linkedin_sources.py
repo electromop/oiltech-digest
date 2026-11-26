@@ -80,11 +80,48 @@ def test_linkedin_pages_skip_rss_search_and_full_text(isolated_db):
     assert site in found and page["id"] not in found
 
 
-def test_statistics_shows_apify_spend_as_its_own_area(isolated_db):
+def test_statistics_shows_apify_spend_as_its_own_area_and_not_as_ai(isolated_db):
+    from oiltech_digest.db import analytics
+
     linkedin_store.record_run(stage="linkedin_apify", model="harvestapi/linkedin-company-posts", cost_usd=0.07, ok=True)
-    rows = repository.monthly_ai_cost(1)
-    assert [(row["area"], row["model"]) for row in rows] == [("linkedin_apify", "harvestapi/linkedin-company-posts")]
-    assert float(rows[0]["cost_usd"]) == pytest.approx(0.07)
+    with connection.get_connection() as conn:
+        conn.execute("INSERT INTO ai_processing_runs (stage, model, cost_usd) VALUES ('otbor', 'gpt-6-sol', 1.5)")
+        conn.commit()
+    areas = {(row["area"], row["model"]): float(row["cost_usd"]) for row in repository.monthly_ai_cost(1)}
+    assert areas == {("linkedin_apify", "harvestapi/linkedin-company-posts"): pytest.approx(0.07),
+                     ("otbor", "gpt-6-sol"): 1.5}
+    month = analytics.monthly_analytics(1, include_cost=True)["ai_cost"][-1]
+    assert float(month["cost_usd"]) == 1.5  # расход сервиса не раздувает расход ИИ
+
+
+def test_diagnostics_says_the_service_collects_the_page(isolated_db):
+    from oiltech_digest.ingestion import source_diagnostics
+
+    page = linkedin_store.add_page("https://www.linkedin.com/company/acme-drilling/", name="Acme Drilling (LinkedIn)")
+    report = source_diagnostics.diagnose_source(repository.get_source(page["id"]))
+    assert report["verdict"] == "collected_by_service" and "linkedin-collect" in report["detail"]
+
+
+def test_nl_refetch_skips_linkedin_even_when_its_region_is_changed(isolated_db):
+    page = linkedin_store.add_page("https://www.linkedin.com/company/acme-drilling/", name="Acme Drilling (LinkedIn)")
+    site = repository.add_rss_source(name="Acme west", rss_url="", url="https://acme.example/", parse_strategy="request")
+    repository.set_sources_network_region([page["id"], site], "external")
+    for source_id, url in ((page["id"], "https://www.linkedin.com/posts/acme_y-activity-2-b"),
+                           (site, "https://acme.example/news/2")):
+        assert repository.insert_article({"source_id": source_id, "title": f"Teaser {source_id}", "url": url,
+                                          "published_at": datetime(2026, 11, 20, tzinfo=timezone.utc),
+                                          "raw_text": "Teaser only.", "text_truncated": True, "language": "en",
+                                          "content_hash": url})
+    assert [row["url"] for row in repository.external_refetch_candidates(limit=10)] == ["https://acme.example/news/2"]
+
+
+def test_region_change_keeps_the_paid_boundary_of_a_linkedin_page(isolated_db):
+    page = linkedin_store.add_page("https://www.linkedin.com/company/acme-drilling/", name="Acme Drilling (LinkedIn)")
+    seen = datetime(2026, 11, 25, 9, 0, tzinfo=timezone.utc)
+    repository.update_source_request_state(page["id"], last_seen_article_url="https://www.linkedin.com/posts/a",
+                                           last_seen_published_at=seen)
+    repository.set_sources_network_region([page["id"]], "external")
+    assert repository.get_source(page["id"])["last_seen_published_at"] == seen
 
 
 def test_add_command_takes_the_start_date_by_moscow_time(isolated_db, capsys):

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from oiltech_digest import api, config
-from oiltech_digest.ingestion import post_images
+from oiltech_digest.ingestion import core_page, post_images
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -28,8 +28,8 @@ def _storage(monkeypatch, tmp_path):
 def _download(content: bytes, final_url: str = SOURCE, ok: bool = True):
     calls = []
 
-    def download(url):
-        calls.append(url)
+    def download(url, **kwargs):
+        calls.append((url, kwargs))
         return {"ok": ok, "content": content, "final_url": final_url, "error": None if ok else "http_404"}
 
     download.calls = calls
@@ -99,3 +99,71 @@ def test_route_serves_only_stored_images_without_a_session(tmp_path):
     for path in ("/media/post-images/" + "0" * 64 + ".png", "/media/post-images/..%2F..%2Fetc%2Fpasswd",
                  "/media/post-images/" + "a" * 64 + ".svg", "/media/post-images/x.png"):
         assert client.get(path).status_code == 404, path
+
+
+def test_save_asks_for_allowlist_size_limit_and_checked_certificate():
+    download = _download(JPEG)
+    post_images.save(SOURCE, download=download)
+    _url, kwargs = download.calls[0]
+    assert kwargs == {"allowed": post_images.allowed_source, "max_bytes": post_images.MAX_BYTES, "verified_tls": True}
+
+
+class _Response:
+    def __init__(self, status, headers=None, chunks=()):
+        self.status, self.headers, self._chunks = status, headers or {}, list(chunks)
+
+    def release_conn(self):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def stream(self, size, decode_content=True):
+        yield from self._chunks
+
+
+def _fake_network(monkeypatch, responses):
+    """Без сети: адрес считается публичным, ответ берётся по адресу; посещённые адреса записываются."""
+    visited = []
+    monkeypatch.setattr(core_page, "_public_target", lambda url: url)
+
+    def get(target, *, deadline, verified_tls=False):
+        visited.append((target, verified_tls))
+        return responses[target]
+
+    monkeypatch.setattr(core_page, "_get", get)
+    return visited
+
+
+def test_download_stops_a_redirect_off_the_allowlist_before_connecting(monkeypatch):
+    visited = _fake_network(monkeypatch, {
+        SOURCE: _Response(302, {"Location": "http://10.0.0.5/internal.jpg"}),
+    })
+    result = core_page.download(SOURCE, allowed=post_images.allowed_source, verified_tls=True)
+    assert not result["ok"] and "разрешённых" in result["error"]
+    assert visited == [(SOURCE, True)]  # внутренний адрес переадресации даже не открывался
+
+
+def test_download_cuts_the_body_at_its_own_limit(monkeypatch):
+    _fake_network(monkeypatch, {SOURCE: _Response(200, chunks=[b"x" * 4096] * 3)})
+    result = core_page.download(SOURCE, max_bytes=8192)
+    assert not result["ok"] and "больше" in result["error"]
+
+
+def test_download_without_a_checked_certificate_is_refused(monkeypatch):
+    import ssl
+    import urllib3
+
+    class _Pool:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        def urlopen(self, *args, **kwargs):
+            if self.kwargs.get("cert_reqs") == "CERT_NONE":
+                raise AssertionError("без проверки сертификата не ходим")
+            raise ssl.SSLError("certificate verify failed")
+
+    monkeypatch.setattr(urllib3, "HTTPSConnectionPool", _Pool)
+    target = core_page._Target("https", "media.licdn.com", 443, "203.0.113.7", "/x.jpg", "media.licdn.com")
+    with pytest.raises(core_page.PageRefused):
+        core_page._get(target, deadline=__import__("time").monotonic() + 10, verified_tls=True)

@@ -3,8 +3,8 @@
 Посты страницы компании и профиля эксперта отдают готовые модули сервиса (`ACTORS`); ядро зовёт их само, ключ
 APIFY_TOKEN только в его окружении и только в заголовке запроса. Один запуск на страницу: у каждой страницы своя
 граница, и сервис отдаёт только посты новее неё (`postedLimitDate` точен до секунды: пост за секунду до границы
-приходит, за секунду после нет). Граница:
-поздняя из даты начала сбора источника и времени последнего виденного поста плюс секунда, поэтому один пост не
+приходит, за секунду после нет). Граница: поздняя из даты начала сбора источника и времени последнего виденного поста
+плюс секунда; нет ни того, ни другого: без границы, последние LINKEDIN_APIFY_MAX_POSTS постов. Поэтому один пост не
 оплачивается дважды, а известный адрес статьи второй раз не вставляется.
 
 Деньги. Страница собирается не чаще раза в LINKEDIN_MIN_INTERVAL_HOURS: страница без новых постов тоже стоит денег.
@@ -14,8 +14,9 @@ APIFY_TOKEN только в его окружении и только в заг�
 берёт первое.
 
 Сбой сервиса (ключ, лимит, упавший запуск): строка расхода с ошибкой, время сбора страницы не сдвигается (повтор
-следующим циклом), остальные страницы идут дальше. Посты идут теми же рубежами, что посты Telegram: известный адрес,
-дата начала сбора, предфильтр, вставка.
+следующим циклом), остальные страницы идут дальше. Оплаченный запуск сдвигает границу всегда, по времени каждого
+полученного поста, даже нечитаемого или не записанного: иначе следующий цикл оплатил бы те же посты снова. Посты идут
+теми же рубежами, что посты Telegram: известный адрес, дата начала сбора, предфильтр, вставка.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ MSK = ZoneInfo("Europe/Moscow")
 # успел досчитать списание; в учёт идёт сумма сервиса.
 POST_USD, EMPTY_USD, START_USD = 0.002, 0.001, 0.00005
 _FINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
-_FIRST_DAYS = 14  # граница страницы без даты начала сбора и без виденных постов
+_PAGE_COUNTS = ("posts", "added", "known", "old", "prefilter", "duplicates", "unreadable", "post_errors", "images")
 
 
 class ApifyError(RuntimeError):
@@ -98,7 +99,11 @@ class ApifyClient:
                     cost = self._cost(run_id, self._call("GET", f"/actor-runs/{run_id}"), None)
                 except (requests.RequestException, ApifyError, ValueError, KeyError, TypeError):
                     cost = START_USD
-            return RunResult(False, cost_usd=cost, error=f"{type(exc).__name__}: {str(exc)[:200]}")
+            return RunResult(False, cost_usd=cost, error=self._masked(f"{type(exc).__name__}: {str(exc)[:200]}"))
+
+    def _masked(self, text: str) -> str:
+        """Текст ошибки без ключа: исключение requests может процитировать заголовок запроса вместе с ним."""
+        return text.replace(self._token, "***") if self._token else text
 
     def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         response = self._session.request(method, API + path, headers={"Authorization": f"Bearer {self._token}"},
@@ -151,15 +156,15 @@ def month_start(now: datetime) -> datetime:
     return datetime.combine(now.astimezone(MSK).date().replace(day=1), day_start(), MSK)
 
 
-def boundary(source: dict[str, Any], now: datetime) -> datetime:
+def boundary(source: dict[str, Any]) -> datetime | None:
     """С какого момента спрашивать посты страницы: поздняя из даты начала сбора и последнего виденного поста плюс
-    секунда; нет ни того, ни другого: две недели назад."""
+    секунда; нет ни того, ни другого: без границы."""
     bounds = [verdicts.old_cutoff(source, None)]
     seen = dates.as_utc(source.get("last_seen_published_at"))
     if seen is not None:
         bounds.append(seen + timedelta(seconds=1))
     known = [bound for bound in bounds if bound is not None]
-    return max(known) if known else now - timedelta(days=_FIRST_DAYS)
+    return max(known) if known else None
 
 
 def due(source: dict[str, Any], now: datetime) -> bool:
@@ -167,29 +172,26 @@ def due(source: dict[str, Any], now: datetime) -> bool:
     return last is None or now - last >= timedelta(hours=config.LINKEDIN_MIN_INTERVAL_HOURS)
 
 
-def run_input(page: linkedin_posts.Page, since: datetime) -> dict[str, Any]:
-    return {
-        "targetUrls": [page.url],
-        "maxPosts": config.LINKEDIN_APIFY_MAX_POSTS,
-        "postedLimitDate": since.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-        "includeReposts": True,
-        "includeQuotePosts": True,
-        "scrapeReactions": False,
-        "scrapeComments": False,
-    }
+def run_input(page: linkedin_posts.Page, since: datetime | None) -> dict[str, Any]:
+    request: dict[str, Any] = {"targetUrls": [page.url], "maxPosts": config.LINKEDIN_APIFY_MAX_POSTS,
+                               "includeReposts": True, "includeQuotePosts": True, "scrapeReactions": False,
+                               "scrapeComments": False}
+    if since is not None:
+        stamp = since.astimezone(timezone.utc).isoformat(timespec="milliseconds")
+        request["postedLimitDate"] = stamp.replace("+00:00", "Z")
+    return request
 
 
-def collect(*, source_id: int | None = None, force: bool = False, dry_run: bool = False,
-            now: datetime | None = None, client: Any = None,
+def collect(*, source_id: int | None = None, dry_run: bool = False, now: datetime | None = None, client: Any = None,
             save_image: Callable[[str | None], str | None] = post_images.save) -> dict[str, Any]:
-    """Собрать посты страниц LinkedIn, которым пора. force: без флага и без интервала (ручной запуск), потолки
-    расхода действуют всегда. dry_run: только план, без сервиса и без записи."""
+    """Собрать посты страниц LinkedIn, которым пора. dry_run: только план, без сервиса и без записи, флаг ему не
+    нужен. Потолки расхода действуют всегда."""
     now = now or datetime.now(timezone.utc)
-    stats: dict[str, Any] = {"pages": 0, "runs": 0, "posts": 0, "added": 0, "known": 0, "old": 0, "prefilter": 0,
-                             "duplicates": 0, "images": 0, "failed": 0, "cost_usd": 0.0, "stopped": None, "plan": []}
+    stats: dict[str, Any] = {"pages": 0, "runs": 0, "failed": 0, "cost_usd": 0.0, "stopped": None, "plan": [],
+                             **dict.fromkeys(_PAGE_COUNTS, 0)}
     spent = linkedin_store.spent_since(STAGE, month_start(now))
     stats["month_spend_usd"] = round(spent, 6)
-    if not (force or dry_run) and not config.LINKEDIN_APIFY_ENABLED:
+    if not dry_run and not config.LINKEDIN_APIFY_ENABLED:
         stats["stopped"] = "сбор LinkedIn выключен (LINKEDIN_APIFY_ENABLED=0)"
         return stats
     if not dry_run and client is None and not config.APIFY_TOKEN:
@@ -201,14 +203,14 @@ def collect(*, source_id: int | None = None, force: bool = False, dry_run: bool 
         if not sources:
             stats["stopped"] = f"источник {source_id} не страница LinkedIn, выключен или в архиве"
             return stats
-    ready = [source for source in sources if force or due(source, now)]
+    ready = [source for source in sources if due(source, now)]
     ready.sort(key=lambda source: (dates.as_utc(source.get("last_parsed_at")) or datetime.min.replace(tzinfo=timezone.utc),
                                    int(source["id"])))
     client = client or ApifyClient(config.APIFY_TOKEN)
     for source in ready:
         page = linkedin_posts.page_from_url(source.get("url"))
         if page is None:
-            logger.warning("LinkedIn %s: адрес %r не страница LinkedIn", source.get("name"), source.get("url"))
+            logger.warning("LinkedIn #%s: адрес источника не страница LinkedIn", source["id"])
             stats["failed"] += 1
             continue
         remaining = config.LINKEDIN_APIFY_MONTH_MAX_USD - spent
@@ -218,9 +220,9 @@ def collect(*, source_id: int | None = None, force: bool = False, dry_run: bool 
             logger.warning("LinkedIn: %s", stats["stopped"])
             break
         cap = min(config.LINKEDIN_APIFY_RUN_MAX_USD, remaining)
-        request = run_input(page, boundary(source, now))
+        request = run_input(page, boundary(source))
         stats["plan"].append({"source_id": int(source["id"]), "name": source.get("name"), "kind": page.kind,
-                              "since": request["postedLimitDate"], "cap_usd": round(cap, 4)})
+                              "since": request.get("postedLimitDate"), "cap_usd": round(cap, 4)})
         if dry_run:
             continue
         actor = ACTORS[page.kind]
@@ -231,13 +233,13 @@ def collect(*, source_id: int | None = None, force: bool = False, dry_run: bool 
         stats["runs"] += 1
         stats["cost_usd"] = round(stats["cost_usd"] + result.cost_usd, 6)
         if not result.ok:
-            logger.warning("LinkedIn %s: %s", source.get("name"), result.error)
+            logger.warning("LinkedIn #%s: %s", source["id"], result.error)
             stats["failed"] += 1
             continue
         try:
             page_stats = store_posts(source, result.items, save_image=save_image)
-        except Exception as exc:  # noqa: BLE001 - сбой записи одной страницы не валит остальные
-            logger.exception("LinkedIn %s: посты не записаны: %s", source.get("name"), exc)
+        except Exception as exc:  # noqa: BLE001 - сбой базы на одной странице не валит остальные
+            logger.error("LinkedIn #%s: посты не записаны: %s", source["id"], type(exc).__name__)
             stats["failed"] += 1
             continue
         stats["pages"] += 1
@@ -249,37 +251,48 @@ def collect(*, source_id: int | None = None, force: bool = False, dry_run: bool 
 
 def store_posts(source: dict[str, Any], items: list[dict[str, Any]], *,
                 save_image: Callable[[str | None], str | None] = post_images.save) -> dict[str, int]:
-    """Посты одного запуска в статьи источника; затем время сбора и последний виденный пост страницы."""
-    counts = {"posts": 0, "added": 0, "known": 0, "old": 0, "prefilter": 0, "duplicates": 0, "images": 0}
+    """Посты одного оплаченного запуска в статьи источника. Пост, который не разобрался или не записался, считается и
+    не держит остальные; граница страницы сдвигается по времени каждого полученного поста, время сбора ставится
+    всегда."""
+    counts = dict.fromkeys(_PAGE_COUNTS, 0)
     cutoff = verdicts.old_cutoff(source, None)
-    newest: linkedin_posts.Post | None = None
+    newest_at: datetime | None = None
+    newest_url: str | None = None
     for item in items:
-        post = linkedin_posts.parse_post(item)
-        if post is None:
-            continue
         counts["posts"] += 1
-        if post.seen_at is not None and (newest is None or newest.seen_at is None or post.seen_at > newest.seen_at):
-            newest = post
-        if repository.article_exists(post.url):
-            counts["known"] += 1
-            continue
-        if cutoff is not None and post.published_at is not None and post.published_at < cutoff:
-            counts["old"] += 1
-            continue
-        if not should_keep_article(post.title, post.text, source).keep:
-            counts["prefilter"] += 1
-            continue
-        image_url = _image(post, save_image)
-        counts["images"] += int(image_url is not None)
-        if repository.insert_article(post.record(int(source["id"]), image_url)):
-            counts["added"] += 1
-        else:
-            counts["duplicates"] += 1
+        seen = linkedin_posts.seen_at(item)
+        if seen is not None and (newest_at is None or seen > newest_at):
+            newest_at = seen
+            newest_url = linkedin_posts.post_url(item.get("linkedinUrl")) if isinstance(item, dict) else None
+        try:
+            outcome, image_saved = _store_post(source, item, cutoff, save_image)
+        except Exception as exc:  # noqa: BLE001 - за запуск уже заплачено: один пост не держит остальные
+            logger.error("LinkedIn #%s: пост не записан: %s", source["id"], type(exc).__name__)
+            outcome, image_saved = "post_errors", False
+        counts[outcome] += 1
+        counts["images"] += int(image_saved)
     repository.touch_last_parsed(int(source["id"]))
-    if newest is not None:
-        repository.update_source_request_state(int(source["id"]), last_seen_article_url=newest.url,
-                                               last_seen_published_at=newest.seen_at)
+    if newest_at is not None:
+        repository.update_source_request_state(int(source["id"]), last_seen_article_url=newest_url,
+                                               last_seen_published_at=newest_at)
     return counts
+
+
+def _store_post(source: dict[str, Any], item: dict[str, Any], cutoff: datetime | None,
+                save_image: Callable[[str | None], str | None]) -> tuple[str, bool]:
+    """Рубежи одного поста и вставка: чем кончилось и сохранена ли картинка."""
+    post = linkedin_posts.parse_post(item)
+    if post is None:
+        return "unreadable", False
+    if repository.article_exists(post.url):
+        return "known", False
+    if cutoff is not None and post.published_at is not None and post.published_at < cutoff:
+        return "old", False
+    if not should_keep_article(post.title, post.text, source).keep:
+        return "prefilter", False
+    image_url = _image(post, save_image)
+    inserted = repository.insert_article(post.record(int(source["id"]), image_url))
+    return ("added" if inserted else "duplicates"), image_url is not None
 
 
 def _image(post: linkedin_posts.Post, save_image: Callable[[str | None], str | None]) -> str | None:
@@ -288,5 +301,5 @@ def _image(post: linkedin_posts.Post, save_image: Callable[[str | None], str | N
     try:
         return save_image(post.image_source)
     except Exception as exc:  # noqa: BLE001 - без картинки статья всё равно нужна
-        logger.info("картинка поста %s не сохранена: %s", post.url, exc)
+        logger.info("LinkedIn: картинка поста не сохранена: %s", type(exc).__name__)
         return None
