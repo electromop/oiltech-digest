@@ -211,8 +211,12 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   async function handleCreateSource(payload: CreateSourcePayload) {
     try {
       setBusy(true);
-      await createSource(payload);
-      showToast("Источник добавлен — система ищет RSS-ленту");
+      const created = await createSource(payload);
+      showToast(
+        created.parse_strategy === "linkedin"
+          ? "Страница LinkedIn добавлена: посты придут со следующим сбором"
+          : "Источник добавлен: система ищет RSS-ленту",
+      );
       await reload();
       return true;
     } catch (error) {

@@ -9,7 +9,8 @@
 
 Платформа мониторинга нефтесервисных публикаций для заказчика. Публикации приходят тремя путями:
 
-- сбор статей из каталога источников: RSS, листинги сайтов, браузерный сбор, открытые каналы Telegram;
+- сбор статей из каталога источников: RSS, листинги сайтов, браузерный сбор, открытые каналы Telegram, посты
+  страниц LinkedIn через сервис Apify (с ядра, раз в сутки на страницу);
 - технологический радар: по расписанию ищет материалы встроенным поиском модели по 13 тематикам заказчика;
 - бот Telegram «Материалы коллег» ([tg_materials_bot.md](tg_materials_bot.md)).
 
@@ -77,7 +78,7 @@
 
 ```mermaid
 flowchart LR
-  SRC["источники"] --> PARSE["сбор: rss, request, playwright, telegram"]
+  SRC["источники"] --> PARSE["сбор: rss, request, playwright, telegram, linkedin через Apify"]
   PARSE --> PREF["предфильтр"]
   PREF --> ART[("articles")]
   ART --> FULL["полный текст и страж принадлежности"]
@@ -102,7 +103,14 @@ flowchart LR
 - `playwright`: [`playwright_parser.parse_source()`](../oiltech_digest/ingestion/playwright_parser.py) для сайтов,
   которые рисуют листинг скриптами;
 - `telegram`: открытые каналы через страницу предпросмотра `t.me/s/<канал>`
-  ([`telegram_parser.py`](../oiltech_digest/ingestion/telegram_parser.py)).
+  ([`telegram_parser.py`](../oiltech_digest/ingestion/telegram_parser.py));
+- `linkedin`: страница компании или профиль эксперта в LinkedIn; посты отдаёт сервис Apify, ядро зовёт его само шагом
+  `linkedin-collect` ([`linkedin_apify.py`](../oiltech_digest/ingestion/linkedin_apify.py), разбор поста
+  [`linkedin_posts.py`](../oiltech_digest/ingestion/linkedin_posts.py)). Страница не чаще раза в
+  `LINKEDIN_MIN_INTERVAL_HOURS`, один запуск сервиса на страницу, сервис отдаёт только посты новее последнего
+  виденного; потолки расхода на запуск и на месяц, расход в учёте стадией `linkedin_apify`. Первая картинка поста
+  скачивается на сервер ([`post_images.py`](../oiltech_digest/ingestion/post_images.py)) и отдаётся по
+  `/media/post-images/`. Страница заводится командой `add-linkedin-source` и формой «Добавить источник».
 
 Источник с `network_region='external'` собирает воркер NL (шаг `enqueue-external-scrape` при
 `FETCH_EXTERNAL_ENABLED=1`); ядро кладёт в задачу последние адреса сайта (`known_urls`), чтобы воркер не качал
@@ -374,6 +382,7 @@ discover-rss                    на первом цикле и раз в DISCOV
 parse                           сбор со всех включённых источников
 fetch-full-text                 полный текст и страж принадлежности
 enqueue-process | process       суть и перевод принятых статей: задачей во внешний контур или на месте
+linkedin-collect                при LINKEDIN_APIFY_ENABLED=1: посты страниц LinkedIn через Apify
 enqueue-otbor                   «Отбор» новых статей, находок и материалов
 enqueue-signal-summary          «Суть и перевод» принятых находок и материалов
 enqueue-external-scrape         при FETCH_EXTERNAL_ENABLED=1: западные источники через NL
@@ -412,6 +421,8 @@ stats
 | `DATABASE_URL` | ядро | подключение к Postgres |
 | `EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION` | ядро | `1` и `external`: ИИ задачами на NL; иначе местная очередь `ai` |
 | `FETCH_EXTERNAL_ENABLED` | ядро | собирать источники `network_region='external'` через NL |
+| `LINKEDIN_APIFY_ENABLED`, `APIFY_TOKEN`, `LINKEDIN_MIN_INTERVAL_HOURS`, `LINKEDIN_APIFY_RUN_MAX_USD`, `LINKEDIN_APIFY_MONTH_MAX_USD`, `LINKEDIN_APIFY_MAX_POSTS` | ядро | сбор страниц LinkedIn через Apify: флаг, ключ, интервал (20 ч), потолки расхода ($1 на запуск, $5 в месяц), постов на запуск (100) |
+| `PUBLIC_BASE_URL` | ядро | внешний адрес платформы: по нему PDF, письмо и DOCX берут картинки постов LinkedIn |
 | `AI_BULK_LANE_ENABLED` | ядро | пересчёты своей полосой `external-ai-bulk` (включать, когда её воркер поднят) |
 | `EXTERNAL_WORKER_TOKEN_HASH` | ядро | SHA-256 токена воркера |
 | `CORE_API_URL`, `EXTERNAL_WORKER_TOKEN` | NL | адрес ядра и токен |

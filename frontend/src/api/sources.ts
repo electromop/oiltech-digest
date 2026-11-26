@@ -22,7 +22,7 @@ export function listSourceHealth() {
 }
 
 export function createSource(payload: CreateSourcePayload) {
-  return apiFetch<{ ok: boolean; id: number }>("/api/sources", {
+  return apiFetch<{ ok: boolean; id: number; parse_strategy?: string }>("/api/sources", {
     method: "POST",
     body: JSON.stringify(payload),
   });

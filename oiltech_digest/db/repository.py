@@ -112,9 +112,12 @@ def get_sources_for_discovery(only_missing: bool = True,
     ровно тем мусором, ради которого источник и правился (#61). Порядок на деплое делает
     это неизбежным: bootstrap применяет реестр, а первый же цикл планировщика запускает
     discover-rss (RUN_DISCOVER_ON_START=1), то есть откат случился бы до первого парса.
+
+    `linkedin`: страница LinkedIn, у неё нет ленты, а главная сайта закрыта; сбрось её discover-rss в request, сбор
+    ходил бы на linkedin.com с ядра и получал отказ.
     """
     query = ("SELECT * FROM sources WHERE enabled = TRUE "
-             "AND parse_strategy NOT IN ('telegram', 'playwright') "
+             "AND parse_strategy NOT IN ('telegram', 'playwright', 'linkedin') "
              "AND (listing_url IS NULL OR listing_url = '')")
     params: list = []
     if only_missing:
@@ -217,14 +220,18 @@ def set_sources_network_region(ids: list[int], region: str) -> int:
     """Проставить network_region (auto|ru|external) источникам по списку id.
 
     При уходе в/из external сбрасываем request-состояние (last_seen/hash), чтобы
-    смена пути парсинга не коротила на старом хэше. Возвращает число обновлённых строк."""
+    смена пути парсинга не коротила на старом хэше. Возвращает число обновлённых строк.
+
+    У страницы LinkedIn последний виденный пост остаётся: это граница платного сервиса, а регион ей не важен (сервис
+    зовёт ядро). Сброс откатил бы границу к дате начала сбора, и уже собранные посты оплатились бы снова."""
     if not ids:
         return 0
     with get_connection() as conn:
         cur = conn.execute(
             "UPDATE sources SET network_region = %s, last_listing_hash = NULL, "
-            "last_seen_article_url = NULL, last_seen_published_at = NULL, updated_at = now() "
-            "WHERE id = ANY(%s)",
+            "last_seen_article_url = CASE WHEN parse_strategy = 'linkedin' THEN last_seen_article_url END, "
+            "last_seen_published_at = CASE WHEN parse_strategy = 'linkedin' THEN last_seen_published_at END, "
+            "updated_at = now() WHERE id = ANY(%s)",
             (region, list(ids)),
         )
         conn.commit()
@@ -3978,6 +3985,8 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
               -- full_text_status='failed' и больше никогда не переспрашивалась, даже
               -- когда тело уже добрал зарубежный воркер (external_fetch).
               AND COALESCE(s.network_region, 'auto') <> 'external'
+              -- Пост LinkedIn приходит целиком, а страница поста без входа ничего не даёт (с ядра LinkedIn закрыт).
+              AND s.parse_strategy IS DISTINCT FROM 'linkedin'
               {status_filter}
               AND (
                 COALESCE(a.text_truncated, FALSE) = TRUE
@@ -4279,8 +4288,10 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
                    -- Радар: отдельной строкой от ленты той же модели (стадии radar_*), агенты
                    -- «Карточка сигнала» (#96), «Отбор» (#130), баллы «Карточки» (#132), разбор ОС (#189) и
                    -- автопроверка правил эксперта (#190): своими.
+                   -- Сбор LinkedIn через Apify тоже своей строкой: это не ИИ, но тоже расход платформы.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review', 'rule_check')
+                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores', 'feedback_review', 'rule_check',
+                                       'linkedin_apify')
                         THEN stage
                         ELSE 'feed' END AS area,
                    count(*) AS runs,
@@ -4478,6 +4489,8 @@ def external_refetch_candidates(limit: int = 200) -> list[dict]:
             WHERE a.url IS NOT NULL
               AND s.network_region = 'external'
               AND s.archived_at IS NULL
+              -- Пост LinkedIn приходит целиком, а страница поста без входа ничего не даёт и с NL.
+              AND s.parse_strategy IS DISTINCT FROM 'linkedin'
               AND (
                 a.full_text_status IS NULL
                 -- Повтор после неудачи — но НЕ каждый цикл. Статусы failed/too_short

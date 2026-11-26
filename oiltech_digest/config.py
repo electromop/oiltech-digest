@@ -431,6 +431,15 @@ EXCHANGE_TOKEN_HASH = os.environ.get("EXCHANGE_TOKEN_HASH", "").strip().lower()
 # отсюда. Меньше 1 правило теряет смысл: при 0 требует внимания каждый источник.
 SOURCE_STALE_DAYS = max(1, int(os.environ.get("SOURCE_STALE_DAYS", "7")))
 
+# LinkedIn через Apify (linkedin_apify.py): флаг, ключ ядра, интервал (ч), потолки ($); PUBLIC_BASE_URL для картинок.
+LINKEDIN_APIFY_ENABLED = os.environ.get("LINKEDIN_APIFY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
+LINKEDIN_MIN_INTERVAL_HOURS = max(1.0, float(os.environ.get("LINKEDIN_MIN_INTERVAL_HOURS", "20")))
+LINKEDIN_APIFY_RUN_MAX_USD = max(0.01, float(os.environ.get("LINKEDIN_APIFY_RUN_MAX_USD", "1")))
+LINKEDIN_APIFY_MONTH_MAX_USD = max(0.0, float(os.environ.get("LINKEDIN_APIFY_MONTH_MAX_USD", "5")))
+LINKEDIN_APIFY_MAX_POSTS = max(1, int(os.environ.get("LINKEDIN_APIFY_MAX_POSTS", "100")))
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
 AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))

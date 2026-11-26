@@ -38,6 +38,15 @@ def diagnose_source(source: dict, limit: int = 5) -> dict:
         return diagnose_playwright_source(source, limit=limit)
     if strategy == "rss":
         return diagnose_rss_source(source, limit=limit)
+    if strategy == "linkedin":
+        # Страницу LinkedIn с ядра не открыть, а запуск сервиса Apify платный: проверка здесь ничего не скажет.
+        return {
+            "source_id": source.get("id"),
+            "source_name": source.get("name"),
+            "strategy": strategy,
+            "verdict": "collected_by_service",
+            "detail": "посты страницы отдаёт сервис Apify шагом linkedin-collect раз в сутки; смотрите итог шага",
+        }
     return {
         "source_id": source.get("id"),
         "source_name": source.get("name"),

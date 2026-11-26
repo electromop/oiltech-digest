@@ -50,4 +50,26 @@ describe("страница «Статистика»: расход ИИ по мо
 
     expect(await screen.findByText("gpt-5-mini · $1.50 · карточка сигнала · gpt-5.4-nano · $0.03")).toBeInTheDocument();
   });
+
+  it("сбор LinkedIn через Apify: своей панелью, а не в затратах на ИИ", async () => {
+    const stats = {
+      months: 6,
+      platform: [],
+      ai_cost: [
+        { month: "2026-11", model: "gpt-6-sol", area: "otbor", runs: 100, cost_usd: 1.2 },
+        { month: "2026-11", model: "harvestapi/linkedin-company-posts", area: "linkedin_apify", runs: 15, cost_usd: 0.3 },
+      ],
+      activity: [],
+      activity_scope: "all",
+    } as unknown as MonthlyStats;
+    vi.mocked(getMonthlyStats).mockResolvedValue(stats);
+    vi.mocked(getMonthlyAnalytics).mockResolvedValue(analyticsFixture);
+
+    render(<StatisticsPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    expect(await screen.findByText("Сбор LinkedIn через Apify")).toBeInTheDocument();
+    expect(screen.getByText("$1.20 за период")).toBeInTheDocument();
+    expect(screen.getByText("$0.30 за период")).toBeInTheDocument();
+    expect(screen.queryByText(/harvestapi/)).not.toBeInTheDocument();
+  });
 });

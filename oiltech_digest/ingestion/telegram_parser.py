@@ -232,13 +232,14 @@ def _message_lines(node) -> list[str]:
     return [part for part in parts if part]
 
 
-def title_from_text(text: str) -> str:
+def title_from_text(text: str, fallback: str = "Telegram post") -> str:
     """Заголовок поста: первая строка (строки: через перевод строки), в ней: первое
-    предложение. Короткая первая строка, рубрика: тогда первое предложение всего текста."""
+    предложение. Короткая первая строка, рубрика: тогда первое предложение всего текста.
+    Текста нет: fallback (у постов LinkedIn свой)."""
     lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").split("\n")]
     lines = [line for line in lines if line]
     if not lines:
-        return "Telegram post"
+        return fallback
     head = lines[0] if len(lines[0]) >= MIN_TITLE_CHARS else " ".join(lines)
     sentence = re.split(r"(?<=[.!?])\s+", head, maxsplit=1)[0]
     if len(sentence) < MIN_TITLE_CHARS:

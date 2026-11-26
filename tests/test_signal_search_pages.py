@@ -105,7 +105,7 @@ class Net:
             return ProbeResult(url=url, status=answer), None
         return ProbeResult(url=url, status="ERR", error="ConnectTimeout: молчит"), None
 
-    def _core_get(self, target, *, deadline):
+    def _core_get(self, target, *, deadline, verified_tls=False):
         url = f"{target.scheme}://{target.host_header}{target.path}"
         self.calls.append(("core", url, target.ip))
         answer = self.core.get(url)

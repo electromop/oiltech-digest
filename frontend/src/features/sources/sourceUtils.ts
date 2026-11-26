@@ -130,6 +130,7 @@ export function strategyLabel(strategy?: string | null) {
       request: "Разбор страницы",
       playwright: "Браузер",
       telegram: "Telegram",
+      linkedin: "LinkedIn через Apify",
     }[strategy || ""] || "Не задан"
   );
 }
@@ -146,6 +147,7 @@ export type SourceTriage = {
 
 const diagnosticVerdictLabels: Record<string, string> = {
   ok: "ОК",
+  collected_by_service: "собирает сервис",
   unsupported_strategy: "стратегия не поддержана",
   missing_listing_url: "нет listing URL",
   listing_fetch_failed: "listing не открылся",
@@ -184,8 +186,11 @@ const DIAGNOSTIC_BAD_VERDICTS = new Set([
   "article_render_failed",
 ]);
 
+// Не сбой: источник собирает внешний сервис (страница LinkedIn), проверять с ядра нечего.
+const DIAGNOSTIC_FINE_VERDICTS = new Set(["ok", "collected_by_service"]);
+
 export function diagnosticVerdictClass(verdict?: string): "ok" | "warn" | "bad" {
-  if (!verdict || verdict === "ok") return "ok";
+  if (!verdict || DIAGNOSTIC_FINE_VERDICTS.has(verdict)) return "ok";
   return DIAGNOSTIC_BAD_VERDICTS.has(verdict) ? "bad" : "warn";
 }
 
@@ -206,11 +211,13 @@ function defaultActionForStrategy(strategy?: string | null) {
   if (strategy === "playwright") return "Проверьте рендер listing/article и при необходимости прокси для hard-WAF.";
   if (strategy === "rss") return "Проверьте RSS URL и наличие свежих entries.";
   if (strategy === "telegram") return "Проверьте URL канала и доступность preview.";
+  if (strategy === "linkedin")
+    return "Посты собирает шаг linkedin-collect раз в сутки: итог в журнале планировщика, расход в «Статистике». Адрес: linkedin.com/company/<имя>/ или linkedin.com/in/<имя>/.";
   return "Запустите диагностику и проверьте настройки источника.";
 }
 
 function diagnosticTriage(source: Source, verdict?: string): SourceTriage | null {
-  if (!verdict || verdict === "ok") return null;
+  if (!verdict || DIAGNOSTIC_FINE_VERDICTS.has(verdict)) return null;
   switch (verdict) {
     case "missing_listing_url":
       return {
