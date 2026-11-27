@@ -311,6 +311,15 @@ def test_client_waits_for_the_final_charge():
     assert all("secret-token" not in call[1] for call in session.calls)  # ключ только в заголовке
 
 
+def test_counts_ahead_of_the_sum_do_not_cut_the_charge():
+    """Счётчик постов уже верный, а сумма ещё только за начало запуска: клиент ждёт сумму, а не записывает начало."""
+    session = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}] * 11),
+                       _run("SUCCEEDED", posts=11, usage=0.00005), _run("SUCCEEDED", posts=11, usage=0.02205))
+    assert _client(session).run("a~b", {}, 1.0).cost_usd == pytest.approx(0.02205)
+    late = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}] * 11),
+                    *[_run("SUCCEEDED", posts=11, usage=0.00005) for _ in range(4)])
+    assert _client(late, settle_timeout=10).run("a~b", {}, 1.0).cost_usd == pytest.approx(11 * 0.002 + 0.00005)
+
 def test_client_estimates_the_charge_when_the_service_is_late():
     session = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}, {"type": "post"}]),
                        *[_run("SUCCEEDED", posts=0) for _ in range(5)])
