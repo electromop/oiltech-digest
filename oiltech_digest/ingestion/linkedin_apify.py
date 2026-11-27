@@ -9,9 +9,8 @@ APIFY_TOKEN только в его окружении и только в заг�
 
 Деньги. Страница собирается не чаще раза в LINKEDIN_MIN_INTERVAL_HOURS: страница без новых постов тоже стоит денег.
 Потолок запуска сервис держит сам (`maxTotalChargeUsd`), месячный считает шаг: сумма запусков стадии `linkedin_apify` в
-учёте расхода с первого числа по Москве. Остатка месяца не хватает на запуск: сбор стоит до следующего месяца. Сумму
-запуска сервис досчитывает с задержкой, причём счётчики событий обновляются раньше суммы; поэтому в учёт идёт большее
-из суммы сервиса и счёта по ценам.
+учёте расхода с первого числа по Москве. Остатка месяца не хватает на запуск: сбор стоит до следующего месяца. Сумма
+запуска в учёте: ApifyClient._cost.
 
 Сбой сервиса (ключ, лимит, упавший запуск): строка расхода с ошибкой, время сбора страницы не сдвигается (повтор
 следующим циклом), остальные страницы идут дальше. Оплаченный запуск сдвигает границу всегда, по времени каждого
@@ -44,9 +43,11 @@ ACTORS = {
 }
 STAGE = "linkedin_apify"
 MSK = ZoneInfo("Europe/Moscow")
-# Цены сервиса на бесплатном тарифе, $: пост, запуск без постов, начало запуска. По ним счёт запуска: на бесплатном
-# тарифе он равен сумме сервиса, а сумма приходит позже счётчиков событий.
+# Цены сервиса на бесплатном тарифе, $: пост, запуск без постов, начало запуска (счёт запуска для учёта, _priced).
 POST_USD, EMPTY_USD, START_USD = 0.002, 0.001, 0.00005
+# Допуск сравнения сумм, $: счёт в float за 25 постов даёт 0.050050000000000004, и без допуска клиент ждал бы весь
+# settle_timeout при уже верной сумме сервиса 0.05005.
+_USD_TOLERANCE = 1e-6
 _FINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
 _PAGE_COUNTS = ("posts", "added", "known", "old", "prefilter", "duplicates", "unreadable", "post_errors", "images")
 
@@ -126,20 +127,32 @@ class ApifyClient:
         return run
 
     def _cost(self, run_id: str, run: dict[str, Any], posts: int | None) -> float:
-        """Итоговое списание запуска: большее из суммы сервиса и счёта по ценам (посты, запуск без постов, начало).
-        Сервис досчитывает сумму после конца запуска, и счётчики событий у него обновляются раньше суммы: верные
-        счётчики при отстающей сумме бывают у большинства запусков. Поэтому ждём, пока сумма не дорастёт до счёта,
-        не дольше settle_timeout: страницы собираются подряд в одном шаге цикла планировщика."""
+        """Сумма запуска для учёта: большее из суммы сервиса и счёта по ценам бесплатного тарифа (_priced). Сервис
+        досчитывает сумму после конца запуска, а счётчики событий у него верны раньше суммы, поэтому клиент ждёт сумму
+        не дольше settle_timeout (страницы идут подряд в одном шаге цикла планировщика). posts: сколько постов получено;
+        у упавшего запуска None, тогда счёт только по счётчикам. На тарифе с меньшими ценами учёт завышен, это
+        безопасная сторона для потолков; выше цен бесплатного тарифа держит лимит самого тарифа. Сбой опроса не
+        отменяет запуск: в учёт идёт то, что известно."""
         deadline = self._clock() + self._settle_timeout
         while True:
             usage = float(run.get("usageTotalUsd") or 0)
-            if posts is None:
-                return usage
-            expected = posts * POST_USD + (EMPTY_USD if posts == 0 else 0.0) + START_USD
-            if usage >= expected - 1e-9 or self._clock() >= deadline:
+            expected = _priced(run, posts)
+            if usage >= expected - _USD_TOLERANCE or self._clock() >= deadline:
                 return max(usage, expected)
             self._sleep(self._poll)
-            run = self._call("GET", f"/actor-runs/{run_id}")
+            try:
+                run = self._call("GET", f"/actor-runs/{run_id}")
+            except (requests.RequestException, ApifyError, ValueError, KeyError, TypeError):
+                return max(usage, expected)
+
+
+def _priced(run: dict[str, Any], posts: int | None) -> float:
+    """Счёт запуска по ценам бесплатного тарифа: постов столько, сколько больше, по счётчику сервиса или получено;
+    запуск без постов, если сервис его отметил или постов ноль; начало запуска всегда."""
+    events = run.get("chargedEventCounts") or {}
+    paid_posts = max(int(events.get("post") or 0), posts or 0)
+    empty = posts == 0 or int(events.get("no-result") or 0) >= 1
+    return paid_posts * POST_USD + (EMPTY_USD if empty else 0.0) + START_USD
 
 
 def _error_type(response: Any) -> str:
