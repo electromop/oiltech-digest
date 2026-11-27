@@ -311,11 +311,38 @@ def test_client_waits_for_the_final_charge():
     assert all("secret-token" not in call[1] for call in session.calls)  # ключ только в заголовке
 
 
-def test_client_estimates_the_charge_when_the_service_is_late():
-    session = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}, {"type": "post"}]),
-                       *[_run("SUCCEEDED", posts=0) for _ in range(5)])
-    result = _client(session, settle_timeout=10).run("a~b", {}, 1.0)
-    assert result.cost_usd == pytest.approx(2 * 0.002 + 0.00005)
+def test_counts_ahead_of_the_sum_do_not_cut_the_charge():
+    """Счётчик постов уже верный, а сумма ещё только за начало запуска: клиент ждёт сумму, а не записывает начало."""
+    session = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}] * 11),
+                       _run("SUCCEEDED", posts=11, usage=0.00005), _run("SUCCEEDED", posts=11, usage=0.02205))
+    assert _client(session).run("a~b", {}, 1.0).cost_usd == pytest.approx(0.02205)
+    late = _Session(_run("SUCCEEDED"), _Response(200, [{"type": "post"}] * 11),
+                    *[_run("SUCCEEDED", posts=11, usage=0.00005) for _ in range(4)])
+    assert _client(late, settle_timeout=10).run("a~b", {}, 1.0).cost_usd == pytest.approx(11 * 0.002 + 0.00005)
+
+
+def test_failed_run_is_charged_by_the_service_counters():
+    """Упавший запуск постов не отдаёт, но сервис мог уже взять за них деньги: счёт по счётчикам, а не за начало."""
+    session = _Session(_run("FAILED", posts=5), _run("FAILED", posts=5, usage=0.01005))
+    result = _client(session).run("a~b", {}, 1.0)
+    assert not result.ok and result.cost_usd == pytest.approx(0.01005)
+    late = _Session(_run("FAILED", posts=5), *[_run("FAILED", posts=5) for _ in range(4)])
+    assert _client(late, settle_timeout=10).run("a~b", {}, 1.0).cost_usd == pytest.approx(5 * 0.002 + 0.00005)
+
+
+def test_poll_failure_while_waiting_keeps_a_paid_run_and_its_posts():
+    """Сбой опроса суммы не отменяет оплаченный запуск: посты отдаются, в учёт идёт счёт по ценам."""
+
+    class _Flaky(_Session):
+        def request(self, method, url, **kwargs):
+            if len(self.calls) == 2:  # третий запрос: запуск, посты, затем опрос суммы
+                self.calls.append((method, url, kwargs))
+                raise requests.exceptions.ConnectionError("network down")
+            return super().request(method, url, **kwargs)
+
+    session = _Flaky(_run("SUCCEEDED"), _Response(200, [{"type": "post"}] * 3))
+    result = _client(session).run("a~b", {}, 1.0)
+    assert result.ok and len(result.items) == 3 and result.cost_usd == pytest.approx(3 * 0.002 + 0.00005)
 
 
 def test_empty_run_is_settled_by_its_no_result_charge():
